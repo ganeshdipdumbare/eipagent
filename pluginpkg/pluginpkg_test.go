@@ -382,3 +382,37 @@ func TestExamplePluginsValidate(t *testing.T) {
 		}
 	}
 }
+
+// Someone who can write to the store directory (but has no trusted key)
+// swaps in their own package and edits state.json to match: enable must
+// refuse it because the signature is checked again.
+func TestEnableRechecksSignature(t *testing.T) {
+	pub, priv, _ := GenerateKey()
+	keys, _ := TrustedKeys(pub)
+	opts := StoreOptions{Verify: VerifyOptions{TrustedKeys: keys, RequireSignature: true}}
+	dir := t.TempDir()
+	st, _ := OpenStore(dir, opts)
+	v, err := st.Install(buildPkg(t, "1.0.0", goodSrc, priv), "alice")
+	must(t, err)
+	must(t, st.Approve("greet", "1.0.0", "bob"))
+
+	_, evil, _ := GenerateKey()
+	bad := buildPkg(t, "1.0.0", strings.Replace(goodSrc, `"hi"`, `"pwned"`, 1), evil)
+	pkg, _ := Open(bad)
+	os.WriteFile(filepath.Join(dir, "packages", "greet", "1.0.0.eip"), bad, 0o600)
+	state, _ := os.ReadFile(filepath.Join(dir, "state.json"))
+	state = bytes.ReplaceAll(state, []byte(v.SHA256), []byte(pkg.SHA256))
+	os.WriteFile(filepath.Join(dir, "state.json"), state, 0o600)
+
+	st2, _ := OpenStore(dir, opts)
+	if err := st2.Enable("greet", "1.0.0"); err == nil {
+		t.Fatal("a package re-signed by an untrusted key was enabled")
+	}
+	p, _ := st2.Get("greet")
+	if p.Versions["1.0.0"].State != StateQuarantined {
+		t.Fatalf("want QUARANTINED, got %s", p.Versions["1.0.0"].State)
+	}
+	if _, err := os.Stat(filepath.Join(st2.ActiveDir(), "greet.go")); err == nil {
+		t.Fatal("tampered source reached the active dir")
+	}
+}

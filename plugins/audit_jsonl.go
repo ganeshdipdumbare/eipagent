@@ -5,9 +5,11 @@ package plugin
 import (
 	"bufio"
 	"context"
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -30,15 +32,31 @@ import (
 // Each record is also handed to every "audit/sink/*" service (for
 // example audit_http), so a control plane gets the same chained stream.
 //
+// The chain detects edits, but whoever can rewrite the whole file can
+// recompute it. With key (a secret://), each line also carries an
+// HMAC-SHA256 "mac" of its hash, checked by audit.VerifyKeyed; without
+// the key a rewritten log can't produce valid macs.
+//
 // Config: path (".eipagent/audit.jsonl"; "-" keeps no local file),
-// args (log tool args, true), results (log tool results, false).
+// args (log tool args, true), results (log tool results, false),
+// key (secret://NAME, optional).
 var Permissions = []string{"fs:read", "fs:write"}
+
+var Inject = []string{"?secrets"} // only for key
 
 func Apply(ctx *sdk.Context) error {
 	ctx.SetPriority(sdk.PriorityReserved + 1) // outermost when locked: sees everything
 	p := ctx.ConfigString("path", ".eipagent/audit.jsonl")
 	logArgs := ctx.ConfigBool("args", true)
 	logResults := ctx.ConfigBool("results", false)
+	var chainKey []byte
+	if ref := ctx.ConfigString("key", ""); ref != "" {
+		k, err := ctx.Secret(ref)
+		if err != nil || k == "" {
+			return fmt.Errorf("audit_jsonl: key: %v", err)
+		}
+		chainKey = []byte(k)
+	}
 	prev := ""
 	seq := 0
 	var f *os.File
@@ -68,6 +86,7 @@ func Apply(ctx *sdk.Context) error {
 		ctx.OnDispose(func() { f.Close() })
 	}
 	var mu sync.Mutex
+	lastErr := ""
 	record := func(kind string, data map[string]any) {
 		data = sdk.RedactMap(data)
 		mu.Lock()
@@ -75,10 +94,28 @@ func Apply(ctx *sdk.Context) error {
 		body, _ := json.Marshal(map[string]any{"seq": seq, "ts": time.Now().UTC().Format(time.RFC3339Nano), "type": kind, "data": data})
 		h := sha256.Sum256(append([]byte(prev), body...))
 		hash := hex.EncodeToString(h[:])
-		line := []byte(`{"body":` + string(body) + `,"prev":"` + prev + `","hash":"` + hash + `"}` + "\n")
+		mac := ""
+		if len(chainKey) > 0 {
+			m := hmac.New(sha256.New, chainKey)
+			m.Write([]byte(hash))
+			mac = `,"mac":"` + hex.EncodeToString(m.Sum(nil)) + `"`
+		}
+		line := []byte(`{"body":` + string(body) + `,"prev":"` + prev + `","hash":"` + hash + `"` + mac + `}` + "\n")
 		if f != nil {
-			f.Write(line)
-			f.Sync()
+			_, werr := f.Write(line)
+			if werr == nil {
+				werr = f.Sync()
+			}
+			if werr != nil {
+				// Never silent: the record still goes to the sinks, and the
+				// failure is logged (once per distinct error).
+				if msg := werr.Error(); msg != lastErr {
+					lastErr = msg
+					ctx.Logf("audit_jsonl: cannot write %s: %v (records are not reaching the local log)", p, werr)
+				}
+			} else {
+				lastErr = ""
+			}
 		}
 		prev = hash
 		for _, name := range ctx.Services("audit/sink/") { // in chain order; sinks only enqueue
@@ -90,7 +127,7 @@ func Apply(ctx *sdk.Context) error {
 	}
 	// runFields are the standard fields every model / tool record carries.
 	runFields := func(st *sdk.RunState, thread, user string) map[string]any {
-		d := map[string]any{"thread": thread, "user": user}
+		d := map[string]any{"thread": thread, "user": user, "writer": "audit_jsonl"}
 		if st != nil {
 			d["run"] = st.ID
 		}

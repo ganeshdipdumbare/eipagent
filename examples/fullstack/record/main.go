@@ -47,7 +47,7 @@ func start() *env {
 	if err != nil {
 		log.Fatal(err)
 	}
-	s, err := app.New(app.Config{DataDir: dir})
+	s, err := app.New(app.Config{DataDir: dir, RatePerMin: 1000}) // one client replays every scene
 	if err != nil {
 		log.Fatal(err)
 	}

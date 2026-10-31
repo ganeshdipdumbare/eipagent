@@ -112,7 +112,7 @@ func (e *Engine) audit(kind string, r *record, err error) {
 	if !ok || r == nil {
 		return
 	}
-	data := map[string]any{"plugin": r.name, "source": r.spec.Use, "kind": r.kind, "sha256": r.hash, "perms": r.perms, "locked": r.locked}
+	data := map[string]any{"plugin": r.name, "source": r.spec.Use, "kind": r.kind, "sha256": r.hash, "perms": r.perms, "locked": r.locked, "writer": "core"}
 	if err != nil {
 		data["error"] = err.Error()
 	}

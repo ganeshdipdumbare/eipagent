@@ -7,6 +7,8 @@ The goal is secure defaults that stay simple. `eipagent.New()` with no options u
 1. **Trust gate (core, not pluggable).**
    - File plugins must match a sha256 pin in `eip.lock` (`eip plugin pin`). Embedded plugins ship inside the binary and are trusted like code.
    - Plugins installed through a plugin store (`eip plugin install`, `pluginpkg.Store`) are signed ed25519 packages verified against the store's trusted keys, held until a person approves them, re-verified at enable time (a package changed at rest is quarantined), and pinned when enabled. A version that fails to start never replaces the running one. See [PLUGINS.md](PLUGINS.md#ship-a-plugin-manifest-lint-package-install).
+   - Enabling a version re-verifies everything checked at install, the signature included, so a package swapped in the store directory (even with `state.json` edited to match), or one whose signing key was removed from `trusted_keys`, is quarantined instead of loaded.
+   - `fs:write` alone can't read files (`os.OpenFile` is write-only without `fs:read`). `env` hides credential-looking variables; only secret providers declare `env:secrets`. Plugins can't call `sdk.AddRedaction`.
    - `eip plugin validate` lints a plugin before it ships: forbidden imports, permissions that don't match what the code uses, services not declared in `Inject`, malformed or undeclared secret references, and a compile under the declared permissions.
    - Each plugin is interpreted with only the stdlib packages its permissions allow (`net`, `exec`, `fs:read`, `fs:write`, `env`, `db`).
    - The admin policy can allow or deny plugins and narrow grants.
@@ -29,12 +31,16 @@ The goal is secure defaults that stay simple. `eipagent.New()` with no options u
 
    Records carry standard fields so a control plane can join them: `run` (unique per run), `thread`, `user`, `plugin` (the plugin that owns the tool), `tool`, `call_id`, `step`, `provider`, `model`, `decision`, `decided_by`, `outcome`, `ms`, token counts.
 
-   Use `audit.Verify` to detect edited or removed lines. `audit_http` ships the same chained, redacted records off-host as NDJSON batches, HMAC-signed, with retries (set `path: "-"` on `audit_jsonl` to keep no local file). `trace_otlp` exports runs, model calls and tool calls as OpenTelemetry spans (OTLP/HTTP JSON, GenAI attribute names).
+   Every record has a `writer`: `core`, `audit_jsonl`, or `plugin:<name>` for records a plugin submits through the `audit` service. The SDK sets it, so a plugin can add records but can't pass them off as the core's.
+
+   Use `audit.Verify` to detect edited or removed lines. With `key: secret://...` on `audit_jsonl`, each line also carries an HMAC of its hash, and `audit.VerifyKeyed` rejects a log rewritten by someone without the key. `audit_http` ships the same chained, redacted records off-host as NDJSON batches, HMAC-signed, with retries (set `path: "-"` on `audit_jsonl` to keep no local file). `trace_otlp` exports runs, model calls and tool calls as OpenTelemetry spans (OTLP/HTTP JSON, GenAI attribute names).
 6. **Containment.**
    - `sandbox_docker`: no network, all capabilities dropped, no-new-privileges, pids limit.
    - `sandbox_local`: confines file paths and symlinks to its workdir and passes only allow-listed env vars. It is *not* isolation.
    - `tool_http_fetch`: requires a host allowlist and blocks private and loopback addresses at connect time (SSRF).
-   - `trigger_webhook`: requires HMAC signatures.
+   - `trigger_webhook`: requires HMAC signatures, refuses replays (and stale requests with `timestamp_header`), caps concurrent runs per route, and fences the payload off as untrusted data in its default prompt.
+   - `mcp_client`: an MCP server's `readOnlyHint` only counts as read-only for policy when the server is configured with `trust_annotations: true`.
+   - `mw_pii` hash strategy: keyed HMAC (`hash_key`), so tokens can't be reversed by hashing candidate emails or IPs.
 7. **Humans and reviewers.** `mw_hitl` pauses before chosen or risky tools and keeps the pause durable. `mw_auto_review` has a reviewer model approve, deny or escalate.
 
 ## Not guaranteed
@@ -44,7 +50,11 @@ The goal is secure defaults that stay simple. `eipagent.New()` with no options u
 - Docker can't filter egress per host. Use `network: none`, or a provider that supports allowlists.
 - The audit chain detects tampering but doesn't prevent deleting the whole file. Ship it off-host with `audit_http`.
 - Redaction applies to logs, traces and audit records (the sinks). It does not hide a secret from the model or from your app: if a tool returns a key in its result, the model sees it.
-- Redaction matches the exact values resolved through the `secrets` service (4 bytes or longer). A secret that a plugin reads some other way, or transforms (base64, splits), is not caught.
+- Redaction matches the values resolved through the `secrets` service and their JSON, URL and base64 encodings. Values shorter than 4 bytes can't be redacted; their `secret.access` record says so. Other transformations (splitting, custom encodings) aren't caught.
+- `sdk.Redact` is available to plugins, so a plugin can test whether a string it already has is a registered secret. It can't learn secrets it doesn't know.
+- The audit chain without a key detects edits but not a full rewrite by someone with write access; use `key` or `audit_http`.
+- `sandbox_local` with a fixed `workdir` shares one folder between all threads (it logs a warning).
+- The full-stack demo has no login: visitors pick Sam or Ada, so anyone can approve its (fake) refunds. It limits body size, requests per client and runs in flight. A real app takes identity from its session. A secret that a plugin reads some other way, or transforms (base64, splits), is not caught.
 - Records written before `audit_http` loaded are not re-sent; the receiver sees the chain start at the first record it gets.
 
 Report vulnerabilities privately to the maintainers.

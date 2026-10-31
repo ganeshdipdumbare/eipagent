@@ -20,7 +20,7 @@ import (
 //	allow:  glob patterns (default ["*_API_KEY", "*_TOKEN"])
 //	grants: {plugin instance: [names]} — when set, a plugin may read only
 //	        the names granted to it (the caller is set by the core).
-var Permissions = []string{"env"}
+var Permissions = []string{"env", "env:secrets"}
 
 func Apply(ctx *sdk.Context) error {
 	allow := ctx.ConfigStrings("allow")

@@ -38,7 +38,7 @@ import (
 //	allow:       glob patterns of names that may be read (default ["*"])
 //	grants:      {plugin instance: [names]}: when set, a plugin may read only
 //	             the names granted to it (the caller is set by the core)
-var Permissions = []string{"net", "env", "fs:read"}
+var Permissions = []string{"net", "env", "env:secrets", "fs:read"}
 
 func Apply(ctx *sdk.Context) error {
 	addr := strings.TrimRight(ctx.ConfigString("address", os.Getenv("VAULT_ADDR")), "/")

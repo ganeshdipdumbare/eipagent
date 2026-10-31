@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -205,4 +207,45 @@ func TestApprovedEmailReadsRelaySecret(t *testing.T) {
 		}
 	}
 	t.Fatal("no secret.access by mailer in the audit log")
+}
+
+func TestPublicDemoLimits(t *testing.T) {
+	dir := t.TempDir()
+	s, err := New(Config{DataDir: dir, RatePerMin: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(s)
+	t.Cleanup(func() { ts.Close(); s.Close() })
+	c := client{t, ts.URL}
+	msg := map[string]any{"text": "Where is my order #1077?", "user": "sam"}
+	for i := 0; i < 2; i++ {
+		if _, code := c.stream("/api/threads/t-limit/messages", msg); code != 200 {
+			t.Fatalf("request %d: %d", i, code)
+		}
+	}
+	if _, code := c.stream("/api/threads/t-limit/messages", msg); code != 429 {
+		t.Fatalf("third request in a minute: want 429, got %d", code)
+	}
+	if _, code := c.stream("/api/threads/..%2Fx/messages", msg); code != 400 && code != 404 {
+		t.Fatalf("bad thread id accepted: %d", code)
+	}
+	big := map[string]any{"text": strings.Repeat("x", 5000), "user": "sam"}
+	s.limit = newLimiter(100, 8, false)
+	if _, code := c.stream("/api/threads/t-big2/messages", big); code != 400 {
+		t.Fatalf("oversized message: want 400, got %d", code)
+	}
+
+	// A damaged audit line must not crash the feed.
+	f, _ := os.OpenFile(filepath.Join(dir, "audit.jsonl"), os.O_APPEND|os.O_WRONLY, 0o600)
+	f.WriteString(`{"body":null,"hash":"x"}` + "\n")
+	f.Close()
+	var au struct {
+		Verified bool
+		Entries  []map[string]any
+	}
+	c.get("/api/audit", &au)
+	if au.Verified || len(au.Entries) == 0 {
+		t.Fatalf("damaged log should show as broken, not crash: %+v", au.Verified)
+	}
 }

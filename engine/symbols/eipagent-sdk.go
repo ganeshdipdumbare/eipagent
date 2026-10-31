@@ -35,6 +35,7 @@ func init() {
 		"Int":                reflect.ValueOf(sdk.Int),
 		"IsRetryable":        reflect.ValueOf(sdk.IsRetryable),
 		"LastText":           reflect.ValueOf(sdk.LastText),
+		"MinRedactLen":       reflect.ValueOf(constant.MakeFromLiteral("4", token.INT, 0)),
 		"NewProviderError":   reflect.ValueOf(sdk.NewProviderError),
 		"NewRoot":            reflect.ValueOf(sdk.NewRoot),
 		"NewRunID":           reflect.ValueOf(sdk.NewRunID),

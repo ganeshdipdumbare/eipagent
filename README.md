@@ -495,7 +495,7 @@ import (
 )
 
 var Inject = []string{"store"}     // required services ("?x" optional, "llm/*" any match)
-var Permissions = []string{"net"}  // net, exec, fs:read, fs:write, env, db
+var Permissions = []string{"net"}  // net, exec, fs:read, fs:write, env, env:secrets, db
 
 func Apply(ctx *sdk.Context) error {
 	ctx.AddTool(sdk.Tool{

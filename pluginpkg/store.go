@@ -213,6 +213,9 @@ func (s *Store) Install(data []byte, by string) (*Version, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if contains(s.opts.Reserved, m.Name) { // re-check: Reserve may have run during Verify
+		return nil, fmt.Errorf("%s: name is reserved for a built-in plugin", m.Name)
+	}
 	p := s.st.Plugins[m.Name]
 	if p == nil {
 		p = &Plugin{Name: m.Name, Versions: map[string]*Version{}}
@@ -297,12 +300,23 @@ func (s *Store) Enable(name, version string) error {
 	if v.State != StateApproved {
 		return fmt.Errorf("%s %s is %s: %w", name, version, v.State, ErrNotApproved)
 	}
-	// Re-verify the stored archive: catches tampering at rest.
+	// Re-verify the stored archive in full, as at install: integrity, the
+	// sha256 recorded at install, and the signature against the keys
+	// trusted now. A package (or state.json) changed at rest, or one whose
+	// signing key has since been removed, is quarantined instead of loaded.
 	pkg, err := s.openLocked(name, version)
-	if err != nil || pkg.SHA256 != v.SHA256 {
-		if err == nil {
-			err = fmt.Errorf("stored package changed since install")
+	if err == nil && pkg.SHA256 != v.SHA256 {
+		err = fmt.Errorf("stored package changed since install")
+	}
+	if err == nil {
+		opts := s.opts.Verify
+		opts.SHA256 = v.SHA256
+		var ver *Verification
+		if ver, err = Verify(pkg, opts); err == nil && v.Signer != "" && ver.Signer != v.Signer {
+			err = fmt.Errorf("signed by %q, but %q signed it at install", ver.Signer, v.Signer)
 		}
+	}
+	if err != nil {
 		v.State, v.Reason = StateQuarantined, err.Error()
 		s.saveLocked()
 		s.audit("plugin.quarantine", map[string]any{"plugin": name, "version": version, "reason": v.Reason, "by": "store"})
@@ -391,7 +405,10 @@ func (s *Store) Update(data []byte, by string) (*Version, error) {
 	if err != nil {
 		return nil, err
 	}
-	p, _ := s.Get(v.Manifest.Name)
+	p, err := s.Get(v.Manifest.Name)
+	if err != nil { // uninstalled concurrently
+		return v, err
+	}
 	if p.Active == "" || p.Active == v.Version || v.State != StateApproved {
 		return v, nil
 	}

@@ -24,6 +24,9 @@ import (
 // where they exist (gen_ai.*) plus eip.* fields: run id, thread, user,
 // plugin, tool, call id. Secret values are redacted.
 //
+// Failed exports are retried on the next flush; the queue is bounded by
+// max_queue (oldest spans dropped first, and logged).
+//
 // Config: endpoint ("http://localhost:4318"; spans go to /v1/traces),
 // headers ({name: value or secret://NAME}), service_name ("eipagent"),
 // content (include prompts / results, false), flush_seconds (2),
@@ -76,6 +79,9 @@ func Apply(ctx *sdk.Context) error {
 	content := ctx.ConfigBool("content", false)
 	flushEvery := time.Duration(ctx.ConfigInt("flush_seconds", 2)) * time.Second
 	maxQueue := ctx.ConfigInt("max_queue", 5000)
+	if maxQueue < 1 || flushEvery <= 0 {
+		return fmt.Errorf("trace_otlp: max_queue and flush_seconds must be positive")
+	}
 	client := &http.Client{Timeout: 10 * time.Second}
 
 	var mu sync.Mutex
@@ -98,6 +104,24 @@ func Apply(ctx *sdk.Context) error {
 		return runSpan{trace: randHex(16)}
 	}
 	var sending sync.Mutex
+	lastErr := ""
+	// requeue puts a batch that failed back in front of newer spans (the
+	// queue stays bounded by max_queue, oldest dropped first), so a
+	// collector outage or a bad header delays traces instead of losing them.
+	requeue := func(batch []span, why error) {
+		mu.Lock()
+		queue = append(batch, queue...)
+		lost := 0
+		if len(queue) > maxQueue {
+			lost = len(queue) - maxQueue
+			queue = queue[lost:]
+		}
+		mu.Unlock()
+		if msg := why.Error(); msg != lastErr || lost > 0 {
+			lastErr = msg
+			ctx.Logf("trace_otlp: export failed, %d spans kept for retry, %d dropped (queue full): %v", len(batch)-lost, lost, why)
+		}
+	}
 	flush := func() {
 		sending.Lock()
 		defer sending.Unlock()
@@ -115,6 +139,7 @@ func Apply(ctx *sdk.Context) error {
 		body, _ := json.Marshal(payload)
 		req, err := http.NewRequest("POST", endpoint+"/v1/traces", bytes.NewReader(body))
 		if err != nil {
+			requeue(batch, err)
 			return
 		}
 		req.Header.Set("Content-Type", "application/json")
@@ -122,7 +147,7 @@ func Apply(ctx *sdk.Context) error {
 			s, _ := v.(string)
 			val, err := ctx.Secret(s)
 			if err != nil {
-				ctx.Logf("trace_otlp: header %s: %v", k, err)
+				requeue(batch, fmt.Errorf("header %s: %v", k, err))
 				return
 			}
 			req.Header.Set(k, val)
@@ -135,8 +160,10 @@ func Apply(ctx *sdk.Context) error {
 			}
 		}
 		if err != nil {
-			ctx.Logf("trace_otlp: export failed, %d spans dropped: %v", len(batch), err)
+			requeue(batch, err)
+			return
 		}
+		lastErr = ""
 	}
 	ctx.Effect(func() func() {
 		stop := make(chan struct{})

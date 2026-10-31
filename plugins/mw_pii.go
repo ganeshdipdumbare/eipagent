@@ -4,6 +4,8 @@ package plugin
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -19,10 +21,14 @@ import (
 //
 //	types:      [email, credit_card, ip, url, phone] (default email, credit_card, ip)
 //	strategy:   redact (default) | mask | hash | block
+//	hash_key:   secret://NAME keying the hash strategy (HMAC-SHA256); without
+//	            it a random per-process key is used (tokens differ per run)
 //	input:      apply to messages sent to the model (default true)
 //	output:     apply to model replies (default false)
 //	tool_results: apply to tool results (default true)
 //	patterns:   {name: regex} extra detectors
+var Inject = []string{"?secrets"} // only for hash_key
+
 func Apply(ctx *sdk.Context) error {
 	if ctx.Priority() == 0 {
 		ctx.SetPriority(30)
@@ -32,6 +38,24 @@ func Apply(ctx *sdk.Context) error {
 		types = []string{"email", "credit_card", "ip"}
 	}
 	strategy := ctx.ConfigString("strategy", "redact")
+	// hash: keyed HMAC, so tokens can't be reversed by hashing candidate
+	// emails or IPs. With hash_key (a secret://), tokens are stable across
+	// restarts and replicas; without it a random per-process key is used.
+	var hashKey []byte
+	if strategy == "hash" {
+		if ref := ctx.ConfigString("hash_key", ""); ref != "" {
+			k, err := ctx.Secret(ref)
+			if err != nil {
+				return fmt.Errorf("mw_pii: hash_key: %v", err)
+			}
+			hashKey = []byte(k)
+		} else {
+			hashKey = make([]byte, 32)
+			if _, err := rand.Read(hashKey); err != nil {
+				return err
+			}
+		}
+	}
 	onIn := ctx.ConfigBool("input", true)
 	onOut := ctx.ConfigBool("output", false)
 	onTools := ctx.ConfigBool("tool_results", true)
@@ -103,8 +127,9 @@ func Apply(ctx *sdk.Context) error {
 					}
 					return strings.Repeat("*", len(m)-4) + m[len(m)-4:]
 				case "hash":
-					h := sha256.Sum256([]byte(m))
-					return "<" + name + ":" + hex.EncodeToString(h[:])[:10] + ">"
+					mac := hmac.New(sha256.New, hashKey)
+					mac.Write([]byte(m))
+					return "<" + name + ":" + hex.EncodeToString(mac.Sum(nil))[:16] + ">"
 				default:
 					return "[REDACTED_" + strings.ToUpper(name) + "]"
 				}

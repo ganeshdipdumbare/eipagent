@@ -29,6 +29,7 @@ import (
 //	  command: "npx", args: ["-y", "@modelcontextprotocol/server-github"], env: {"K": "secret://K"},   // stdio
 //	  url:     "https://mcp.example.com/mcp", headers: {"Authorization": "secret://MCP_TOKEN"},        // or streamable HTTP
 //	  tools:   ["only", "these"],
+//	  trust_annotations: false,  // true: treat the server's readOnlyHint as read-only for policy
 //	  timeout_seconds: 60
 //	}]
 var Permissions = []string{"net", "exec"}
@@ -202,7 +203,13 @@ func stdioClient(ctx *sdk.Context, name string, s map[string]any) (*client, erro
 			ch := make(chan rpcMsg, 1)
 			waiting[id] = ch
 			mu.Unlock()
+			forget := func() {
+				mu.Lock()
+				delete(waiting, id)
+				mu.Unlock()
+			}
 			if err := write(request(&id, method, params)); err != nil {
+				forget()
 				return nil, err
 			}
 			select {
@@ -212,11 +219,10 @@ func stdioClient(ctx *sdk.Context, name string, s map[string]any) (*client, erro
 				}
 				return m.Result, nil
 			case <-done:
+				forget()
 				return nil, fmt.Errorf("server %s exited", name)
 			case <-c.Done():
-				mu.Lock()
-				delete(waiting, id)
-				mu.Unlock()
+				forget()
 				return nil, c.Err()
 			}
 		},
@@ -341,6 +347,7 @@ func httpClient(ctx *sdk.Context, name string, s map[string]any) (*client, error
 }
 
 func register(ctx *sdk.Context, cl *client, s map[string]any) error {
+	trustAnn, _ := s["trust_annotations"].(bool)
 	allow := map[string]bool{}
 	if raw, ok := s["tools"].([]any); ok {
 		for _, t := range raw {
@@ -376,8 +383,14 @@ func register(ctx *sdk.Context, cl *client, s map[string]any) error {
 				continue
 			}
 			meta := map[string]any{"mcp_server": cl.name}
+			// readOnlyHint is the server's own claim. The policy's read-only
+			// mode treats "readonly" as permission, so it's only trusted for
+			// servers the operator vouches for (trust_annotations: true).
 			if ro, ok := t.Annotations["readOnlyHint"].(bool); ok && ro {
-				meta["readonly"] = true
+				meta["mcp_read_only_hint"] = true
+				if trustAnn {
+					meta["readonly"] = true
+				}
 			}
 			if d, ok := t.Annotations["destructiveHint"].(bool); ok && d {
 				meta["risk"] = "high"

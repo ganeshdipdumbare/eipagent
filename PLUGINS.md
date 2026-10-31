@@ -14,7 +14,7 @@ import (
 )
 
 var Inject = []string{"store"}       // services required before Apply runs ("?x" optional, "llm/*" any)
-var Permissions = []string{"net"}    // capabilities: net, exec, fs:read, fs:write, env, db
+var Permissions = []string{"net"}    // capabilities: net, exec, fs:read, fs:write, env, env:secrets, db
 
 func Apply(ctx *sdk.Context) error {
 	store := ctx.Service("store").(*sdk.Store)
@@ -44,7 +44,12 @@ Well-known services: `loop`, `llm/<name>`, `checkpointer`, `store`, `secrets`, `
 
 ## Permissions
 
-The engine parses each plugin's imports before running it. An import the plugin's granted permissions don't cover is refused with a clear error, and `unsafe`, `syscall`, `os.Exit`, `os.Setenv` and similar are never available. The admin policy's `grants` can only narrow what a plugin declares. This is defense in depth. For untrusted plugin code, run the agent in a sandbox (`WithRunIn`).
+The engine parses each plugin's imports before running it. An import the plugin's granted permissions don't cover is refused with a clear error, and `unsafe`, `syscall`, `os.Exit`, `os.Setenv` and similar are never available. The admin policy's `grants` can only narrow what a plugin declares. This is defense in depth.
+
+- `fs:write` without `fs:read` can't read: `os.OpenFile` then only opens files for writing.
+- `env` shows the environment minus credential-looking variables (`*_API_KEY`, `*_TOKEN`, `*_SECRET`, `*PASSWORD*`, `*_DSN` ...). Only secret providers should declare `env:secrets`, which shows everything; other plugins get keys through `ctx.Secret` and per-plugin grants.
+- Plugins can call `sdk.Redact` but not `sdk.AddRedaction`: only the core registers redaction values.
+- Records a plugin submits through the `audit` service are stamped `writer: "plugin:<name>"` by the SDK. For untrusted plugin code, run the agent in a sandbox (`WithRunIn`).
 
 ## Ship a plugin: manifest, lint, package, install
 

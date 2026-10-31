@@ -6,7 +6,7 @@
   "grants": {
     "*": ["net"],
     "audit_jsonl": ["fs:read", "fs:write"],
-    "secrets_env": ["env"],
+    "secrets_env": ["env", "env:secrets"],
     "sandbox_docker": ["exec"],
     "db_sql": ["db"], "checkpoint_sql": ["db"], "store_sql": ["db"]
   },

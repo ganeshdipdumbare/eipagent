@@ -220,6 +220,9 @@ func (c *Context) Service(name string) any {
 	if s, ok := v.(*Secrets); ok && name == "secrets" && s != nil {
 		return c.boundSecrets(s)
 	}
+	if a, ok := v.(*Audit); ok && name == "audit" && a != nil && c.id != "" {
+		return c.boundAudit(a)
+	}
 	return v
 }
 

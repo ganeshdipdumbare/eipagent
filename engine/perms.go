@@ -22,11 +22,16 @@ const (
 	PermExec    = "exec"     // os/exec, os.StartProcess
 	PermFSRead  = "fs:read"  // read files and directories
 	PermFSWrite = "fs:write" // create / modify / remove files
-	PermEnv     = "env"      // environment variables
+	PermEnv     = "env"      // environment variables, minus secret-looking ones
 	PermDB      = "db"       // database/sql
+	// PermEnvSecrets also exposes variables whose names look like
+	// credentials (*_API_KEY, *_TOKEN, *PASSWORD* ...). Only secret
+	// providers (secrets_env, secrets_vault) should hold it; every other
+	// plugin gets secrets through grants.
+	PermEnvSecrets = "env:secrets"
 )
 
-var AllPerms = []string{PermNet, PermExec, PermFSRead, PermFSWrite, PermEnv, PermDB}
+var AllPerms = []string{PermNet, PermExec, PermFSRead, PermFSWrite, PermEnv, PermDB, PermEnvSecrets}
 
 // pure packages every plugin may import.
 var pure = []string{
@@ -51,10 +56,11 @@ var permPkgs = map[string][]string{
 
 // os is split per symbol.
 var osSyms = map[string][]string{
-	PermEnv:     {"Getenv", "LookupEnv", "Environ", "ExpandEnv", "Hostname", "UserHomeDir", "TempDir", "Getwd"},
-	PermFSRead:  {"Open", "ReadFile", "ReadDir", "Stat", "Lstat", "DirFS", "Readlink", "SameFile", "Getwd", "TempDir", "UserHomeDir"},
-	PermFSWrite: {"Create", "CreateTemp", "WriteFile", "Mkdir", "MkdirAll", "MkdirTemp", "Remove", "RemoveAll", "Rename", "OpenFile", "Chmod", "Chtimes", "Truncate", "Symlink", "Link", "CopyFS"},
-	PermExec:    {"StartProcess", "FindProcess", "Getpid", "Executable", "ProcAttr", "Process", "ProcessState", "Signal", "Interrupt", "Kill"},
+	PermEnv:        {"Getenv", "LookupEnv", "Environ", "ExpandEnv", "Hostname", "UserHomeDir", "TempDir", "Getwd"},
+	PermEnvSecrets: {"Getenv", "LookupEnv", "Environ", "ExpandEnv"},
+	PermFSRead:     {"Open", "ReadFile", "ReadDir", "Stat", "Lstat", "DirFS", "Readlink", "SameFile", "Getwd", "TempDir", "UserHomeDir"},
+	PermFSWrite:    {"Create", "CreateTemp", "WriteFile", "Mkdir", "MkdirAll", "MkdirTemp", "Remove", "RemoveAll", "Rename", "OpenFile", "Chmod", "Chtimes", "Truncate", "Symlink", "Link", "CopyFS"},
+	PermExec:       {"StartProcess", "FindProcess", "Getpid", "Executable", "ProcAttr", "Process", "ProcessState", "Signal", "Interrupt", "Kill"},
 }
 
 // os symbols that never need a permission (types, errors, flags).
@@ -139,6 +145,10 @@ func buildSymbols(perms []string) map[string]map[string]reflect.Value {
 			filtered[name] = v
 		}
 	}
+	if osAllowed["OpenFile"] && !has[PermFSRead] {
+		// fs:write alone must not read: OpenFile only for writing.
+		filtered["OpenFile"] = reflect.ValueOf(writeOnlyOpenFile)
+	}
 	out["os/os"] = filtered
 	if has[PermExec] {
 		out["os/exec/exec"] = map[string]reflect.Value{
@@ -152,9 +162,28 @@ func buildSymbols(perms []string) map[string]map[string]reflect.Value {
 		}
 	}
 	for k, v := range symbols.Symbols {
+		if strings.HasPrefix(k, "eipagent/sdk/") {
+			// Plugins may redact, but not add redaction rules: that would
+			// let one plugin blank out words in everyone's audit records.
+			cp := make(map[string]reflect.Value, len(v))
+			for name, sym := range v {
+				if name != "AddRedaction" {
+					cp[name] = sym
+				}
+			}
+			v = cp
+		}
 		out[k] = v
 	}
 	return out
+}
+
+// writeOnlyOpenFile is os.OpenFile for plugins with fs:write but not fs:read.
+func writeOnlyOpenFile(name string, flag int, perm os.FileMode) (*os.File, error) {
+	if flag&(os.O_WRONLY|os.O_RDWR) != os.O_WRONLY {
+		return nil, fmt.Errorf("open %s: reading files needs the fs:read permission (use os.O_WRONLY)", name)
+	}
+	return os.OpenFile(name, flag, perm)
 }
 
 // checkImports verifies every import is covered by perms.
@@ -182,14 +211,44 @@ func checkImports(name string, imports, perms []string) error {
 	return nil
 }
 
-// pluginEnv is the environment an interpreted plugin sees.
+// pluginEnv is the environment an interpreted plugin sees: nothing
+// without env, everything but secret-looking variables with env, and
+// everything with env:secrets.
 func pluginEnv(perms []string) []string {
+	has := map[string]bool{}
 	for _, p := range perms {
-		if p == PermEnv {
-			return os.Environ()
+		has[p] = true
+	}
+	switch {
+	case has[PermEnvSecrets]:
+		return os.Environ()
+	case has[PermEnv]:
+		var out []string
+		for _, kv := range os.Environ() {
+			if name, _, _ := strings.Cut(kv, "="); !SecretLike(name) {
+				out = append(out, kv)
+			}
 		}
+		return out
 	}
 	return []string{}
+}
+
+// SecretLike reports whether an environment variable name looks like a
+// credential, which plugins with only the env permission don't see.
+func SecretLike(name string) bool {
+	n := strings.ToUpper(name)
+	for _, s := range []string{"_KEY", "_TOKEN", "_SECRET", "_PASSWORD", "_PASS", "_PASSWD", "_DSN", "_CREDENTIALS", "_CREDENTIAL", "_PAT"} {
+		if strings.HasSuffix(n, s) {
+			return true
+		}
+	}
+	for _, s := range []string{"PASSWORD", "SECRET", "TOKEN", "APIKEY", "API_KEY", "PRIVATE_KEY", "DATABASE_URL"} {
+		if strings.Contains(n, s) {
+			return true
+		}
+	}
+	return false
 }
 
 func intersect(a, b []string) []string {

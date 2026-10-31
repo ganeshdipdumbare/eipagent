@@ -110,16 +110,42 @@ func Apply(ctx *sdk.Context) error {
 			if err != nil || code != 0 {
 				return nil, fmt.Errorf("sandbox_docker: %v %s", err, strings.TrimSpace(errs))
 			}
-			return container(strings.TrimSpace(out)[:12], name, wd, run, start), nil
+			id := strings.TrimSpace(out)
+			if i := strings.LastIndex(id, "\n"); i >= 0 { // warnings may precede the id
+				id = strings.TrimSpace(id[i+1:])
+			}
+			if len(id) > 12 {
+				id = id[:12]
+			}
+			if !validID(id) {
+				return nil, fmt.Errorf("sandbox_docker: unexpected container id %q", id)
+			}
+			return container(id, name, wd, run, start), nil
 		},
 		Attach: func(c context.Context, id string) (*sdk.Sandbox, error) {
-			out, _, code, err := run(c, nil, "inspect", "-f", "{{.Config.WorkingDir}}", id)
+			if !validID(id) { // ids come back from saved threads; never let one become a flag
+				return nil, fmt.Errorf("sandbox_docker: invalid container id %q", id)
+			}
+			out, _, code, err := run(c, nil, "inspect", "-f", "{{.Config.WorkingDir}}", "--", id)
 			if err != nil || code != 0 {
 				return nil, fmt.Errorf("sandbox %s not found", id)
 			}
 			return container(id, name, strings.TrimSpace(out), run, start), nil
 		},
 	})
+}
+
+// validID accepts docker/podman container ids and names, never flags.
+func validID(id string) bool {
+	if id == "" || len(id) > 128 || id[0] == '-' {
+		return false
+	}
+	for _, r := range id {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '.' || r == '-') {
+			return false
+		}
+	}
+	return true
 }
 
 type runner func(c context.Context, stdin []byte, args ...string) (string, string, int, error)
@@ -220,7 +246,9 @@ func container(id, provider, wd string, run runner, start starter) *sdk.Sandbox 
 			return err
 		},
 		Close: func(c context.Context) error {
-			_, _, _, err := run(context.Background(), nil, "rm", "-f", id)
+			cc, cancel := context.WithTimeout(context.Background(), 30*time.Second) // a hung daemon must not block shutdown
+			defer cancel()
+			_, _, _, err := run(cc, nil, "rm", "-f", "--", id)
 			return err
 		},
 	}

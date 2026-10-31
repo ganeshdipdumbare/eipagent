@@ -101,6 +101,7 @@ func attachStore(st *pluginpkg.Store, eng *engine.Engine, prof *engine.Profile) 
 	st.SetRuntime(rt)
 	st.SetAudit(func(kind string, data map[string]any) {
 		if a, ok := eng.Root().Service("audit").(*sdk.Audit); ok && a.Record != nil {
+			data["writer"] = "core"
 			a.Record(kind, data)
 		}
 	})

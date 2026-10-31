@@ -507,6 +507,12 @@ func New(cfg Config) (*Server, error) {
 	if cfg.RefundLimit == 0 {
 		cfg.RefundLimit = 50
 	}
+	if cfg.RatePerMin &lt;= 0 {
+		cfg.RatePerMin = 20
+	}
+	if cfg.MaxRuns &lt;= 0 {
+		cfg.MaxRuns = 8
+	}
 	shop := NewShop()
 	if os.Getenv("MAIL_RELAY_TOKEN") == "" {
 		os.Setenv("MAIL_RELAY_TOKEN", "demo-relay-token-5f2c9a") // a stand-in; production reads it from Vault
@@ -541,7 +547,7 @@ func New(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &amp;Server{agent: agent, shop: shop, cfg: cfg, mux: http.NewServeMux()}
+	s := &amp;Server{agent: agent, shop: shop, cfg: cfg, mux: http.NewServeMux(), limit: newLimiter(cfg.RatePerMin, cfg.MaxRuns, cfg.TrustProxy)}
 	s.routes()
 	return s, nil
 }</code></pre></div>
@@ -1101,7 +1107,7 @@ import (
 )
 
 var Inject = []string{"store"}     // wait for a store service ("?x" = optional)
-var Permissions = []string{"net"}  // net, exec, fs:read, fs:write, env, db
+var Permissions = []string{"net"}  // net, exec, fs:read, fs:write, env, env:secrets, db
 
 func Apply(ctx *sdk.Context) error {
 	hours := ctx.ConfigString("hours", "Mon-Fri 9:00-17:00")
@@ -1128,8 +1134,8 @@ func Apply(ctx *sdk.Context) error {
 	eipagent.WithPlugin("office", map[string]any{"hours": "Mon-Sat 8:00-20:00"}),
 )</code></pre></div>
   <p>Permissions a plugin can ask for:</p>
-  <p><span class="perm">net</span><span class="perm">exec</span><span class="perm">fs:read</span><span class="perm">fs:write</span><span class="perm">env</span><span class="perm">db</span></p>
-  <p>A plugin that imports <code>net/http</code> without asking for <code>net</code> is refused before it runs. <code>unsafe</code>, <code>syscall</code> and <code>os.Exit</code> are never available.</p>
+  <p><span class="perm">net</span><span class="perm">exec</span><span class="perm">fs:read</span><span class="perm">fs:write</span><span class="perm">env</span><span class="perm">env:secrets</span><span class="perm">db</span></p>
+  <p>A plugin that imports <code>net/http</code> without asking for <code>net</code> is refused before it runs. <code>unsafe</code>, <code>syscall</code> and <code>os.Exit</code> are never available. <code>fs:write</code> alone can't read files: <code>os.OpenFile</code> then only opens for writing. <code>env</code> shows the environment without credential-looking variables (<code>*_API_KEY</code>, <code>*_TOKEN</code>, <code>*PASSWORD*</code> …); only secret providers declare <code>env:secrets</code>. Every other plugin gets keys through <a href="#secrets">grants</a>.</p>
   <div class="note"><b>Secure preset</b><div><p>By default, a plugin file must match a pin in <code>eip.lock</code>. Run <code>eip plugin pin -plugins ./plugins</code> after each edit. During development, use <code>eipagent.WithPreset("dev")</code>, which skips pins and reloads files on save.</p></div></div>
   <p>A compiled plugin has the same shape. Use one when the code needs third-party packages:</p>
   <div class="code" data-title="go"><pre><code class="language-go">p := eipagent.Plugin{Name: "crm", Inject: []string{"store"}, Apply: func(ctx *eipagent.PluginContext) error {
@@ -1217,7 +1223,7 @@ eip run -store .eipagent/plugins -model openai:gpt-4.1 "weather in Oslo?"</code>
   <div class="flow" role="img" aria-label="Installed plugin lifecycle"><div class="row"><span class="node ">install</span><span class="edge">signature · pin · lint</span><span class="node info">VALIDATED</span><span class="edge">approve</span><span class="node info">APPROVED</span><span class="edge">enable</span><span class="node ok">ACTIVE</span></div><div class="row"><span class="node ok">ACTIVE</span><span class="edge">disable</span><span class="node info">APPROVED</span></div><div class="row"><span class="node info">APPROVED</span><span class="edge">enable fails: compile · Apply · missing dependency</span><span class="node bad">FAILED</span><span class="edge">previous version keeps running</span><span class="node ok">ACTIVE · old</span></div><div class="row"><span class="node ok">ACTIVE</span><span class="edge">rollback</span><span class="node ok">ACTIVE · previous version</span></div><div class="row"><span class="node ">any version</span><span class="edge">quarantine · or package changed on disk</span><span class="node bad">QUARANTINED</span><span class="edge">approve again</span><span class="node info">APPROVED</span></div></div>
   <ul>
     <li><b>Nothing runs before approval.</b> Installed versions sit in the store. The agent only loads what has been enabled.</li>
-    <li><b>Checked twice.</b> On install: the signature against <code>trusted_keys</code> (required unless <code>-allow-unsigned</code>), an optional <code>-sha256</code> pin, compatibility and the linter. On enable: the stored package again, so one edited on disk is quarantined instead of loaded.</li>
+    <li><b>Checked twice.</b> On install: the signature against <code>trusted_keys</code> (required unless <code>-allow-unsigned</code>), an optional <code>-sha256</code> pin, compatibility and the linter. On enable: all of it again, signature included, so a package swapped on disk (even with <code>state.json</code> edited to match), or one whose key you've since removed, is quarantined instead of loaded.</li>
     <li><b>Updates can't take you down.</b> If a new version fails to compile, fails to start or is missing a dependency, the old one keeps running and the new one is marked FAILED.</li>
     <li><b>Built-in names are reserved.</b> A package can't replace <code>policy</code>, <code>tool_shell</code> or any other standard plugin.</li>
     <li><b>Everything is recorded.</b> The store keeps who installed and approved each version and who signed it. With an audit plugin loaded, each step is also an audit event.</li>
@@ -1367,6 +1373,7 @@ eipagent.WithPlugin("audit_http", map[string]any{
 
 // Traces to any OpenTelemetry collector (OTLP/HTTP).
 eipagent.WithPlugin("trace_otlp", map[string]any{"endpoint": "http://otel-collector:4318"}),</code></pre></div>
+  <p>The hash chain catches edits, but whoever can rewrite the whole file could recompute it. Give <code>audit_jsonl</code> a <code>"key": "secret://AUDIT_CHAIN_KEY"</code> and each line also carries an HMAC that <code>audit.VerifyKeyed(path, key)</code> checks, or ship the log off the machine.</p>
   <p><code>audit_http</code> receives the same records as the local log, with their hashes, so the receiver can check the chain itself. <code>trace_otlp</code> sends one trace per run, with a span for each model call and each tool call, using the OpenTelemetry <code>gen_ai.*</code> attribute names.</p>
 
   <h2>Standard fields</h2>
@@ -1380,6 +1387,7 @@ eipagent.WithPlugin("trace_otlp", map[string]any{"endpoint": "http://otel-collec
       <tr><td><code>tool</code>, <code>call_id</code>, <code>step</code></td><td>Which tool call, and in which step of the run</td></tr>
       <tr><td><code>provider</code>, <code>model</code>, token counts</td><td>Model call metadata</td></tr>
       <tr><td><code>decision</code>, <code>decided_by</code>, <code>outcome</code></td><td>Approvals and policy results</td></tr>
+      <tr><td><code>writer</code></td><td>Who wrote the record: <code>core</code>, <code>audit_jsonl</code>, or <code>plugin:&lt;name&gt;</code> for anything a plugin submits through the <code>audit</code> service. Set by the SDK, so a plugin can't pass its records off as the core's.</td></tr>
     </tbody>
   </table></div>
   <p>Event types: <code>model.call</code>, <code>tool.call</code>, <code>secret.access</code>, <code>plugin.active</code> / <code>failed</code> / <code>refused</code> / <code>disposed</code>, and the store events <code>plugin.install</code>, <code>approve</code>, <code>enable</code>, <code>enable_failed</code>, <code>rollback</code>, <code>quarantine</code>, <code>uninstall</code>.</p>
@@ -1426,7 +1434,7 @@ eipagent.WithPlugin("llm_openai", map[string]any{"api_key": "secret://OPENAI_API
   <ul>
     <li><b>Grants per plugin.</b> With <code>grants</code>, a plugin reads only the names granted to it.</li>
     <li><b>Identity from the core.</b> The core passes the real calling plugin to the provider. A plugin can't ask as someone else.</li>
-    <li><b>Redacted everywhere.</b> Every value that is handed out is remembered. Logs, traces and audit records show <code>[REDACTED]</code> wherever it would have appeared: tool arguments, results, model replies, errors.</li>
+    <li><b>Redacted everywhere.</b> Every value that is handed out is remembered, with its JSON-escaped, URL-encoded and base64 forms. Logs, traces and audit records show <code>[REDACTED]</code> wherever it would have appeared: tool arguments, results, model replies, errors. Values shorter than 4 bytes can't be redacted; their <code>secret.access</code> record says so. Plugins can redact, but only the core registers values.</li>
     <li><b>Every read is audited</b> as <code>secret.access</code>, with the plugin, the secret name and whether it was granted. The value is never recorded. Denials are always recorded; granted reads once per plugin and secret every 10 minutes, and again when the value changes.</li>
     <li><b>Kept on the host.</b> With <code>WithRunIn</code>, model calls go back to the host, so keys never enter the sandbox.</li>
   </ul>

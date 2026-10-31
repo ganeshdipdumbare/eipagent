@@ -43,6 +43,12 @@ func Apply(ctx *sdk.Context) error {
 	flushEvery := time.Duration(ctx.ConfigInt("flush_seconds", 2)) * time.Second
 	maxQueue := ctx.ConfigInt("max_queue", 10000)
 	retries := ctx.ConfigInt("retries", 3)
+	if batchSize < 1 || maxQueue < 1 || retries < 0 || flushEvery <= 0 {
+		return fmt.Errorf("audit_http: batch_size, max_queue and flush_seconds must be positive, retries not negative")
+	}
+	if maxQueue < batchSize {
+		return fmt.Errorf("audit_http: max_queue (%d) must be at least batch_size (%d)", maxQueue, batchSize)
+	}
 	client := &http.Client{Timeout: time.Duration(ctx.ConfigInt("timeout_seconds", 10)) * time.Second}
 
 	var mu sync.Mutex
@@ -136,8 +142,11 @@ func Apply(ctx *sdk.Context) error {
 			close(stop)
 			<-done
 			flush()
-			if dropped > 0 {
-				ctx.Logf("audit_http: dropped %d records (queue full)", dropped)
+			mu.Lock()
+			n := dropped
+			mu.Unlock()
+			if n > 0 {
+				ctx.Logf("audit_http: dropped %d records (queue full)", n)
 			}
 		}
 	})

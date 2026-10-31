@@ -28,6 +28,9 @@ type Config struct {
 	Model       string  // "demo:support" (offline) or e.g. "ollama:qwen3.5:4b"
 	DataDir     string  // threads and the audit log live here
 	RefundLimit float64 // refunds above this need a supervisor
+	RatePerMin  int     // agent runs per client per minute (default 20)
+	MaxRuns     int     // agent runs in flight at once (default 8)
+	TrustProxy  bool    // use X-Forwarded-For as the client address
 }
 
 type Server struct {
@@ -35,6 +38,7 @@ type Server struct {
 	shop  *Shop
 	cfg   Config
 	mux   *http.ServeMux
+	limit *limiter
 }
 
 // User identities. A real app takes these from its login session.
@@ -54,6 +58,12 @@ func New(cfg Config) (*Server, error) {
 	}
 	if cfg.RefundLimit == 0 {
 		cfg.RefundLimit = 50
+	}
+	if cfg.RatePerMin <= 0 {
+		cfg.RatePerMin = 20
+	}
+	if cfg.MaxRuns <= 0 {
+		cfg.MaxRuns = 8
 	}
 	shop := NewShop()
 	if os.Getenv("MAIL_RELAY_TOKEN") == "" {
@@ -89,7 +99,7 @@ func New(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{agent: agent, shop: shop, cfg: cfg, mux: http.NewServeMux()}
+	s := &Server{agent: agent, shop: shop, cfg: cfg, mux: http.NewServeMux(), limit: newLimiter(cfg.RatePerMin, cfg.MaxRuns, cfg.TrustProxy)}
 	s.routes()
 	return s, nil
 }
@@ -104,8 +114,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/threads", s.listThreads)
 	s.mux.HandleFunc("POST /api/threads", s.newThread)
 	s.mux.HandleFunc("GET /api/threads/{id}", s.getThread)
-	s.mux.HandleFunc("POST /api/threads/{id}/messages", s.postMessage)
-	s.mux.HandleFunc("POST /api/threads/{id}/decisions", s.postDecisions)
+	s.mux.HandleFunc("POST /api/threads/{id}/messages", s.guard(s.postMessage))
+	s.mux.HandleFunc("POST /api/threads/{id}/decisions", s.guard(s.postDecisions))
 	s.mux.HandleFunc("GET /api/approvals", s.approvals)
 	s.mux.HandleFunc("GET /api/audit", s.auditLog)
 	s.mux.HandleFunc("GET /api/orders", func(w http.ResponseWriter, r *http.Request) {
@@ -118,8 +128,11 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) newThread(w http.ResponseWriter, r *http.Request) {
-	b := make([]byte, 4)
-	rand.Read(b)
+	b := make([]byte, 12)
+	if _, err := rand.Read(b); err != nil {
+		writeErr(w, 500, err)
+		return
+	}
 	writeJSON(w, 200, map[string]any{"id": "t-" + hex.EncodeToString(b)})
 }
 
@@ -194,6 +207,10 @@ func (s *Server) listThreads(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getThread(w http.ResponseWriter, r *http.Request) {
+	if !threadID.MatchString(r.PathValue("id")) {
+		writeErr(w, 400, errors.New("bad thread id"))
+		return
+	}
 	v, err := s.view(r.Context(), r.PathValue("id"), true)
 	if err != nil {
 		writeErr(w, 500, err)
@@ -230,8 +247,8 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 		Text string `json:"text"`
 		User string `json:"user"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Text) == "" {
-		writeErr(w, 400, errors.New("send {\"text\": \"...\"}"))
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Text) == "" || len(body.Text) > 4000 {
+		writeErr(w, 400, errors.New("send {\"text\": \"...\"} (up to 4000 characters)"))
 		return
 	}
 	u, ok := users[body.User]
@@ -252,6 +269,9 @@ func (s *Server) postDecisions(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, errors.New("send {\"decisions\": [...]}"))
 		return
 	}
+	// Demo only: the identity comes from the request so visitors can switch
+	// between Sam and Ada. A real app takes it from its login session;
+	// never trust a client-sent user for role checks or Decision.By.
 	u, ok := users[body.User]
 	if !ok || u.Role != "supervisor" {
 		writeErr(w, 403, errors.New("only supervisors can decide on approvals"))
@@ -310,10 +330,15 @@ func (s *Server) auditLog(w http.ResponseWriter, r *http.Request) {
 			Body map[string]any `json:"body"`
 			Hash string         `json:"hash"`
 		}
-		if json.Unmarshal(sc.Bytes(), &line) == nil {
-			line.Body["hash"] = line.Hash[:10]
-			entries = append(entries, line.Body)
+		if json.Unmarshal(sc.Bytes(), &line) != nil || line.Body == nil {
+			continue // a damaged line; Verify below reports the broken chain
 		}
+		h := line.Hash
+		if len(h) > 10 {
+			h = h[:10]
+		}
+		line.Body["hash"] = h
+		entries = append(entries, line.Body)
 	}
 	n, verr := audit.Verify(path)
 	for i, j := 0, len(entries)-1; i < j; i, j = i+1, j-1 { // newest first

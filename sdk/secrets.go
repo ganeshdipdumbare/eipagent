@@ -4,7 +4,12 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"net/url"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -27,21 +32,41 @@ var (
 	redactVals []string // longest first, so overlapping values redact fully
 )
 
+// MinRedactLen is the shortest value that can be redacted: shorter ones
+// would blank out ordinary text. Secrets this short are reported as
+// unredactable in their secret.access audit record.
+const MinRedactLen = 4
+
 // AddRedaction registers a value that must never appear in logs,
-// traces or audit output. Values shorter than 4 bytes are ignored.
-func AddRedaction(v string) {
-	if len(v) < 4 {
-		return
+// traces or audit output, together with its common encodings (JSON
+// string escaping, URL query escaping, base64), so a secret that was
+// serialized on its way to a sink is caught too. It reports false for
+// values shorter than MinRedactLen, which are not registered. Plugins
+// can't call it: only the core and compiled code register values.
+func AddRedaction(v string) bool {
+	if len(v) < MinRedactLen {
+		return false
 	}
+	forms := []string{v}
+	if b, err := json.Marshal(v); err == nil {
+		forms = append(forms, string(b[1:len(b)-1]))
+	}
+	forms = append(forms, url.QueryEscape(v), url.PathEscape(v),
+		base64.StdEncoding.EncodeToString([]byte(v)), base64.RawStdEncoding.EncodeToString([]byte(v)),
+		base64.URLEncoding.EncodeToString([]byte(v)), base64.RawURLEncoding.EncodeToString([]byte(v)))
 	redactMu.Lock()
 	defer redactMu.Unlock()
-	for _, x := range redactVals {
-		if x == v {
-			return
+next:
+	for _, f := range forms {
+		for _, x := range redactVals {
+			if x == f {
+				continue next
+			}
 		}
+		redactVals = append(redactVals, f)
 	}
-	redactVals = append(redactVals, v)
 	sort.Slice(redactVals, func(i, j int) bool { return len(redactVals[i]) > len(redactVals[j]) })
+	return true
 }
 
 // Redact replaces every registered secret value in s.
@@ -68,9 +93,15 @@ func RedactMap(m map[string]any) map[string]any {
 	return out
 }
 
-// RedactValue redacts strings inside v (maps, slices, errors).
+// RedactValue returns a redacted deep copy of v. Strings, errors and
+// fmt.Stringers are redacted; maps with string keys and slices of any
+// element type are copied element by element (as map[string]any and
+// []any); structs are copied through their JSON form. Numbers, bools
+// and nil come back unchanged.
 func RedactValue(v any) any {
 	switch x := v.(type) {
+	case nil:
+		return nil
 	case string:
 		return Redact(x)
 	case error:
@@ -89,6 +120,44 @@ func RedactValue(v any) any {
 			out[i] = Redact(e)
 		}
 		return out
+	case []byte:
+		return Redact(string(x))
+	case fmt.Stringer:
+		return Redact(x.String())
+	}
+	rv := reflect.ValueOf(v)
+	for rv.Kind() == reflect.Pointer || rv.Kind() == reflect.Interface {
+		if rv.IsNil() {
+			return nil
+		}
+		rv = rv.Elem()
+	}
+	switch rv.Kind() {
+	case reflect.String:
+		return Redact(rv.String())
+	case reflect.Map:
+		if rv.Type().Key().Kind() != reflect.String {
+			break
+		}
+		out := make(map[string]any, rv.Len())
+		for it := rv.MapRange(); it.Next(); {
+			out[it.Key().String()] = RedactValue(it.Value().Interface())
+		}
+		return out
+	case reflect.Slice, reflect.Array:
+		out := make([]any, rv.Len())
+		for i := range out {
+			out[i] = RedactValue(rv.Index(i).Interface())
+		}
+		return out
+	case reflect.Struct:
+		b, err := json.Marshal(rv.Interface())
+		if err != nil {
+			return Redact(fmt.Sprint(rv.Interface()))
+		}
+		var m any
+		json.Unmarshal(b, &m)
+		return RedactValue(m)
 	}
 	return v
 }
@@ -128,6 +197,29 @@ func (c *Context) auditGrant(caller, name, v string) bool {
 	return true
 }
 
+// rawService looks a service up without the per-plugin binding (for
+// records the core itself writes).
+func (c *Context) rawService(name string) any {
+	v, _ := c.reg.service(name)
+	return v
+}
+
+// boundAudit is what Service("audit") hands a plugin: every record it
+// submits is stamped writer="plugin:<name>" (overwriting any writer the
+// plugin set), so a plugin can't pass its own records off as the core's
+// or another plugin's. Records the core writes carry writer="core".
+func (c *Context) boundAudit(a *Audit) *Audit {
+	writer := "plugin:" + c.PluginName()
+	return &Audit{Record: func(kind string, data map[string]any) {
+		d := make(map[string]any, len(data)+1)
+		for k, v := range data {
+			d[k] = v
+		}
+		d["writer"] = writer
+		a.Record(kind, d)
+	}}
+}
+
 // boundSecrets is what Service("secrets") hands a plugin: the caller is
 // fixed to the plugin's identity (a plugin can't ask as someone else),
 // values are registered for redaction and every access is audited.
@@ -135,14 +227,18 @@ func (c *Context) boundSecrets(s *Secrets) *Secrets {
 	caller := c.PluginName()
 	return &Secrets{Get: func(ctx context.Context, _ string, name string) (string, error) {
 		v, err := s.Get(ctx, caller, name)
+		redactable := true
 		if err == nil {
-			AddRedaction(v)
+			redactable = AddRedaction(v)
 		}
 		if err == nil && !c.auditGrant(caller, name, v) {
 			return v, nil // already audited recently
 		}
-		if a, ok := c.Service("audit").(*Audit); ok && a.Record != nil {
-			d := map[string]any{"plugin": caller, "secret": name, "outcome": "granted"}
+		if a, ok := c.rawService("audit").(*Audit); ok && a.Record != nil {
+			d := map[string]any{"plugin": caller, "secret": name, "outcome": "granted", "writer": "core"}
+			if !redactable {
+				d["redaction"] = "not possible: value shorter than 4 bytes"
+			}
 			if err != nil {
 				d["outcome"], d["error"] = "denied", Redact(err.Error())
 			}

@@ -25,12 +25,18 @@ import (
 // whole agent already runs inside a sandbox. Provided as "sandbox/local".
 //
 // Config: root (default ".eipagent/sandboxes"), workdir (use one fixed
-// directory instead of one per sandbox), env_allow (["PATH","HOME","LANG"]).
+// directory instead of one per sandbox: every thread then shares it and
+// its files outlive sandbox_destroy, so use it only for a single user's
+// own workspace), env_allow (["PATH","HOME","LANG"]; secret-looking
+// names are never passed without the env:secrets permission).
 var Permissions = []string{"exec", "fs:read", "fs:write", "env"}
 
 func Apply(ctx *sdk.Context) error {
 	root := ctx.ConfigString("root", ".eipagent/sandboxes")
 	fixed := ctx.ConfigString("workdir", "")
+	if fixed != "" {
+		ctx.Logf("sandbox_local: every sandbox shares %s (fixed workdir); threads can see each other's files", fixed)
+	}
 	allow := ctx.ConfigStrings("env_allow")
 	if len(allow) == 0 {
 		allow = []string{"PATH", "HOME", "LANG", "TMPDIR"}
@@ -85,12 +91,33 @@ func box(id, dir string, baseEnv []string) *sdk.Sandbox {
 		if p != abs && !strings.HasPrefix(p, abs+string(filepath.Separator)) {
 			return "", fmt.Errorf("path %s is outside the sandbox", p)
 		}
-		// Refuse symlinks that point outside.
-		if real, err := filepath.EvalSymlinks(p); err == nil {
-			ra, _ := filepath.EvalSymlinks(abs)
-			if real != ra && !strings.HasPrefix(real, ra+string(filepath.Separator)) {
-				return "", fmt.Errorf("path %s escapes the sandbox via a symlink", p)
+		// Refuse symlinks that point outside. A path that doesn't exist yet
+		// (a file about to be written) is checked through its deepest
+		// existing parent, so a planted symlinked directory can't be used
+		// to create files outside the sandbox.
+		ra, err := filepath.EvalSymlinks(abs)
+		if err != nil {
+			return "", err
+		}
+		existing, rest := p, ""
+		for {
+			if _, err := os.Lstat(existing); err == nil {
+				break
 			}
+			parent := filepath.Dir(existing)
+			if parent == existing {
+				break
+			}
+			rest = filepath.Join(filepath.Base(existing), rest)
+			existing = parent
+		}
+		real, err := filepath.EvalSymlinks(existing)
+		if err != nil {
+			return "", fmt.Errorf("path %s: %v", p, err)
+		}
+		real = filepath.Join(real, rest)
+		if real != ra && !strings.HasPrefix(real, ra+string(filepath.Separator)) {
+			return "", fmt.Errorf("path %s escapes the sandbox via a symlink", p)
 		}
 		return p, nil
 	}
@@ -150,9 +177,18 @@ func box(id, dir string, baseEnv []string) *sdk.Sandbox {
 			if err != nil {
 				return nil, err
 			}
-			in, _ := cmd.StdinPipe()
-			out, _ := cmd.StdoutPipe()
-			errp, _ := cmd.StderrPipe()
+			in, err := cmd.StdinPipe()
+			if err != nil {
+				return nil, err
+			}
+			out, err := cmd.StdoutPipe()
+			if err != nil {
+				return nil, err
+			}
+			errp, err := cmd.StderrPipe()
+			if err != nil {
+				return nil, err
+			}
 			if err := cmd.Start(); err != nil {
 				return nil, err
 			}
