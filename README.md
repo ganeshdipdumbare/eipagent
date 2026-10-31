@@ -322,27 +322,27 @@ stateDiagram-v2
 ```mermaid
 sequenceDiagram
     participant App
-    participant Loop as loop plugin
+    participant Runner as loop plugin
     participant Hooks as middleware & hooks
-    participant LLM as llm/<provider>
+    participant LLM as llm provider
     participant Tool
-    App->>Loop: Generate(prompt) (snapshot of plugins taken)
-    Loop->>Hooks: agent/start  (may refuse the run)
+    App->>Runner: Generate(prompt) (snapshot of plugins taken)
+    Runner->>Hooks: agent/start  (may refuse the run)
     loop each step, up to max_steps
-        Loop->>Hooks: step/prepare (rewrite model, messages, tools)
-        Loop->>Hooks: model/wrap ⟶ retry ⟶ fallback ⟶ pii ⟶ …
+        Runner->>Hooks: step/prepare (rewrite model, messages, tools)
+        Runner->>Hooks: model/wrap ⟶ retry ⟶ fallback ⟶ pii ⟶ …
         Hooks->>LLM: Generate (streaming chunks → events)
-        Loop->>Hooks: model/after (inspect, may Jump: end | model)
+        Runner->>Hooks: model/after (inspect, may Jump: end | model)
         alt no tool calls
-            Loop-->>App: finish "stop"
+            Runner-->>App: finish "stop"
         else tool calls
-            Loop->>Hooks: tool/wrap ⟶ policy ⟶ audit ⟶ review ⟶ hitl ⟶ …
+            Runner->>Hooks: tool/wrap ⟶ policy ⟶ audit ⟶ review ⟶ hitl ⟶ …
             Hooks->>Tool: Run(args)
-            Note over Loop: an interrupt pauses the run → finish "interrupted"
+            Note over Runner: an interrupt pauses the run → finish "interrupted"
         end
     end
-    Loop->>Hooks: agent/end (always runs, even on error)
-    Loop-->>App: Result
+    Runner->>Hooks: agent/end (always runs, even on error)
+    Runner-->>App: Result
 ```
 
 Step by step:
