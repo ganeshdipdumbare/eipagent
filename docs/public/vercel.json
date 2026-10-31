@@ -1,0 +1,5 @@
+{
+  "rewrites": [
+    { "source": "/demo/api/:path*", "destination": "https://eipagent-support-desk.fly.dev/api/:path*" }
+  ]
+}

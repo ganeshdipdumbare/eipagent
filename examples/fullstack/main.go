@@ -9,6 +9,7 @@ import (
 	"flag"
 	"log"
 	"net/http"
+	"os"
 
 	"eipagent/examples/fullstack/app"
 )
@@ -19,6 +20,9 @@ func main() {
 	data := flag.String("data", ".eipagent/support-desk", "where threads and the audit log are stored")
 	limit := flag.Float64("refund-limit", 50, "refunds above this need a supervisor")
 	flag.Parse()
+	if port := os.Getenv("PORT"); port != "" { // set by hosts such as Fly.io
+		*addr = ":" + port
+	}
 
 	srv, err := app.New(app.Config{Model: *model, DataDir: *data, RefundLimit: *limit})
 	if err != nil {
