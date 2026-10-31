@@ -4,7 +4,8 @@
 //	ollama pull lfm3                        # small and fast; any tool-capable model works
 //	go run ./examples/ollama -demo text     # plain text, the simplest start
 //	go run ./examples/ollama                # every demo
-//	go run ./examples/ollama -demo tools    # one demo: text | stream | tools | object | thread | approve | shell | vision
+//	go run ./examples/ollama -demo plugins  # add, update and remove plugins while the agent runs
+//	go run ./examples/ollama -demo tools    # one demo: text | stream | tools | plugins | object | thread | approve | shell | vision
 //	go run ./examples/ollama -model qwen3.5:4b
 //	go run ./examples/ollama -demo vision -model qwen3-vl:4b -image photo.jpg
 //
@@ -27,7 +28,7 @@ import (
 
 var (
 	model   = flag.String("model", "lfm3:latest", "Ollama model (must support tool calling for the tools demos)")
-	demo    = flag.String("demo", "all", "text | stream | tools | object | thread | approve | shell | vision | all")
+	demo    = flag.String("demo", "all", "text | stream | tools | plugins | object | thread | approve | shell | vision | all")
 	image   = flag.String("image", "", "image file for -demo vision")
 	verbose = flag.Bool("v", false, "log every model and tool call")
 	ctx     = context.Background()
@@ -39,7 +40,7 @@ func main() {
 		name string
 		run  func()
 	}{
-		{"text", text}, {"stream", stream}, {"tools", tools}, {"object", object}, {"thread", thread},
+		{"text", text}, {"stream", stream}, {"tools", tools}, {"plugins", plugins}, {"object", object}, {"thread", thread},
 		{"approve", approve}, {"shell", shell}, {"vision", vision},
 	}
 	for _, d := range demos {
@@ -152,6 +153,97 @@ func stream() {
 	fmt.Println()
 	_, err := s.Result()
 	check(err)
+}
+
+// ---- plugins: add, update and remove capabilities while the agent runs ----
+
+// A brand-new plugin, written to disk while the agent is running. It is
+// interpreted Go: one file, one Apply function, nothing to compile.
+const officePlugin = `//go:build ignore
+
+package plugin
+
+import (
+	"context"
+
+	"eipagent/sdk"
+)
+
+func Apply(ctx *sdk.Context) error {
+	ctx.AddTool(sdk.Tool{
+		Name:        "office_hours",
+		Description: "Returns the office opening hours. Always use this for questions about office hours.",
+		Schema:      sdk.Object(map[string]any{}),
+		Run: func(c context.Context, args map[string]any) (string, error) {
+			return "HOURS", nil
+		},
+	})
+	return nil
+}
+`
+
+func plugins() {
+	dir, err := os.MkdirTemp("", "eipagent-plugins-")
+	check(err)
+	defer os.RemoveAll(dir)
+	a := newAgent(
+		eipagent.WithPreset("dev"),    // dev: unpinned plugin files allowed (secure needs eip.lock pins)
+		eipagent.WithHotReload(false), // we reload explicitly below; in dev it would also reload on save
+		eipagent.WithPluginDir(dir),
+	)
+	defer a.Close()
+	eng := a.Engine()
+	ask := func(q string) {
+		res, err := a.Generate(ctx, q, eipagent.MaxSteps(4))
+		check(err)
+		var used []string
+		for _, c := range res.ToolCalls() {
+			used = append(used, c.Name)
+		}
+		fmt.Printf("  you: %s\n  ai:  %s\n  tools used: %v\n", q, strings.TrimSpace(res.Text), used)
+	}
+	tools := func() string {
+		var names []string
+		for _, t := range eng.Root().Snapshot().Tools {
+			names = append(names, t.Name)
+		}
+		return fmt.Sprint(names)
+	}
+
+	fmt.Println("1) No tools yet:", tools())
+	ask("What is the exact current time? If you have no tool for it, say so.")
+
+	fmt.Println("\n2) Load the built-in tool_time plugin at runtime")
+	check(eng.Load(eipagent.PluginSpec{Use: "tool_time"}))
+	fmt.Println("   tools:", tools())
+	ask("What is the exact current time? Use your tool.")
+
+	fmt.Println("\n3) Write a new plugin file and load it")
+	path := filepath.Join(dir, "office.go")
+	check(os.WriteFile(path, []byte(strings.Replace(officePlugin, "HOURS", "Mon-Fri 9:00-17:00", 1)), 0o644))
+	check(eng.Load(eipagent.PluginSpec{Use: "office"}))
+	fmt.Println("   tools:", tools())
+	ask("When is the office open?")
+
+	fmt.Println("\n4) Edit the plugin's code and reload it (no restart)")
+	check(os.WriteFile(path, []byte(strings.Replace(officePlugin, "HOURS", "Mon-Sat 8:00-20:00 (new winter hours)", 1)), 0o644))
+	check(eng.Reload("office"))
+	ask("When is the office open?")
+
+	fmt.Println("\n5) A broken edit is refused; the running version stays")
+	check(os.WriteFile(path, []byte("package plugin\nfunc Apply( {"), 0o644))
+	if err := eng.Reload("office"); err != nil {
+		fmt.Println("   reload refused:", strings.SplitN(err.Error(), "\n", 2)[0])
+	}
+	fmt.Println("   tools:", tools())
+
+	fmt.Println("\n6) Unload both plugins")
+	check(eng.Unload("office"))
+	check(eng.Unload("tool_time"))
+	fmt.Println("   tools:", tools())
+	for _, st := range a.Status() {
+		fmt.Println("  ", st.String())
+	}
 }
 
 // ---- object: typed structured output ----

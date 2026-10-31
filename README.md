@@ -40,7 +40,7 @@ Every snippet below comes from [`examples/readme/main.go`](examples/readme/main.
 
 ```bash
 ollama pull lfm3
-go run ./examples/ollama -demo text      # also: stream, tools, object, thread, approve, shell, vision
+go run ./examples/ollama -demo text      # also: stream, tools, plugins, object, thread, approve, shell, vision
 ```
 
 The model string is just `ollama:<model>` (for example `ollama:qwen3.5:4b`). Set `OLLAMA_HOST` to use an Ollama running on another machine. See [`examples/ollama`](examples/ollama/main.go).
@@ -203,6 +203,8 @@ for _, s := range agent.Status() { fmt.Println(s.String()) }
 ```
 
 A run that is already in progress keeps the plugins it started with. If an update fails, the old version keeps running. See [Plugin lifecycle](#plugin-lifecycle).
+
+To see it live with a local model, run `go run ./examples/ollama -demo plugins`. The demo starts with no tools, loads `tool_time`, writes a brand-new plugin file and loads it, edits that file's code and reloads it, shows a broken edit being refused while the old version keeps working, and then unloads everything. The model is asked a question after each step.
 
 ### Subagents and handoffs
 
