@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"eipagent"
+	"eipagent/sdk"
 )
 
 var bg = context.Background()
@@ -292,5 +293,32 @@ func TestOpenAIStructuredAndErrors(t *testing.T) {
 	var pe *eipagent.ProviderError
 	if !errors.As(err, &pe) || pe.Status != 401 || pe.Retryable {
 		t.Fatalf("expected a non-retryable 401 ProviderError, got %v", err)
+	}
+}
+
+func TestRunLifecycleAlwaysCloses(t *testing.T) {
+	var log []string
+	var mu sync.Mutex
+	rec := func(s string) { mu.Lock(); log = append(log, s); mu.Unlock() }
+	spy := eipagent.Plugin{Name: "lifecycle_spy", Apply: func(ctx *eipagent.PluginContext) error {
+		ctx.OnAgentStart(func(c context.Context, st *sdk.RunState) error { rec("start"); return nil })
+		ctx.OnAgentEnd(func(c context.Context, st *sdk.RunState, res *sdk.RunResult) error { rec("end:" + res.FinishReason); return nil })
+		ctx.OnEvent(func(e sdk.Event) {
+			if e.Type == "error" || e.Type == "finish" {
+				rec(e.Type)
+			}
+		})
+		return nil
+	}}
+	failing := eipagent.Tool("boom", "b", func(ctx context.Context, in struct{}) (string, error) { return "", sdk.Fatal(errors.New("disk on fire")) })
+	a := mockAgent(t, []any{map[string]any{"text": "fine"}, map[string]any{"tool": "boom"}}, eipagent.WithCompiledPlugin(spy), eipagent.WithTools(failing))
+	if _, err := a.Generate(bg, "one"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Generate(bg, "two"); err == nil {
+		t.Fatal("fatal tool error should fail the run")
+	}
+	if got := strings.Join(log, ","); got != "start,end:stop,finish,start,error,end:error" {
+		t.Fatalf("lifecycle: %s", got)
 	}
 }

@@ -101,3 +101,16 @@ func TestWebhook(t *testing.T) {
 		t.Fatalf("prompt: %q", c)
 	}
 }
+
+// The README's examples are a real program; keep them working.
+func TestReadmeExamples(t *testing.T) {
+	out, err := exec.Command("go", "run", "./examples/readme").CombinedOutput()
+	if err != nil {
+		t.Fatalf("examples/readme: %v\n%s", err, out)
+	}
+	for _, want := range []string{"Bring an umbrella", "Refund done.", "[REDACTED_EMAIL]", "run end: error", "observer unloaded"} {
+		if !bytes.Contains(out, []byte(want)) {
+			t.Fatalf("examples/readme output lacks %q", want)
+		}
+	}
+}

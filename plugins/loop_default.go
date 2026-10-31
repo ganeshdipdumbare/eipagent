@@ -48,16 +48,33 @@ func resolveProvider(snap *sdk.Snapshot, model string) (*sdk.Provider, string, s
 	return p, prov, id, nil
 }
 
+// run always closes the lifecycle it opened: when agent/start succeeded,
+// agent/end runs exactly once, even if the run fails (FinishReason "error").
 func run(c context.Context, snap *sdk.Snapshot, st *sdk.RunState, defMax int, parallel bool) (*sdk.RunResult, error) {
 	if st.Emit == nil {
 		st.Emit = func(sdk.Event) {}
 	}
+	if err := snap.AgentStart(c, st); err != nil {
+		return nil, err
+	}
+	ended := false
+	res, err := steps(c, snap, st, defMax, parallel, &ended)
+	if err != nil {
+		e := sdk.Event{Type: "error", Text: err.Error()}
+		snap.Publish(e)
+		st.Emit(e)
+		if !ended {
+			snap.AgentEnd(c, st, &sdk.RunResult{FinishReason: "error", Messages: st.Messages})
+		}
+		return nil, err
+	}
+	return res, nil
+}
+
+func steps(c context.Context, snap *sdk.Snapshot, st *sdk.RunState, defMax int, parallel bool, ended *bool) (*sdk.RunResult, error) {
 	emit := func(e sdk.Event) {
 		snap.Publish(e)
 		st.Emit(e)
-	}
-	if err := snap.AgentStart(c, st); err != nil {
-		return nil, err
 	}
 	maxSteps := st.MaxSteps
 	if maxSteps <= 0 {
@@ -215,6 +232,7 @@ func run(c context.Context, snap *sdk.Snapshot, st *sdk.RunState, defMax int, pa
 		res.FinishReason = reason
 		res.Text = sdk.LastText(st.Messages)
 		res.Messages = st.Messages
+		*ended = true
 		if err := snap.AgentEnd(c, st, res); err != nil {
 			return nil, err
 		}
