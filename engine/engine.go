@@ -18,8 +18,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/traefik/yaegi/interp"
-
 	"eipagent/sdk"
 )
 
@@ -135,7 +133,24 @@ type source struct {
 	mod  time.Time
 }
 
+// validName accepts plugin names and sources: letters, digits, '_' and
+// '-', so a name can never point outside the plugin directories.
+func validName(s string) bool {
+	if s == "" || len(s) > 64 {
+		return false
+	}
+	for _, r := range s {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-') {
+			return false
+		}
+	}
+	return true
+}
+
 func (e *Engine) find(use string) (*source, error) {
+	if !validName(use) {
+		return nil, fmt.Errorf("plugin %q: invalid name (letters, digits, '_' and '-' only)", use)
+	}
 	for _, dir := range e.opts.Dirs {
 		path := filepath.Join(dir, use+".go")
 		if b, err := os.ReadFile(path); err == nil {
@@ -208,6 +223,9 @@ func parseMeta(name string, src []byte) (*meta, error) {
 
 func (e *Engine) compile(spec PluginSpec) (*record, error) {
 	name, use := spec.Name(), spec.Use
+	if !validName(name) {
+		return nil, fmt.Errorf("plugin %q: invalid name (letters, digits, '_' and '-' only)", name)
+	}
 	if !e.pol.allowed(use) {
 		return nil, fmt.Errorf("plugin %s: not allowed by policy", use)
 	}
@@ -252,7 +270,7 @@ func (e *Engine) compile(spec PluginSpec) (*record, error) {
 		}
 		return nil, err
 	}
-	i := interp.New(interp.Options{Env: pluginEnv(rec.perms)})
+	i := newInterp(pluginEnv(rec.perms))
 	if err := i.Use(buildSymbols(rec.perms, src.kind == "embedded")); err != nil {
 		return nil, err
 	}
@@ -315,10 +333,15 @@ func (e *Engine) loadLocked(spec PluginSpec, admin bool) error {
 	}
 	e.recs[name] = rec
 	e.reconcileLocked()
-	if rec.state == Failed && wasActive {
-		// Safe replacement: a version that fails to start never takes
-		// down the one that was running. Bring the old one back.
+	if rec.state != Active && wasActive {
+		// Safe replacement: a version that fails to start, or is left
+		// waiting on a missing dependency, never takes down the one that
+		// was running. Bring the old one back.
 		failed := rec.err
+		if failed == nil {
+			failed = fmt.Errorf("left %s: missing %v", rec.state, e.missing(rec))
+		}
+		e.disposeLocked(rec)
 		old.state, old.err = Pending, nil
 		e.recs[name] = old
 		e.reconcileLocked()
@@ -484,6 +507,7 @@ func (e *Engine) LoadProfile(p *Profile) []error {
 	// Policy-required plugins load first (audit sees everything after them)
 	// and replace any profile row with the same name.
 	specs := append([]PluginSpec{}, e.pol.Require...)
+	required := len(specs) // only these act with admin rights (may replace locked plugins)
 	for _, s := range p.Plugins {
 		dup := false
 		for _, req := range e.pol.Require {
@@ -495,11 +519,11 @@ func (e *Engine) LoadProfile(p *Profile) []error {
 			specs = append(specs, s)
 		}
 	}
-	for _, s := range specs {
+	for i, s := range specs {
 		if s.Disabled && !e.pol.locked(s.Name()) {
 			continue
 		}
-		if err := e.loadLocked(s, true); err != nil {
+		if err := e.loadLocked(s, i < required); err != nil {
 			errs = append(errs, err)
 		}
 	}

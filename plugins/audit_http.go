@@ -92,12 +92,15 @@ func Apply(ctx *sdk.Context) error {
 		sending.Lock() // one batch in flight, in order
 		defer sending.Unlock()
 		for {
+			// Take the batch out of the queue while it is in flight, so Send's
+			// overflow trimming can only drop records that aren't being sent.
 			mu.Lock()
 			n := len(queue)
 			if n > batchSize {
 				n = batchSize
 			}
-			batch := queue[:n]
+			batch := append([][]byte(nil), queue[:n]...)
+			queue = queue[n:]
 			mu.Unlock()
 			if n == 0 {
 				return
@@ -114,12 +117,18 @@ func Apply(ctx *sdk.Context) error {
 				time.Sleep(time.Duration(200*(try+1)) * time.Millisecond)
 			}
 			if err != nil {
+				// Put them back in front, in order; if the queue is now over
+				// max_queue, the oldest go (and are counted as dropped).
+				mu.Lock()
+				queue = append(batch, queue...)
+				if len(queue) > maxQueue {
+					dropped += len(queue) - maxQueue
+					queue = queue[len(queue)-maxQueue:]
+				}
+				mu.Unlock()
 				ctx.Logf("audit_http: %d records not delivered yet: %v", n, err)
-				return // keep them queued for the next flush
+				return
 			}
-			mu.Lock()
-			queue = queue[n:]
-			mu.Unlock()
 		}
 	}
 	ctx.Effect(func() func() {

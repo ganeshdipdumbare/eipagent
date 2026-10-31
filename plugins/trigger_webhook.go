@@ -32,8 +32,10 @@ import (
 //   - load: at most max_concurrent runs at once (default 4); more get 429.
 //
 // The payload is untrusted text from a third party: the default prompt
-// fences it off as data. Give webhook users (user:) only the tools and
-// roles they need.
+// fences it off as data. A custom prompt inserts {body} and {fields} as
+// they are, so fence them yourself ("...untrusted data between the
+// markers: <<<{body}>>>") and give webhook users (user:) only the tools
+// and roles they need.
 //
 // Config:
 //

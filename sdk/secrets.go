@@ -37,6 +37,9 @@ var (
 // unredactable in their secret.access audit record.
 const MinRedactLen = 4
 
+// maxRedactions bounds the registry (about 10 forms per secret value).
+const maxRedactions = 20000
+
 // AddRedaction registers a value that must never appear in logs,
 // traces or audit output, together with its common encodings (JSON
 // string escaping, URL query escaping, base64), so a secret that was
@@ -53,7 +56,8 @@ func AddRedaction(v string) bool {
 	}
 	forms = append(forms, url.QueryEscape(v), url.PathEscape(v),
 		base64.StdEncoding.EncodeToString([]byte(v)), base64.RawStdEncoding.EncodeToString([]byte(v)),
-		base64.URLEncoding.EncodeToString([]byte(v)), base64.RawURLEncoding.EncodeToString([]byte(v)))
+		base64.URLEncoding.EncodeToString([]byte(v)), base64.RawURLEncoding.EncodeToString([]byte(v)),
+		hex.EncodeToString([]byte(v)), strings.ToUpper(hex.EncodeToString([]byte(v))))
 	redactMu.Lock()
 	defer redactMu.Unlock()
 next:
@@ -65,7 +69,12 @@ next:
 		}
 		redactVals = append(redactVals, f)
 	}
-	sort.Slice(redactVals, func(i, j int) bool { return len(redactVals[i]) > len(redactVals[j]) })
+	if len(redactVals) > maxRedactions {
+		// Bounded: a long-running agent whose secrets keep rotating would
+		// otherwise grow this forever. The oldest values go first.
+		redactVals = redactVals[len(redactVals)-maxRedactions:]
+	}
+	sort.SliceStable(redactVals, func(i, j int) bool { return len(redactVals[i]) > len(redactVals[j]) })
 	return true
 }
 

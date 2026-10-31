@@ -4,7 +4,8 @@
   "allow": [],
   "deny": ["creator", "sandbox_local"],
   "grants": {
-    "*": ["net"],
+    "*": [],
+    "llm_anthropic": ["net"], "llm_openai": ["net"], "tool_http_fetch": ["net"],
     "audit_jsonl": ["fs:read", "fs:write"],
     "secrets_env": ["env", "env:secrets"],
     "sandbox_docker": ["exec"],
@@ -22,7 +23,7 @@
     "mode": "workspace-write",
     "require_sandbox": true,
     "allow_models": ["anthropic:*", "openai:gpt-4.1*"],
-    "deny_tools": ["*__delete_*"],
+    "deny_tools": ["*delete*", "*remove*", "*drop*", "*destroy*"],
     "max_tokens_run": 400000,
     "roles": { "analyst": { "mode": "read-only" } }
   }

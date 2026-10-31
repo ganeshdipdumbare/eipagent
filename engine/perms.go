@@ -42,16 +42,25 @@ var pure = []string{
 	"encoding/binary", "encoding/csv", "encoding/hex", "encoding/json", "encoding/pem",
 	"encoding/xml", "errors", "fmt", "hash", "hash/adler32", "hash/crc32", "hash/fnv", "html",
 	"html/template", "io", "log", "log/slog", "maps", "math", "math/big", "math/bits", "math/rand",
-	"math/rand/v2", "mime", "mime/multipart", "net/url", "path", "regexp", "slices", "sort",
+	"math/rand/v2", "mime", "net/url", "path", "regexp", "slices", "sort",
 	"strconv", "strings", "sync", "sync/atomic", "text/tabwriter", "text/template", "time",
-	"unicode", "unicode/utf16", "unicode/utf8", "net/mail", "net/textproto", "mime/quotedprintable",
+	"unicode", "unicode/utf16", "unicode/utf8", "net/mail", "mime/quotedprintable",
+	"io/ioutil", // per symbol: see symPerms
 }
 
 var permPkgs = map[string][]string{
-	PermNet:    {"net", "net/http", "net/http/httputil", "net/http/cookiejar", "net/http/httptrace", "net/netip", "net/smtp", "crypto/tls", "crypto/x509", "crypto/x509/pkix"},
-	PermExec:   {"os/exec", "os/signal"},
-	PermFSRead: {"io/fs", "path/filepath", "io/ioutil", "archive/tar", "archive/zip", "compress/gzip", "compress/flate", "compress/zlib"},
-	PermDB:     {"database/sql", "database/sql/driver"},
+	// net/textproto can dial (textproto.Dial), so it needs net too.
+	PermNet:     {"net", "net/http", "net/http/httputil", "net/http/cookiejar", "net/http/httptrace", "net/netip", "net/smtp", "net/textproto", "crypto/tls", "crypto/x509", "crypto/x509/pkix"},
+	PermExec:    {"os/exec", "os/signal"},
+	PermFSRead:  {"io/fs", "path/filepath", "archive/tar", "archive/zip", "compress/gzip", "compress/flate", "compress/zlib"},
+	PermFSWrite: {"mime/multipart"}, // Reader.ReadForm spills large parts to temp files
+	PermDB:      {"database/sql", "database/sql/driver"},
+}
+
+// symPerms gates single symbols of otherwise importable packages: the
+// symbol is only in a plugin's table when it holds the permission.
+var symPerms = map[string]map[string]string{
+	"io/ioutil/ioutil": {"ReadFile": PermFSRead, "ReadDir": PermFSRead, "WriteFile": PermFSWrite, "TempFile": PermFSWrite, "TempDir": PermFSWrite},
 }
 
 // os is split per symbol.
@@ -73,7 +82,9 @@ func osAlwaysOK(name string) bool {
 		return true
 	}
 	switch name {
-	case "File", "FileInfo", "FileMode", "DirEntry", "LinkError", "PathError", "SyscallError", "DevNull", "Stdin", "Stdout", "Stderr", "NewFile", "Args":
+	// Not NewFile (it wraps any open descriptor of the agent process) and
+	// not Stdin (in `eip serve --stdio` it carries the RPC protocol).
+	case "File", "FileInfo", "FileMode", "DirEntry", "LinkError", "PathError", "SyscallError", "DevNull", "Stdout", "Stderr", "Args":
 		return true
 	}
 	return false
@@ -135,9 +146,19 @@ func buildSymbols(perms []string, builtin bool) map[string]map[string]reflect.Va
 		if path == "os" {
 			continue
 		}
-		if allowed[path] {
-			out[key] = syms
+		if !allowed[path] {
+			continue
 		}
+		if gate, ok := symPerms[key]; ok {
+			cp := map[string]reflect.Value{}
+			for name, v := range syms {
+				if need, gated := gate[name]; !gated || has[need] {
+					cp[name] = v
+				}
+			}
+			syms = cp
+		}
+		out[key] = syms
 	}
 	// os: filtered per symbol.
 	osAllowed := map[string]bool{}

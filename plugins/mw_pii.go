@@ -26,6 +26,10 @@ import (
 //	input:      apply to messages sent to the model (default true)
 //	output:     apply to model replies (default false)
 //	tool_results: apply to tool results (default true)
+//	system:     also apply to the system prompt (default false: instructions
+//	            often name a support address on purpose)
+//	(input covers user, assistant and tool messages in the history,
+//	including the string arguments of earlier tool calls)
 //	patterns:   {name: regex} extra detectors
 var Inject = []string{"?secrets"} // only for hash_key
 
@@ -59,6 +63,7 @@ func Apply(ctx *sdk.Context) error {
 	onIn := ctx.ConfigBool("input", true)
 	onOut := ctx.ConfigBool("output", false)
 	onTools := ctx.ConfigBool("tool_results", true)
+	onSystem := ctx.ConfigBool("system", false)
 
 	builtin := map[string]string{
 		"email":       `[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`,
@@ -142,17 +147,45 @@ func Apply(ctx *sdk.Context) error {
 		if onIn {
 			msgs := make([]sdk.Message, len(req.Messages))
 			for i, m := range req.Messages {
-				if m.Role == sdk.RoleUser || (m.Role == sdk.RoleTool && onTools) {
+				if m.Role == sdk.RoleUser || m.Role == sdk.RoleAssistant || (m.Role == sdk.RoleTool && onTools) {
 					clean, found := scrub(m.Content)
 					if len(found) > 0 && strategy == "block" {
 						return nil, fmt.Errorf("blocked: message contains %s", strings.Join(found, ", "))
 					}
 					m.Content = clean
 				}
+				if len(m.ToolCalls) > 0 {
+					// Earlier tool calls in the history carry arguments too.
+					calls := make([]sdk.ToolCall, len(m.ToolCalls))
+					for j, tc := range m.ToolCalls {
+						args := map[string]any{}
+						for k, v := range tc.Args {
+							if sv, ok := v.(string); ok {
+								clean, found := scrub(sv)
+								if len(found) > 0 && strategy == "block" {
+									return nil, fmt.Errorf("blocked: tool call arguments contain %s", strings.Join(found, ", "))
+								}
+								args[k] = clean
+							} else {
+								args[k] = v
+							}
+						}
+						tc.Args = args
+						calls[j] = tc
+					}
+					m.ToolCalls = calls
+				}
 				msgs[i] = m
 			}
 			r2 := *req
 			r2.Messages = msgs
+			if onSystem {
+				clean, found := scrub(r2.System)
+				if len(found) > 0 && strategy == "block" {
+					return nil, fmt.Errorf("blocked: system prompt contains %s", strings.Join(found, ", "))
+				}
+				r2.System = clean
+			}
 			req = &r2
 		}
 		resp, err := next(c, req)

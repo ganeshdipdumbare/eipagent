@@ -9,7 +9,11 @@ The goal is secure defaults that stay simple. `eipagent.New()` with no options u
    - Plugins installed through a plugin store (`eip plugin install`, `pluginpkg.Store`) are signed ed25519 packages verified against the store's trusted keys, held until a person approves them, re-verified at enable time (a package changed at rest is quarantined), and pinned when enabled. A version that fails to start never replaces the running one. See [PLUGINS.md](PLUGINS.md#ship-a-plugin-manifest-lint-package-install).
    - Enabling a version re-verifies everything checked at install, the signature included, so a package swapped in the store directory (even with `state.json` edited to match), or one whose signing key was removed from `trusted_keys`, is quarantined instead of loaded.
    - `fs:write` alone can't read files (`os.OpenFile` is write-only without `fs:read`). `env` hides credential-looking variables; only secret providers declare `env:secrets`. Interpreted plugins can't call `sdk.AddRedaction`, and only built-in ones can call `sdk.Redact*` (otherwise it would answer "is this string a secret?").
-   - `eip plugin validate` lints a plugin before it ships: forbidden imports, permissions that don't match what the code uses, services not declared in `Inject`, malformed or undeclared secret references, and a compile under the declared permissions.
+   - The permission tables also gate `net/textproto` (it can dial) behind `net`, `io/ioutil`'s read and write functions behind `fs:read` / `fs:write`, and `mime/multipart` behind `fs:write`; `os.NewFile` and `os.Stdin` are never available.
+   - Plugin names are restricted to letters, digits, `_` and `-`, so a name can't point outside the plugin directories. Only policy-required rows may replace a locked plugin; a profile row can't.
+   - A plugin can't take over another plugin's tool or skill name, and sandboxes handed to plugins have no host-path `Upload` / `Download`.
+   - An update that fails to start, or is left waiting on a missing dependency, never replaces the running version.
+   - `eip plugin validate` compiles a plugin without executing it, and lints it before it ships: forbidden imports, permissions that don't match what the code uses, services not declared in `Inject`, malformed or undeclared secret references, and a compile under the declared permissions.
    - Each plugin is interpreted with only the stdlib packages its permissions allow (`net`, `exec`, `fs:read`, `fs:write`, `env`, `db`).
    - The admin policy can allow or deny plugins and narrow grants.
 2. **Admin policy (`policy.json`).**
@@ -18,7 +22,7 @@ The goal is secure defaults that stay simple. `eipagent.New()` with no options u
    - `require` adds mandatory plugins, such as audit, policy and secrets.
 3. **`policy` plugin.** Enforces the rules on every model and tool call: approval mode (`read-only`, `workspace-write`, `full-access`), tool allow/deny globs, model allowlist, sandbox requirement, token budgets and per-role overrides.
 4. **Secrets.**
-   - Config references `secret://NAME`, never raw values. Providers: `secrets_env` (allow-listed env vars) and `secrets_vault` (HashiCorp Vault KV v2, cached with a TTL so rotation is picked up, failing closed when Vault is unreachable). Any other store (KMS, a cloud secret manager) is a plugin that provides `sdk.Secrets`.
+   - Config references `secret://NAME`, never raw values. Providers: `secrets_env` (allow-listed env vars) and `secrets_vault` (HashiCorp Vault KV v2, cached with a TTL so rotation is picked up, failing closed when Vault is unreachable; it refuses to start without `grants` or `allow`, and secret names can't contain path segments). Any other store (KMS, a cloud secret manager) is a plugin that provides `sdk.Secrets`.
    - `grants` limits each plugin to its own secrets. The caller identity is bound by the core: a plugin that looks up the `secrets` service gets a copy tied to its own name, so it can't ask as another plugin.
    - Every resolved value is registered for redaction. `ctx.Logf`, `audit_jsonl`, `audit_http`, `trace_file` and `trace_otlp` replace it with `[REDACTED]` wherever it appears: tool arguments, results, model output, errors.
    - Every lookup is audited as `secret.access` (plugin, secret name, granted or denied, never the value). Denials are always recorded. Granted reads are recorded once per plugin and secret every 10 minutes, and again right away when the value changes (a rotation), so plugins that resolve secrets per call don't flood the log.
@@ -50,10 +54,10 @@ The goal is secure defaults that stay simple. `eipagent.New()` with no options u
 - Docker can't filter egress per host. Use `network: none`, or a provider that supports allowlists.
 - The audit chain detects tampering but doesn't prevent deleting the whole file. Ship it off-host with `audit_http`.
 - Redaction applies to logs, traces and audit records (the sinks). It does not hide a secret from the model or from your app: if a tool returns a key in its result, the model sees it.
-- Redaction matches the values resolved through the `secrets` service and their JSON, URL and base64 encodings. Values shorter than 4 bytes can't be redacted; their `secret.access` record says so. Other transformations (splitting, custom encodings) aren't caught.
+- Redaction matches the values resolved through the `secrets` service and their JSON, URL, base64 and hex encodings. Values shorter than 4 bytes can't be redacted; their `secret.access` record says so. Other transformations (splitting, custom encodings) aren't caught.
 - The audit chain without a key detects edits but not a full rewrite by someone with write access; use `key` or `audit_http`.
 - `sandbox_local` with a fixed `workdir` shares one folder between all threads (it logs a warning).
-- The full-stack demo has no login: visitors pick Sam or Ada, so anyone can approve its (fake) refunds. It limits body size, requests per client and runs in flight. A real app takes identity from its session. A secret that a plugin reads some other way, or transforms (base64, splits), is not caught.
+- The full-stack demo has no login: visitors pick Sam or Ada, so anyone can approve its (fake) refunds. It limits body size, requests per client (keyed on the address its own proxy saw, not on client-supplied headers) and runs in flight. A real app takes identity from its session. A secret that a plugin reads some other way, or transforms (base64, splits), is not caught.
 - Records written before `audit_http` loaded are not re-sent; the receiver sees the chain start at the first record it gets.
 
 Report vulnerabilities privately to the maintainers.

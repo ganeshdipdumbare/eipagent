@@ -73,6 +73,33 @@ type Plugin struct {
 	Versions map[string]*Version `json:"versions"`
 }
 
+// clone is a deep copy: callers can't change the store's state through
+// what Get / List return (only Approve, Enable ... change it).
+func (p *Plugin) clone() *Plugin {
+	cp := *p
+	cp.Versions = make(map[string]*Version, len(p.Versions))
+	for k, v := range p.Versions {
+		vc := *v
+		if v.Manifest != nil {
+			m := *v.Manifest
+			m.Permissions = append([]string(nil), v.Manifest.Permissions...)
+			m.Inject = append([]string(nil), v.Manifest.Inject...)
+			m.Provides = append([]string(nil), v.Manifest.Provides...)
+			m.Secrets = append([]string(nil), v.Manifest.Secrets...)
+			m.Tools = append([]string(nil), v.Manifest.Tools...)
+			if v.Manifest.Files != nil {
+				m.Files = make(map[string]string, len(v.Manifest.Files))
+				for f, h := range v.Manifest.Files {
+					m.Files[f] = h
+				}
+			}
+			vc.Manifest = &m
+		}
+		cp.Versions[k] = &vc
+	}
+	return &cp
+}
+
 // StoreOptions configure what the store accepts.
 type StoreOptions struct {
 	Verify VerifyOptions
@@ -173,7 +200,7 @@ func (s *Store) List() []Plugin {
 	defer s.mu.Unlock()
 	var out []Plugin
 	for _, p := range s.st.Plugins {
-		out = append(out, *p)
+		out = append(out, *p.clone())
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
@@ -187,8 +214,7 @@ func (s *Store) Get(name string) (*Plugin, error) {
 	if !ok {
 		return nil, fmt.Errorf("%s: %w", name, ErrNotFound)
 	}
-	cp := *p
-	return &cp, nil
+	return p.clone(), nil
 }
 
 // Install verifies a package and stores it. It does not run anything:

@@ -32,8 +32,11 @@ func newLimiter(perMin, maxRuns int, proxied bool) *limiter {
 
 func (l *limiter) client(r *http.Request) string {
 	if l.proxied {
+		// The rightmost entry is the address our own proxy saw connect;
+		// entries to its left come from the client and can be made up.
 		if f := r.Header.Get("X-Forwarded-For"); f != "" {
-			return strings.TrimSpace(strings.Split(f, ",")[0])
+			parts := strings.Split(f, ",")
+			return strings.TrimSpace(parts[len(parts)-1])
 		}
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)

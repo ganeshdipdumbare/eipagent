@@ -22,8 +22,9 @@ func main() {
 	limit := flag.Float64("refund-limit", 50, "refunds above this need a supervisor")
 	rate := flag.Int("rate", 20, "agent runs per client per minute")
 	maxRuns := flag.Int("max-runs", 8, "agent runs in flight at once")
-	// Behind a proxy (Render sets RENDER=true) the client address is in
-	// X-Forwarded-For; trust it only behind a proxy that sets it.
+	// Behind a proxy (Render sets RENDER=true) the connecting address is
+	// the last X-Forwarded-For entry, which the proxy appends. Visitors who
+	// come through another proxy (the docs site's rewrite) share its address.
 	proxied := flag.Bool("trust-proxy", os.Getenv("RENDER") != "", "rate-limit by X-Forwarded-For")
 	flag.Parse()
 	if port := os.Getenv("PORT"); port != "" { // set by hosts such as Fly.io

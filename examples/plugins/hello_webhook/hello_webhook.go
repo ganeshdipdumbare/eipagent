@@ -91,7 +91,11 @@ func Apply(ctx *sdk.Context) error {
 			http.Error(w, "too many runs in progress", 429)
 			return
 		}
-		res, err := agent.Run(r.Context(), "", "webhook:hello_webhook", prompt+string(body))
+		// The run outlives the HTTP request: a sender that hangs up early
+		// doesn't abort it halfway through its tool calls.
+		runCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 10*time.Minute)
+		defer cancel()
+		res, err := agent.Run(runCtx, "", "webhook:hello_webhook", prompt+string(body))
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return

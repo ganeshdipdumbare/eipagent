@@ -46,7 +46,12 @@ Well-known services: `loop`, `llm/<name>`, `checkpointer`, `store`, `secrets`, `
 
 The engine parses each plugin's imports before running it. An import the plugin's granted permissions don't cover is refused with a clear error, and `unsafe`, `syscall`, `os.Exit`, `os.Setenv` and similar are never available. The admin policy's `grants` can only narrow what a plugin declares. This is defense in depth.
 
-- `fs:write` without `fs:read` can't read: `os.OpenFile` then only opens files for writing.
+- `fs:write` without `fs:read` can't read: `os.OpenFile` then only opens files for writing. In `io/ioutil`, `ReadFile`/`ReadDir` need `fs:read` and `WriteFile`/`TempFile`/`TempDir` need `fs:write`.
+- `net/textproto` needs `net` (it can dial), and `mime/multipart` needs `fs:write` (it spills uploads to temp files). `os.NewFile` and `os.Stdin` are never available.
+- `eip plugin validate` compiles a plugin without running any of it, top-level initializers included.
+- Plugin names may only use letters, digits, `_` and `-`.
+- A tool or skill name another plugin registered is refused (logged; the first one keeps it). A plugin can re-register its own.
+- Sandboxes a plugin gets from a `sandbox/<name>` service have no `Upload` / `Download` (those copy host paths); only the host application moves files across.
 - `env` shows the environment minus credential-looking variables (`*_API_KEY`, `*_TOKEN`, `*_SECRET`, `*PASSWORD*`, `*_DSN` ...). Only secret providers should declare `env:secrets`, which shows everything; other plugins get keys through `ctx.Secret` and per-plugin grants.
 - No interpreted plugin can call `sdk.AddRedaction`, and only built-in plugins can call `sdk.Redact` / `RedactMap` / `RedactValue`. Any redaction function also answers "is this string a secret?", so plugins from plugin directories and stores don't get one. Their `ctx.Logf` output is redacted for them. A custom audit or trace sink that needs redaction should be a compiled plugin (`eipagent.Plugin`).
 - Records a plugin submits through the `audit` service are stamped `writer: "plugin:<name>"` by the SDK. For untrusted plugin code, run the agent in a sandbox (`WithRunIn`).

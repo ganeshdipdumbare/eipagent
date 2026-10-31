@@ -416,3 +416,14 @@ func TestEnableRechecksSignature(t *testing.T) {
 		t.Fatal("tampered source reached the active dir")
 	}
 }
+
+func TestGetReturnsACopy(t *testing.T) {
+	st, _ := OpenStore(t.TempDir(), StoreOptions{})
+	_, err := st.Install(buildPkg(t, "1.0.0", goodSrc, ""), "a")
+	must(t, err)
+	p, _ := st.Get("greet")
+	p.Versions["1.0.0"].State = StateApproved // try to skip approval
+	if err := st.Enable("greet", "1.0.0"); !errors.Is(err, ErrNotApproved) {
+		t.Fatalf("state changed through a returned copy: %v", err)
+	}
+}

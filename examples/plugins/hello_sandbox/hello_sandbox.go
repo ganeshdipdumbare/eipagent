@@ -48,7 +48,7 @@ func api(ctx *sdk.Context, c context.Context, method, url, tokenRef string, in, 
 		return err
 	}
 	defer resp.Body.Close()
-	b, _ := io.ReadAll(resp.Body)
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("hello_sandbox: %s %s: HTTP %d", method, url, resp.StatusCode)
 	}

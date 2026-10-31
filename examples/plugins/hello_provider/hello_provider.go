@@ -60,7 +60,7 @@ func Apply(ctx *sdk.Context) error {
 				return nil, err
 			}
 			defer resp.Body.Close()
-			b, _ := io.ReadAll(resp.Body)
+			b, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<20)) // bounded: a broken upstream can't exhaust memory
 			if resp.StatusCode != 200 {
 				return nil, sdk.NewProviderError("hello_provider", resp.StatusCode, string(b))
 			}

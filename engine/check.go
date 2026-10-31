@@ -2,10 +2,12 @@ package engine
 
 import (
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"strings"
 
 	"github.com/traefik/yaegi/interp"
-
-	"eipagent/sdk"
 )
 
 // ImportPermission says which permission importing pkg needs: "" for
@@ -31,8 +33,10 @@ func OSPermissions(sym string) (perms []string, ok bool) {
 }
 
 // Check compiles a plugin source the way Load would for a plugin from a
-// plugin directory or store (declared permissions only, nothing run) and
-// reports the first problem.
+// plugin directory or store (declared permissions only) and reports the
+// first problem. Nothing in the plugin runs: the source is compiled, not
+// executed, so even top-level var initializers don't run (validating a
+// malicious plugin must not execute it).
 func Check(name string, src []byte) error {
 	m, err := parseMeta(name, src)
 	if err != nil {
@@ -46,21 +50,56 @@ func Check(name string, src []byte) error {
 	if err := checkImports(name, m.imports, m.permissions); err != nil {
 		return err
 	}
-	i := interp.New(interp.Options{Env: []string{}})
+	if !hasApply(src) {
+		return fmt.Errorf("%s: missing func Apply(ctx *sdk.Context) error", name)
+	}
+	i := newInterp([]string{})
 	if err := i.Use(buildSymbols(m.permissions, false)); err != nil {
 		return err
 	}
-	if _, err := i.Eval(string(src)); err != nil {
+	if _, err := i.Compile(string(src)); err != nil {
 		return fmt.Errorf("compile %s: %w", name, err)
 	}
-	v, err := i.Eval("plugin.Apply")
-	if err != nil {
-		return fmt.Errorf("%s: %w", name, err)
-	}
-	if _, ok := v.Interface().(func(*sdk.Context) error); !ok {
-		return fmt.Errorf("%s: Apply must be func(*sdk.Context) error", name)
-	}
 	return nil
+}
+
+// hasApply reports whether src declares func Apply(<x> *sdk.Context) error.
+func hasApply(src []byte) bool {
+	f, err := parser.ParseFile(token.NewFileSet(), "", src, 0)
+	if err != nil {
+		return false
+	}
+	for _, d := range f.Decls {
+		fd, ok := d.(*ast.FuncDecl)
+		if !ok || fd.Recv != nil || fd.Name.Name != "Apply" {
+			continue
+		}
+		t := fd.Type
+		if t.Params == nil || len(t.Params.List) != 1 || len(t.Params.List[0].Names) > 1 || t.Results == nil || len(t.Results.List) != 1 {
+			return false
+		}
+		star, ok := t.Params.List[0].Type.(*ast.StarExpr)
+		if !ok {
+			return false
+		}
+		sel, ok := star.X.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "Context" {
+			return false
+		}
+		if x, ok := sel.X.(*ast.Ident); !ok || x.Name != "sdk" {
+			return false
+		}
+		res, ok := t.Results.List[0].Type.(*ast.Ident)
+		return ok && res.Name == "error"
+	}
+	return false
+}
+
+// newInterp is an interpreter for one plugin: env is what it may see,
+// and stdin is never the process's (in `eip serve --stdio` that carries
+// the RPC protocol).
+func newInterp(env []string) *interp.Interpreter {
+	return interp.New(interp.Options{Env: env, Stdin: strings.NewReader("")})
 }
 
 func knownPerm(p string) bool {

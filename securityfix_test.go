@@ -200,3 +200,29 @@ func TestPIIHashIsKeyed(t *testing.T) {
 		t.Fatalf("want %s in %q", want, seen)
 	}
 }
+
+func TestVaultNamesAndDefaults(t *testing.T) {
+	var paths []string
+	vault := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"data": map[string]any{"value": "v-123456"}}})
+	}))
+	defer vault.Close()
+	t.Setenv("VAULT_TOKEN", "t")
+	// No grants and no allow: refuse to start rather than share everything.
+	if _, err := eipagent.New(eipagent.WithModel("mock:x"), eipagent.WithLogger(func(string, string) {}),
+		eipagent.WithPlugin("secrets_vault", map[string]any{"address": vault.URL})); err == nil {
+		t.Fatal("secrets_vault started with read-all access")
+	}
+	var ctxRef *eipagent.PluginContext
+	user := eipagent.Plugin{Name: "user", Inject: []string{"secrets"}, Apply: func(ctx *eipagent.PluginContext) error { ctxRef = ctx; return nil }}
+	mockAgent(t, nil, eipagent.WithPlugin("secrets_vault", map[string]any{"address": vault.URL, "allow": []any{"*"}}), eipagent.WithCompiledPlugin(user))
+	if _, err := ctxRef.Secret("secret://../../sys/raw/x"); err == nil {
+		t.Fatal("traversing secret name accepted")
+	}
+	for _, p := range paths {
+		if strings.Contains(p, "..") || strings.Contains(p, "/sys/") {
+			t.Fatalf("request escaped the prefix: %s", p)
+		}
+	}
+}

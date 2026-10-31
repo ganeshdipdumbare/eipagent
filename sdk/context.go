@@ -65,6 +65,7 @@ type Context struct {
 	mu        sync.Mutex
 	children  []*Context
 	disposers []func()
+	disposed  bool // set by Dispose: later registrations are undone at once
 }
 
 func NewRoot() *Context { return &Context{Name: "root", reg: newRegistry(nil)} }
@@ -81,7 +82,11 @@ func (c *Context) Fork(name string) *Context {
 	}
 	child := &Context{Name: name, id: id, reg: c.reg, priority: c.priority, order: c.order, trusted: c.trusted}
 	c.mu.Lock()
-	c.children = append(c.children, child)
+	if c.disposed {
+		child.disposed = true
+	} else {
+		c.children = append(c.children, child)
+	}
 	c.mu.Unlock()
 	return child
 }
@@ -148,6 +153,13 @@ func (c *Context) Priority() int { return c.priority }
 
 func (c *Context) onDispose(f func()) {
 	c.mu.Lock()
+	if c.disposed {
+		// A goroutine registered something after the plugin was unloaded:
+		// undo it now instead of leaking it into the registry.
+		c.mu.Unlock()
+		f()
+		return
+	}
 	c.disposers = append(c.disposers, f)
 	c.mu.Unlock()
 }
@@ -157,6 +169,7 @@ func (c *Context) Dispose() {
 	c.mu.Lock()
 	kids, ds := c.children, c.disposers
 	c.children, c.disposers = nil, nil
+	c.disposed = true
 	c.mu.Unlock()
 	for i := len(kids) - 1; i >= 0; i-- {
 		kids[i].Dispose()
@@ -223,6 +236,9 @@ func (c *Context) Service(name string) any {
 	if a, ok := v.(*Audit); ok && name == "audit" && a != nil && c.id != "" {
 		return c.boundAudit(a)
 	}
+	if p, ok := v.(*SandboxProvider); ok && strings.HasPrefix(name, "sandbox/") && p != nil && c.id != "" {
+		return pluginSandboxes(p)
+	}
 	return v
 }
 
@@ -251,14 +267,21 @@ func (c *Context) Services(prefix string) []string {
 
 // ---- Tools and skills ----
 
+// AddTool registers a tool. A name another plugin already registered
+// is refused (logged, first one wins), so a later plugin can't take over
+// a tool such as issue_refund; a plugin may re-register its own names.
+// Tool.Plugin is always set to the registering plugin.
 func (c *Context) AddTool(t Tool) {
-	if t.Plugin == "" {
-		t.Plugin = c.PluginName()
-	}
+	t.Plugin = c.PluginName()
 	r := c.reg
 	r.mu.Lock()
+	if e, ok := r.tools[t.Name]; ok && e.v.Plugin != t.Plugin {
+		r.mu.Unlock()
+		c.Logf("tool %q is already registered by %s; not replacing it", t.Name, e.v.Plugin)
+		return
+	}
 	id := c.nextID()
-	r.tools[t.Name] = entry[Tool]{id, c.Name, t}
+	r.tools[t.Name] = entry[Tool]{id, c.PluginName(), t}
 	r.mu.Unlock()
 	c.onDispose(func() {
 		r.mu.Lock()
@@ -269,11 +292,17 @@ func (c *Context) AddTool(t Tool) {
 	})
 }
 
+// AddSkill registers a skill; like tools, another plugin's name is refused.
 func (c *Context) AddSkill(s Skill) {
 	r := c.reg
 	r.mu.Lock()
+	if e, ok := r.skills[s.Name]; ok && e.owner != c.PluginName() {
+		r.mu.Unlock()
+		c.Logf("skill %q is already registered by %s; not replacing it", s.Name, e.owner)
+		return
+	}
 	id := c.nextID()
-	r.skills[s.Name] = entry[Skill]{id, c.Name, s}
+	r.skills[s.Name] = entry[Skill]{id, c.PluginName(), s}
 	r.mu.Unlock()
 	c.onDispose(func() {
 		r.mu.Lock()

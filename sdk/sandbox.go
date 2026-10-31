@@ -90,3 +90,28 @@ type ExecWorld struct {
 	Name string
 	For  func(ctx context.Context) (*Sandbox, error)
 }
+
+// pluginSandboxes is what Service("sandbox/<name>") hands a plugin: the
+// same provider, but its sandboxes have no Upload / Download. Those copy
+// between a host path and the box, so a plugin without fs permissions
+// could use them to read or write anywhere on the host. Only the host
+// application (WithRunIn) moves files across that boundary; plugins use
+// ReadFile / WriteFile inside the box.
+func pluginSandboxes(p *SandboxProvider) *SandboxProvider {
+	strip := func(b *Sandbox, err error) (*Sandbox, error) {
+		if b == nil {
+			return nil, err
+		}
+		cp := *b
+		cp.Upload, cp.Download = nil, nil
+		return &cp, err
+	}
+	cp := *p
+	if p.Create != nil {
+		cp.Create = func(ctx context.Context, spec SandboxSpec) (*Sandbox, error) { return strip(p.Create(ctx, spec)) }
+	}
+	if p.Attach != nil {
+		cp.Attach = func(ctx context.Context, id string) (*Sandbox, error) { return strip(p.Attach(ctx, id)) }
+	}
+	return &cp
+}

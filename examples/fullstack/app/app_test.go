@@ -249,3 +249,15 @@ func TestPublicDemoLimits(t *testing.T) {
 		t.Fatalf("damaged log should show as broken, not crash: %+v", au.Verified)
 	}
 }
+
+func TestRateLimitKeyCantBeSpoofed(t *testing.T) {
+	l := newLimiter(1, 1, true)
+	key := func(xff string) string {
+		r := httptest.NewRequest("POST", "/", nil)
+		r.Header.Set("X-Forwarded-For", xff)
+		return l.client(r)
+	}
+	if key("1.1.1.1, 9.9.9.9") != key("2.2.2.2, 9.9.9.9") {
+		t.Fatal("a made-up leftmost X-Forwarded-For entry changed the rate-limit key")
+	}
+}

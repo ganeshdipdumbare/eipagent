@@ -204,7 +204,7 @@ func Apply(ctx *sdk.Context) error {
 				return nil, err
 			}
 			defer resp.Body.Close()
-			b, _ := io.ReadAll(resp.Body)
+			b, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<20)) // bounded: a broken upstream can't exhaust memory
 			if resp.StatusCode != 200 {
 				return nil, sdk.NewProviderError("{{.Name}}", resp.StatusCode, string(b))
 			}
@@ -423,7 +423,7 @@ func api(ctx *sdk.Context, c context.Context, method, url, tokenRef string, in, 
 		return err
 	}
 	defer resp.Body.Close()
-	b, _ := io.ReadAll(resp.Body)
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("{{.Name}}: %s %s: HTTP %d", method, url, resp.StatusCode)
 	}
@@ -574,7 +574,11 @@ func Apply(ctx *sdk.Context) error {
 			http.Error(w, "too many runs in progress", 429)
 			return
 		}
-		res, err := agent.Run(r.Context(), "", "webhook:{{.Name}}", prompt+string(body))
+		// The run outlives the HTTP request: a sender that hangs up early
+		// doesn't abort it halfway through its tool calls.
+		runCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 10*time.Minute)
+		defer cancel()
+		res, err := agent.Run(runCtx, "", "webhook:{{.Name}}", prompt+string(body))
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return

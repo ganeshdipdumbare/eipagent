@@ -35,10 +35,25 @@ import (
 //	mount:       KV v2 mount ("secret"), prefix ("eipagent"), field ("value")
 //	paths:       explicit NAME -> "path#field" map
 //	ttl_seconds: cache lifetime (300)
-//	allow:       glob patterns of names that may be read (default ["*"])
+//	allow:       glob patterns of names that may be read
+//	             (grants or allow is required; there is no read-all default)
 //	grants:      {plugin instance: [names]}: when set, a plugin may read only
 //	             the names granted to it (the caller is set by the core)
 var Permissions = []string{"net", "env", "env:secrets", "fs:read"}
+
+// validName keeps secret names to one path segment of safe characters,
+// so a name can't climb out of the configured prefix ("../other").
+func validName(n string) bool {
+	if n == "" || len(n) > 128 || n == "." || n == ".." {
+		return false
+	}
+	for _, r := range n {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-' || r == '.') {
+			return false
+		}
+	}
+	return true
+}
 
 func Apply(ctx *sdk.Context) error {
 	addr := strings.TrimRight(ctx.ConfigString("address", os.Getenv("VAULT_ADDR")), "/")
@@ -54,10 +69,14 @@ func Apply(ctx *sdk.Context) error {
 	paths := ctx.ConfigMap("paths")
 	ttl := time.Duration(ctx.ConfigInt("ttl_seconds", 300)) * time.Second
 	allow := ctx.ConfigStrings("allow")
-	if len(allow) == 0 {
-		allow = []string{"*"}
-	}
 	grants := ctx.ConfigMap("grants")
+	if len(allow) == 0 && grants == nil {
+		// Never default to "every plugin may read everything in the mount".
+		return fmt.Errorf("secrets_vault: set grants (per plugin) or allow (name patterns)")
+	}
+	if len(allow) == 0 {
+		allow = []string{"*"} // grants decide
+	}
 	client := &http.Client{Timeout: 10 * time.Second}
 
 	token := func() (string, error) {
@@ -129,6 +148,9 @@ func Apply(ctx *sdk.Context) error {
 	exp := map[string]time.Time{}
 	return ctx.Provide("secrets", &sdk.Secrets{
 		Get: func(c context.Context, caller, name string) (string, error) {
+			if !validName(name) {
+				return "", fmt.Errorf("invalid secret name %q", name)
+			}
 			if grants != nil {
 				granted := false
 				list, _ := grants[caller].([]any)

@@ -71,7 +71,12 @@ func Apply(ctx *sdk.Context) error {
 		Attach: func(c context.Context, id string) (*sdk.Sandbox, error) {
 			dir := fixed
 			if id != "local" {
-				dir = filepath.Join(root, filepath.Base(id))
+				// ids come back from saved threads: only names this plugin
+				// makes ("local-<hex>"), never "..", separators or absolute paths.
+				if !validBoxID(id) {
+					return nil, fmt.Errorf("sandbox %s: invalid id", id)
+				}
+				dir = filepath.Join(root, id)
 			}
 			if st, err := os.Stat(dir); err != nil || !st.IsDir() {
 				return nil, fmt.Errorf("sandbox %s not found", id)
@@ -79,6 +84,18 @@ func Apply(ctx *sdk.Context) error {
 			return open(id, dir), nil
 		},
 	})
+}
+
+func validBoxID(id string) bool {
+	if !strings.HasPrefix(id, "local-") || len(id) > 80 {
+		return false
+	}
+	for _, r := range id[len("local-"):] {
+		if !(r >= 'a' && r <= 'f' || r >= '0' && r <= '9') {
+			return false
+		}
+	}
+	return len(id) > len("local-")
 }
 
 func box(id, dir string, baseEnv []string) *sdk.Sandbox {
