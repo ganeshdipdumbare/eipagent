@@ -9,9 +9,9 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"eipagent/engine"
-	"eipagent/rpc"
-	"eipagent/sdk"
+	"github.com/ganeshdipdumbare/eipagent/engine"
+	"github.com/ganeshdipdumbare/eipagent/rpc"
+	"github.com/ganeshdipdumbare/eipagent/sdk"
 )
 
 // Serve runs an agent that is driven over JSON-RPC on r/w — this is

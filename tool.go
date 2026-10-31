@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"eipagent/sdk"
+	"github.com/ganeshdipdumbare/eipagent/sdk"
 )
 
 // Tool defines a tool from a typed Go function. The argument schema is

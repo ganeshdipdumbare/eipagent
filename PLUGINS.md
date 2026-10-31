@@ -81,7 +81,7 @@ This writes `weather/weather.go`, `weather/plugin.json` and a README. The same t
   "provides": [],
   "secrets": ["WEATHER_API_KEY"],
   "tools": ["weather"],
-  "eipagent": ">=0.2.0, <1.0.0"
+  "eipagent": ">=0.3.0, <1.0.0"
 }
 ```
 

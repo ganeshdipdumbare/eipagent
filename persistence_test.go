@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"eipagent"
-	_ "eipagent/drivers/postgres"
+	"github.com/ganeshdipdumbare/eipagent"
+	_ "github.com/ganeshdipdumbare/eipagent/drivers/postgres"
 )
 
 // persistenceSuite checks durable threads with any checkpointer/store setup.

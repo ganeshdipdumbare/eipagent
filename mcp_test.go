@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"eipagent"
-	"eipagent/internal/mcptest"
+	"github.com/ganeshdipdumbare/eipagent"
+	"github.com/ganeshdipdumbare/eipagent/internal/mcptest"
 )
 
 func mcpScript() []any {

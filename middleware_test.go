@@ -7,8 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"eipagent"
-	"eipagent/sdk"
+	"github.com/ganeshdipdumbare/eipagent"
+	"github.com/ganeshdipdumbare/eipagent/sdk"
 )
 
 // flaky is a compiled provider that fails n times with the given status.

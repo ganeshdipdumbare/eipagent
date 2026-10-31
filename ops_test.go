@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"eipagent"
+	"github.com/ganeshdipdumbare/eipagent"
 )
 
 func TestTraceAndViewer(t *testing.T) {

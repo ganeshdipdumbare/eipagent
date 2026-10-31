@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"eipagent"
+	"github.com/ganeshdipdumbare/eipagent"
 )
 
 func TestRunInSandbox(t *testing.T) {

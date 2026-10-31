@@ -11,8 +11,8 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"eipagent/engine"
-	"eipagent/pluginpkg"
+	"github.com/ganeshdipdumbare/eipagent/engine"
+	"github.com/ganeshdipdumbare/eipagent/pluginpkg"
 )
 
 const pluginUsage = `usage: eip plugin <command> [flags]

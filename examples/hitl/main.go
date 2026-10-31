@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"log"
 
-	"eipagent"
+	"github.com/ganeshdipdumbare/eipagent"
 )
 
 func main() {

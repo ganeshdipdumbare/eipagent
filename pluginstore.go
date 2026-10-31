@@ -6,10 +6,10 @@ import (
 	"strings"
 	"sync"
 
-	"eipagent/engine"
-	"eipagent/pluginpkg"
-	"eipagent/plugins"
-	"eipagent/sdk"
+	"github.com/ganeshdipdumbare/eipagent/engine"
+	"github.com/ganeshdipdumbare/eipagent/pluginpkg"
+	"github.com/ganeshdipdumbare/eipagent/plugins"
+	"github.com/ganeshdipdumbare/eipagent/sdk"
 )
 
 // WithPluginStore loads the plugins enabled in an installed-plugin store

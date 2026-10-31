@@ -1,6 +1,6 @@
 package eipagent
 
-import "eipagent/sdk"
+import "github.com/ganeshdipdumbare/eipagent/sdk"
 
 // JSON shapes exchanged between a host and an agent inside a sandbox.
 

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"eipagent/sdk"
+	"github.com/ganeshdipdumbare/eipagent/sdk"
 )
 
 // Thread is a persistent conversation stored by the "checkpointer"

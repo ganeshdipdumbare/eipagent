@@ -18,7 +18,7 @@ import (
 	"sync"
 	"time"
 
-	"eipagent/sdk"
+	"github.com/ganeshdipdumbare/eipagent/sdk"
 )
 
 // Plugin lifecycle (Cordis):

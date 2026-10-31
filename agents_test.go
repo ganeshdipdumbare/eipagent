@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"eipagent"
+	"github.com/ganeshdipdumbare/eipagent"
 )
 
 func TestSubagentAsTool(t *testing.T) {

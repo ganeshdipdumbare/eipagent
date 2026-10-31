@@ -22,7 +22,7 @@ import (
 	"strings"
 	"sync"
 
-	"eipagent"
+	"github.com/ganeshdipdumbare/eipagent"
 )
 
 func main() {

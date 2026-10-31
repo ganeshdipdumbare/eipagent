@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"eipagent"
+	"github.com/ganeshdipdumbare/eipagent"
 )
 
 func fakeServer(t *testing.T, check func(r *http.Request, body map[string]any), reply func(n int, body map[string]any) (sse []string, js string)) *httptest.Server {

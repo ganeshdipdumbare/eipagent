@@ -14,7 +14,7 @@ import (
 	"log"
 	"os"
 
-	"eipagent"
+	"github.com/ganeshdipdumbare/eipagent"
 )
 
 func main() {

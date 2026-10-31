@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"eipagent"
+	"github.com/ganeshdipdumbare/eipagent"
 )
 
 func TestExecSandboxShellAndFiles(t *testing.T) {

@@ -10,7 +10,7 @@ import (
 
 	"github.com/traefik/yaegi/stdlib"
 
-	"eipagent/engine/symbols"
+	"github.com/ganeshdipdumbare/eipagent/engine/symbols"
 )
 
 // Permissions a plugin can declare with `var Permissions = []string{...}`.
@@ -104,11 +104,19 @@ func importPerm(pkg string) string {
 			}
 		}
 	}
-	if pkg == "os" || pkg == "eipagent/sdk" {
+	if pkg == "os" || pkg == SDKImport || pkg == sdkModulePath {
 		return ""
 	}
 	return "-"
 }
+
+// Plugins import the SDK as "eipagent/sdk" (SDKImport), a short alias
+// that stays the same whatever the Go module path is, so plugin files
+// never change when the module moves. The full path works too.
+const (
+	SDKImport     = "eipagent/sdk"
+	sdkModulePath = "github.com/ganeshdipdumbare/eipagent/sdk"
+)
 
 // builtinOnly are sdk symbols only built-in (embedded) plugins get.
 // AddRedaction would let a plugin blank out words in everyone's audit
@@ -192,7 +200,7 @@ func buildSymbols(perms []string, builtin bool) map[string]map[string]reflect.Va
 		}
 	}
 	for k, v := range symbols.Symbols {
-		if strings.HasPrefix(k, "eipagent/sdk/") {
+		if strings.HasPrefix(k, sdkModulePath+"/") {
 			// No plugin may add redaction rules; only built-in ones may
 			// redact (see builtinOnly).
 			cp := make(map[string]reflect.Value, len(v))
@@ -204,6 +212,9 @@ func buildSymbols(perms []string, builtin bool) map[string]map[string]reflect.Va
 			v = cp
 		}
 		out[k] = v
+		if strings.HasPrefix(k, sdkModulePath+"/") {
+			out[SDKImport+"/sdk"] = v // the alias plugins import
+		}
 	}
 	return out
 }

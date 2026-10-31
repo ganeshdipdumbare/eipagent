@@ -12,9 +12,9 @@ import (
 	"sync"
 	"time"
 
-	"eipagent/engine"
-	"eipagent/rpc"
-	"eipagent/sdk"
+	"github.com/ganeshdipdumbare/eipagent/engine"
+	"github.com/ganeshdipdumbare/eipagent/rpc"
+	"github.com/ganeshdipdumbare/eipagent/sdk"
 )
 
 // RunIn runs the whole agent inside a sandbox. The host keeps the model

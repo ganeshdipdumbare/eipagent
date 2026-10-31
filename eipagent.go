@@ -19,9 +19,9 @@ import (
 	"strings"
 	"sync"
 
-	"eipagent/engine"
-	"eipagent/plugins"
-	"eipagent/sdk"
+	"github.com/ganeshdipdumbare/eipagent/engine"
+	"github.com/ganeshdipdumbare/eipagent/plugins"
+	"github.com/ganeshdipdumbare/eipagent/sdk"
 )
 
 // Re-exported core types so most users only import eipagent.

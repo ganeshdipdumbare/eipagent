@@ -21,7 +21,7 @@ import (
 	"log"
 	"strings"
 
-	"eipagent/pluginpkg"
+	"github.com/ganeshdipdumbare/eipagent/pluginpkg"
 )
 
 const buggy = `//go:build ignore

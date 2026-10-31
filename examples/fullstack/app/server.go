@@ -15,9 +15,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"eipagent"
-	"eipagent/audit"
-	"eipagent/sdk"
+	"github.com/ganeshdipdumbare/eipagent"
+	"github.com/ganeshdipdumbare/eipagent/audit"
+	"github.com/ganeshdipdumbare/eipagent/sdk"
 )
 
 //go:embed ui

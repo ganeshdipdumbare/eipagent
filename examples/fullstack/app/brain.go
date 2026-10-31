@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"eipagent"
-	"eipagent/sdk"
+	"github.com/ganeshdipdumbare/eipagent"
+	"github.com/ganeshdipdumbare/eipagent/sdk"
 )
 
 // DemoModel is a deterministic stand-in for an LLM, provided as

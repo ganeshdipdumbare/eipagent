@@ -4,7 +4,7 @@ import (
 	"context"
 	"iter"
 
-	"eipagent/sdk"
+	"github.com/ganeshdipdumbare/eipagent/sdk"
 )
 
 // Stream is a run in progress. Range over Events or Text, then call

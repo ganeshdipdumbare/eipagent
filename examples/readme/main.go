@@ -11,8 +11,8 @@ import (
 	"log"
 	"os"
 
-	"eipagent"
-	"eipagent/sdk"
+	"github.com/ganeshdipdumbare/eipagent"
+	"github.com/ganeshdipdumbare/eipagent/sdk"
 )
 
 var ctx = context.Background()

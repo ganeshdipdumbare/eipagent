@@ -16,7 +16,13 @@
 
 **Docs:** https://eipagent-docs.vercel.app has the full guide, with examples, lifecycles and reference. The source is `docs/site.html`; run `docs/build.sh` to regenerate `docs/public/index.html`, then deploy with `vercel deploy --prod` from `docs/public`.
 
-Requires **Go 1.27**. The module is private for now, so use it from a checkout of this repo, or with `replace eipagent => /path/to/eipagent` in your `go.mod`.
+Requires **Go 1.27**. Install a tagged release:
+
+```bash
+go get github.com/ganeshdipdumbare/eipagent@v0.3.0
+```
+
+The repository is private, so Go needs to know that and needs git access: run `go env -w GOPRIVATE=github.com/ganeshdipdumbare/*` once, and `gh auth setup-git` (or an SSH key) so `git` can fetch it. Releases and breaking changes are listed in [CHANGELOG.md](CHANGELOG.md); see [Versioning](#versioning).
 
 ```bash
 go test ./...                    # offline: the mock model needs no keys
@@ -580,7 +586,7 @@ The threat model, and what isn't guaranteed, is in [SECURITY.md](SECURITY.md). U
 The core engine is stateless and needs no database. All state lives behind plugin services: `checkpointer`, `store`, `audit` and `jobs`. For multiple replicas:
 
 ```go
-import _ "eipagent/drivers/postgres"
+import _ "github.com/ganeshdipdumbare/eipagent/drivers/postgres"
 
 eipagent.WithPlugin("db_sql", map[string]any{"dsn": "secret://EIP_DATABASE_URL"})
 eipagent.WithPlugins("checkpoint_sql", "store_sql")
@@ -625,6 +631,28 @@ go run ./cmd/eip config dump -profile eip.json
 Shows the policy and every plugin's state.
 
 `go run ./cmd/eip serve --stdio` is what runs inside sandboxes. You don't start it yourself.
+
+## Versioning
+
+eipagent follows [semantic versioning](https://semver.org) with git tags (`v0.3.0`). The Go module is `github.com/ganeshdipdumbare/eipagent`. `sdk.Version` holds the version the code reports, and plugin manifests state which versions they work with (`"eipagent": ">=0.3.0, <1.0.0"`).
+
+While the major version is 0:
+
+- **Patch releases** (`v0.3.x`) fix bugs and security issues without breaking the public API.
+- **Minor releases** (`v0.x.0`) may break it. Every break is listed under "Breaking changes" in [CHANGELOG.md](CHANGELOG.md), with what to change.
+
+The public API is:
+
+- the `eipagent` package (`New`, options, `Generate` / `Stream` / `Thread` ...);
+- `sdk`, which plugins are written against;
+- `pluginpkg`, `audit` and `engine`'s exported functions;
+- the `plugin.json` manifest schema, the `.eip` package format and the audit record format;
+- the `eip` CLI commands and flags;
+- the names and config keys of the standard plugins.
+
+Interpreted plugins import the SDK as `"eipagent/sdk"`. That import is an alias the engine keeps stable across releases and module moves, so plugin files never need changing for it.
+
+To depend on a version, `go get github.com/ganeshdipdumbare/eipagent@vX.Y.Z`. To try unreleased work, `go get github.com/ganeshdipdumbare/eipagent@main`, or a local checkout with `replace github.com/ganeshdipdumbare/eipagent => ../eipagent`.
 
 ## Status
 

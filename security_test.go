@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"eipagent"
-	"eipagent/audit"
+	"github.com/ganeshdipdumbare/eipagent"
+	"github.com/ganeshdipdumbare/eipagent/audit"
 )
 
 func securePolicy(auditPath string, rules map[string]any) *eipagent.Policy {

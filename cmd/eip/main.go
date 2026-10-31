@@ -20,12 +20,12 @@ import (
 	"os/signal"
 	"strings"
 
-	"eipagent"
-	"eipagent/engine"
-	"eipagent/plugins"
-	"eipagent/sdk"
+	"github.com/ganeshdipdumbare/eipagent"
+	"github.com/ganeshdipdumbare/eipagent/engine"
+	"github.com/ganeshdipdumbare/eipagent/plugins"
+	"github.com/ganeshdipdumbare/eipagent/sdk"
 
-	_ "eipagent/drivers/postgres"
+	_ "github.com/ganeshdipdumbare/eipagent/drivers/postgres"
 )
 
 type common struct {

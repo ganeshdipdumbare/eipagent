@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"eipagent"
+	"github.com/ganeshdipdumbare/eipagent"
 )
 
 // Tools turns the shop's operations into typed tools. The argument

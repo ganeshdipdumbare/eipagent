@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"eipagent/plugins"
-	"eipagent/sdk"
+	"github.com/ganeshdipdumbare/eipagent/plugins"
+	"github.com/ganeshdipdumbare/eipagent/sdk"
 )
 
 func newTest(t *testing.T, pol *Policy, dirs ...string) *Engine {

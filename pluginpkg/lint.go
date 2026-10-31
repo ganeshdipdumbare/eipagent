@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"eipagent/engine"
+	"github.com/ganeshdipdumbare/eipagent/engine"
 )
 
 // Facts is what static analysis learns from a plugin source.

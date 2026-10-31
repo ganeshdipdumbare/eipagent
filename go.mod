@@ -1,4 +1,4 @@
-module eipagent
+module github.com/ganeshdipdumbare/eipagent
 
 go 1.27
 

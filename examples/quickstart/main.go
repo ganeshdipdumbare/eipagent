@@ -10,7 +10,7 @@ import (
 	"log"
 	"os"
 
-	"eipagent"
+	"github.com/ganeshdipdumbare/eipagent"
 )
 
 type WeatherIn struct {

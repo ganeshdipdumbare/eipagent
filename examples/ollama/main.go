@@ -23,7 +23,7 @@ import (
 	"strings"
 	"time"
 
-	"eipagent"
+	"github.com/ganeshdipdumbare/eipagent"
 )
 
 var (

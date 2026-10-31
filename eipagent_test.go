@@ -12,8 +12,8 @@ import (
 	"sync"
 	"testing"
 
-	"eipagent"
-	"eipagent/sdk"
+	"github.com/ganeshdipdumbare/eipagent"
+	"github.com/ganeshdipdumbare/eipagent/sdk"
 )
 
 var bg = context.Background()

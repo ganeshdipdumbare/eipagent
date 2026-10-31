@@ -23,8 +23,8 @@ import (
 	"strconv"
 	"strings"
 
-	"eipagent/engine"
-	"eipagent/sdk"
+	"github.com/ganeshdipdumbare/eipagent/engine"
+	"github.com/ganeshdipdumbare/eipagent/sdk"
 )
 
 // ManifestFile is the manifest's file name in a source dir or package.

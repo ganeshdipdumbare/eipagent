@@ -19,8 +19,8 @@ import (
 	"strings"
 	"time"
 
-	"eipagent/engine"
-	"eipagent/sdk"
+	"github.com/ganeshdipdumbare/eipagent/engine"
+	"github.com/ganeshdipdumbare/eipagent/sdk"
 )
 
 // SignatureFile holds the package signature next to the manifest.

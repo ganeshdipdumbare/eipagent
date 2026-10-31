@@ -19,10 +19,10 @@ import (
 	"testing"
 	"time"
 
-	"eipagent"
-	"eipagent/audit"
-	"eipagent/internal/mcptest"
-	"eipagent/sdk"
+	"github.com/ganeshdipdumbare/eipagent"
+	"github.com/ganeshdipdumbare/eipagent/audit"
+	"github.com/ganeshdipdumbare/eipagent/internal/mcptest"
+	"github.com/ganeshdipdumbare/eipagent/sdk"
 )
 
 func TestSandboxLocalSymlinkCantCreateFilesOutside(t *testing.T) {

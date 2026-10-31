@@ -17,10 +17,10 @@ import (
 	"testing"
 	"time"
 
-	"eipagent"
-	"eipagent/audit"
-	"eipagent/pluginpkg"
-	"eipagent/sdk"
+	"github.com/ganeshdipdumbare/eipagent"
+	"github.com/ganeshdipdumbare/eipagent/audit"
+	"github.com/ganeshdipdumbare/eipagent/pluginpkg"
+	"github.com/ganeshdipdumbare/eipagent/sdk"
 )
 
 func TestSecretCallerCantBeSpoofedAndAccessIsAudited(t *testing.T) {

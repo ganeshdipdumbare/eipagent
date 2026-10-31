@@ -12,8 +12,8 @@ import (
 	"fmt"
 	"log"
 
-	"eipagent"
-	"eipagent/sdk"
+	"github.com/ganeshdipdumbare/eipagent"
+	"github.com/ganeshdipdumbare/eipagent/sdk"
 )
 
 func main() {

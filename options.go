@@ -3,9 +3,9 @@ package eipagent
 import (
 	"context"
 
-	"eipagent/engine"
-	"eipagent/pluginpkg"
-	"eipagent/sdk"
+	"github.com/ganeshdipdumbare/eipagent/engine"
+	"github.com/ganeshdipdumbare/eipagent/pluginpkg"
+	"github.com/ganeshdipdumbare/eipagent/sdk"
 )
 
 type config struct {

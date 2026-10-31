@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"eipagent"
-	"eipagent/sdk"
+	"github.com/ganeshdipdumbare/eipagent"
+	"github.com/ganeshdipdumbare/eipagent/sdk"
 )
 
 // RefundPolicy is a business rule written as a plugin: agents may refund

@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"eipagent/engine"
+	"github.com/ganeshdipdumbare/eipagent/engine"
 )
 
 // State is where a plugin version is in its lifecycle:

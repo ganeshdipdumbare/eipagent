@@ -14,8 +14,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"eipagent"
-	"eipagent/pluginpkg"
+	"github.com/ganeshdipdumbare/eipagent"
+	"github.com/ganeshdipdumbare/eipagent/pluginpkg"
 )
 
 func main() {

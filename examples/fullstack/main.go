@@ -12,7 +12,7 @@ import (
 	"os"
 	"time"
 
-	"eipagent/examples/fullstack/app"
+	"github.com/ganeshdipdumbare/eipagent/examples/fullstack/app"
 )
 
 func main() {

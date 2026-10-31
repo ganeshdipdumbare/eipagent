@@ -211,3 +211,13 @@ func TestPendingUpdateKeepsOldVersion(t *testing.T) {
 		t.Fatalf("old version not running: %s", e.State("svc"))
 	}
 }
+
+// Plugins import the SDK through the stable alias or the module path.
+func TestSDKImportAliasAndModulePath(t *testing.T) {
+	for _, imp := range []string{SDKImport, sdkModulePath} {
+		src := "//go:build ignore\n\npackage plugin\n\nimport \"" + imp + "\"\n\nfunc Apply(ctx *sdk.Context) error { ctx.AddTool(sdk.Tool{Name: \"t\"}); return nil }\n"
+		if err := Check("p", []byte(src)); err != nil {
+			t.Errorf("import %q: %v", imp, err)
+		}
+	}
+}
