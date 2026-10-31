@@ -19,7 +19,7 @@ The goal is secure defaults that stay simple. `eipagent.New()` with no options u
    - Config references `secret://NAME`, never raw values. Providers: `secrets_env` (allow-listed env vars) and `secrets_vault` (HashiCorp Vault KV v2, cached with a TTL so rotation is picked up, failing closed when Vault is unreachable). Any other store (KMS, a cloud secret manager) is a plugin that provides `sdk.Secrets`.
    - `grants` limits each plugin to its own secrets. The caller identity is bound by the core: a plugin that looks up the `secrets` service gets a copy tied to its own name, so it can't ask as another plugin.
    - Every resolved value is registered for redaction. `ctx.Logf`, `audit_jsonl`, `audit_http`, `trace_file` and `trace_otlp` replace it with `[REDACTED]` wherever it appears: tool arguments, results, model output, errors.
-   - Every lookup is audited as `secret.access` (plugin, secret name, granted or denied, never the value).
+   - Every lookup is audited as `secret.access` (plugin, secret name, granted or denied, never the value). Denials are always recorded. Granted reads are recorded once per plugin and secret every 10 minutes, and again right away when the value changes (a rotation), so plugins that resolve secrets per call don't flood the log.
    - In `WithRunIn` mode keys never enter the sandbox, because model calls are bridged to the host.
 5. **Audit and traces.** `audit_jsonl` writes a hash-chained JSONL log covering:
    - plugin lifecycle, with the sha256 and permissions of each plugin, and store events (install, approve, enable, failed enable, rollback, quarantine, uninstall, with who did it)
@@ -43,6 +43,7 @@ The goal is secure defaults that stay simple. `eipagent.New()` with no options u
 - `sandbox_local` has no isolation.
 - Docker can't filter egress per host. Use `network: none`, or a provider that supports allowlists.
 - The audit chain detects tampering but doesn't prevent deleting the whole file. Ship it off-host with `audit_http`.
+- Redaction applies to logs, traces and audit records (the sinks). It does not hide a secret from the model or from your app: if a tool returns a key in its result, the model sees it.
 - Redaction matches the exact values resolved through the `secrets` service (4 bytes or longer). A secret that a plugin reads some other way, or transforms (base64, splits), is not caught.
 - Records written before `audit_http` loaded are not re-sent; the receiver sees the chain start at the first record it gets.
 

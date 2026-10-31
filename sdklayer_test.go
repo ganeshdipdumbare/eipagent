@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"eipagent"
 	"eipagent/audit"
@@ -402,5 +403,31 @@ func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// audit_http resolves its key on every flush; the read must not feed the
+// sink forever (granted reads are audited once per interval).
+func TestAuditHTTPDoesNotFeedItself(t *testing.T) {
+	t.Setenv("LOOP_HMAC_TOKEN", "k-123456")
+	var mu sync.Mutex
+	posts, secretReads := 0, 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		posts++
+		secretReads += strings.Count(string(body), `"secret.access"`)
+		mu.Unlock()
+	}))
+	defer srv.Close()
+	mockAgent(t, nil,
+		eipagent.WithPlugin("secrets_env", nil),
+		eipagent.WithPlugin("audit_jsonl", map[string]any{"path": "-"}),
+		eipagent.WithPlugin("audit_http", map[string]any{"url": srv.URL, "hmac_key": "secret://LOOP_HMAC_TOKEN", "flush_seconds": 1}))
+	time.Sleep(3500 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	if posts > 4 || secretReads > 1 {
+		t.Fatalf("sink is feeding itself: %d posts, %d secret.access records", posts, secretReads)
 	}
 }

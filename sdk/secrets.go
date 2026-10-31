@@ -3,10 +3,12 @@ package sdk
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Version is the eipagent SDK version plugins are checked against
@@ -91,6 +93,41 @@ func RedactValue(v any) any {
 	return v
 }
 
+// Granted reads are audited once per plugin and secret every
+// grantAuditEvery, or right away when the value changes (a rotation).
+// Plugins that resolve secrets per call (as they should) would otherwise
+// flood the log, and an audit sink that resolves its own key would feed
+// itself. Denials are always recorded.
+const grantAuditEvery = 10 * time.Minute
+
+type grantMark struct {
+	at  time.Time
+	sum [32]byte
+}
+
+// auditGrant reports whether a granted read should be recorded now. The
+// marks live on the agent's root registry, so two agents in one process
+// each audit their own reads.
+func (c *Context) auditGrant(caller, name, v string) bool {
+	r := c.reg
+	for r.parent != nil {
+		r = r.parent
+	}
+	k := caller + "\x00" + name
+	sum := sha256.Sum256([]byte(v))
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.grants == nil {
+		r.grants = map[string]grantMark{}
+	}
+	m, ok := r.grants[k]
+	if ok && m.sum == sum && time.Since(m.at) < grantAuditEvery {
+		return false
+	}
+	r.grants[k] = grantMark{time.Now(), sum}
+	return true
+}
+
 // boundSecrets is what Service("secrets") hands a plugin: the caller is
 // fixed to the plugin's identity (a plugin can't ask as someone else),
 // values are registered for redaction and every access is audited.
@@ -100,6 +137,9 @@ func (c *Context) boundSecrets(s *Secrets) *Secrets {
 		v, err := s.Get(ctx, caller, name)
 		if err == nil {
 			AddRedaction(v)
+		}
+		if err == nil && !c.auditGrant(caller, name, v) {
+			return v, nil // already audited recently
 		}
 		if a, ok := c.Service("audit").(*Audit); ok && a.Record != nil {
 			d := map[string]any{"plugin": caller, "secret": name, "outcome": "granted"}

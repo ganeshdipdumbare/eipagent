@@ -34,6 +34,7 @@ type registry struct {
 	skills   map[string]entry[Skill]
 	hooks    map[string][]hookEntry
 	log      func(scope, msg string)
+	grants   map[string]grantMark // secret reads already audited (see auditGrant)
 }
 
 func newRegistry(parent *registry) *registry {

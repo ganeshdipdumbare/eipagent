@@ -390,6 +390,7 @@ fmt.Println(res.Text)</code></pre></div></div></div>
     <li><a href="#lifecycles">Lifecycles</a>: exactly what happens, in what order, during a run.</li>
     <li><a href="#writing-plugins">Writing a plugin</a>: one Go file, no compile step.</li>
     <li><a href="#plugin-packages">Shipping plugins</a>: validate, sign, install, approve, update and roll back.</li>
+    <li><a href="#production-examples">Production examples</a>: secrets, audit export, tracing and plugin verification, as runnable programs.</li>
   </ul>
 </section>
 
@@ -763,6 +764,96 @@ c2.get("/api/approvals", &amp;ap)
 if len(ap.Approvals) != 1 {
 	t.Fatalf("approval lost on restart: %+v", ap)
 }</code></pre></div>
+</section>
+
+<section id="production-examples" class="page">
+  <h1>Production examples</h1>
+  <p>Each of these is a small program that runs offline, with a mock model and in-process stand-ins for Vault, a SIEM and an OpenTelemetry collector. Run one, read the output, then read the code.</p>
+
+  <h2>Secrets: Vault, grants, rotation, redaction</h2>
+  <div class="code" data-title="terminal"><pre><code class="language-bash">go run ./examples/secrets</code></pre></div>
+  <div class="code" data-title="output"><pre><code class="language-plaintext">1. Grants are per plugin, and the caller can't be faked
+   analytics asking as billing: secret "STRIPE_API_KEY" is not granted to analytics
+
+2. The model calls billing's tool; the result leaks the key
+   the tool returned:  charged $42.00 (debug: used key sk_live_51HxDEMOoriginal)
+
+3. Rotate the key in Vault: the next call uses the new one
+   the tool returned:  charged $7.00 (debug: used key sk_live_51HxDEMOrotated)
+
+4. What the logs and the audit log contain
+   log:   [billing] charging $42.00 with key [REDACTED]
+   audit: secret.access  analytics -&gt; STRIPE_API_KEY (denied)
+   audit: secret.access  billing -&gt; STRIPE_API_KEY (granted)
+   audit: tool.call      charge result="charged $42.00 (debug: used key [REDACTED])"
+   any key in the logs or audit log? false</code></pre></div>
+  <p>A <code>billing</code> plugin is granted <code>STRIPE_API_KEY</code> in <code>secrets_vault</code>. An <code>analytics</code> plugin looks up the service and asks as <code>billing</code>, and is refused, because the core supplies the caller. The key is rotated in Vault mid-run and the next call picks it up. Its tool leaks the key on purpose. The model and the app see it, but the logs and audit log only ever contain <code>[REDACTED]</code>. <a href="https://github.com/ganeshdipdumbare/eipagent/blob/main/examples/secrets/main.go">Source</a></p>
+
+  <h2>Audit to a SIEM, traces to OpenTelemetry</h2>
+  <div class="code" data-title="terminal"><pre><code class="language-bash">go run ./examples/observability</code></pre></div>
+  <div class="code" data-title="output"><pre><code class="language-plaintext">SIEM received 9 audit records (bad signatures: 0, chain intact: true)
+  #5   model.call  run=160e89ace99e7b29 provider=mock model=mock:demo user=u-1001 thread=t-weather tokens=5/0
+  #6   tool.call   run=160e89ace99e7b29 tool=weather call_id=call_1_0_0 outcome=ok args=map[city:Oslo]
+  #7   model.call  run=160e89ace99e7b29 provider=mock model=mock:demo user=u-1001 thread=t-weather tokens=9/7
+
+Collector received 4 spans:
+  agent.run  trace=f9a69cfa…
+     eip.run_id=160e89ace99e7b29 eip.thread=t-weather enduser.id=u-1001 gen_ai.system=mock eip.steps=2 …
+    └─ chat demo  trace=f9a69cfa…
+    └─ execute_tool weather  trace=f9a69cfa…
+    └─ chat demo  trace=f9a69cfa…</code></pre></div>
+  <p><code>audit_jsonl</code> keeps no local file (<code>"path": "-"</code>) and hands every record to <code>audit_http</code>. The fake SIEM checks each batch's HMAC signature and that every record links to the one before. <code>trace_otlp</code> sends one trace per run. The run id is the same in both, so the two systems can be joined. <a href="https://github.com/ganeshdipdumbare/eipagent/blob/main/examples/observability/main.go">Source</a></p>
+
+  <h2>What validation and verification catch</h2>
+  <div class="code" data-title="terminal"><pre><code class="language-bash">go run ./examples/plugin-validate</code></pre></div>
+  <div class="code" data-title="output"><pre><code class="language-plaintext">1. The linter on a plugin with mistakes
+   state: DRAFT
+    error [permission-missing] import net/http needs permission "net"
+    error [permission-missing] os.Getenv needs one of [env]
+    error [undeclared-service] uses service "store" but Inject doesn't list it
+    error [secret-ref] invalid secret reference "secret://RATES API KEY"
+    error [compile] plugin fx_rates: import not permitted: net/http (needs permission "net")
+    error [permission-mismatch] manifest permissions [net] != source var Permissions []
+
+2. The fixed plugin, built and signed
+   fx_rates-1.0.0.eip: VALIDATED, signed by 2295fa79713d29d9
+
+3. What install-time verification refuses
+   a file changed after signing:      package: fx_rates.go sha256 does not match the manifest
+   manifest grants itself exec:       fx_rates: signature (key 2295fa79713d29d9) does not verify against any trusted key
+   signed by an unknown key:          fx_rates: signature (key 794773add39943ff) does not verify against any trusted key
+   unsigned:                          fx_rates: package is not signed (signatures are required)
+   wrong sha256 pin:                  fx_rates: package sha256 cda9bc809c38 does not match pin abababababab</code></pre></div>
+  <p><a href="https://github.com/ganeshdipdumbare/eipagent/blob/main/examples/plugin-validate/main.go">Source</a></p>
+
+  <h2>A plugin's whole lifecycle in a running agent</h2>
+  <div class="code" data-title="terminal"><pre><code class="language-bash">go run ./examples/plugin-store</code></pre></div>
+  <div class="code" data-title="output"><pre><code class="language-plaintext">install 0.1.0 (held, not running)  (tool not loaded)      0.1.0=VALIDATED
+approve 0.1.0                      (tool not loaded)      0.1.0=APPROVED
+enable                             Hello, Ada!            0.1.0=ACTIVE
+update to 0.2.0                    Hi, Ada!               0.1.0=APPROVED 0.2.0=ACTIVE
+update to 0.3.0 fails to start     Hi, Ada!               0.1.0=APPROVED 0.2.0=ACTIVE 0.3.0=FAILED
+rollback                           Hello, Ada!            0.1.0=ACTIVE 0.2.0=APPROVED 0.3.0=FAILED
+quarantine 0.1.0                   (tool not loaded)      0.1.0=QUARANTINED 0.2.0=APPROVED 0.3.0=FAILED
+enable 0.2.0                       Hi, Ada!               0.1.0=QUARANTINED 0.2.0=ACTIVE 0.3.0=FAILED
+
+unsigned package: hello_tool: package is not signed (signatures are required)</code></pre></div>
+  <p>The middle column is what the plugin's tool answers at each step. The 0.3.0 update fails to start, and 0.2.0 keeps answering. <a href="https://github.com/ganeshdipdumbare/eipagent/blob/main/examples/plugin-store/main.go">Source</a></p>
+
+  <h2>A starting point for every kind of plugin</h2>
+  <p><a href="https://github.com/ganeshdipdumbare/eipagent/tree/main/examples/plugins"><code>examples/plugins</code></a> has one plugin per <code>eip plugin init</code> template, each with its manifest and passing validation:</p>
+  <div class="table"><table>
+    <thead><tr><th>Plugin</th><th>What it shows</th></tr></thead>
+    <tbody>
+      <tr><td><code>hello_tool</code></td><td>A tool with a schema and config</td></tr>
+      <tr><td><code>hello_middleware</code></td><td><code>WrapModel</code> timing and a <code>WrapTool</code> block list</td></tr>
+      <tr><td><code>hello_provider</code></td><td>An LLM provider for an OpenAI-compatible API, with its key resolved per call</td></tr>
+      <tr><td><code>hello_store</code></td><td>The <code>store</code> service for long-term memory</td></tr>
+      <tr><td><code>hello_mcp</code></td><td>Turning a remote HTTP tool API into tools</td></tr>
+      <tr><td><code>hello_sandbox</code></td><td>A <code>sandbox/&lt;name&gt;</code> provider over a remote sandbox API</td></tr>
+      <tr><td><code>hello_webhook</code></td><td>An HMAC-verified webhook that starts agent runs</td></tr>
+    </tbody>
+  </table></div>
 </section>
 
 <section id="providers" class="page">
@@ -1343,9 +1434,11 @@ eipagent.WithPlugin("llm_openai", map[string]any{"api_key": "secret://OPENAI_API
     <li><b>Grants per plugin.</b> With <code>grants</code>, a plugin reads only the names granted to it.</li>
     <li><b>Identity from the core.</b> The core passes the real calling plugin to the provider. A plugin can't ask as someone else.</li>
     <li><b>Redacted everywhere.</b> Every value that is handed out is remembered. Logs, traces and audit records show <code>[REDACTED]</code> wherever it would have appeared: tool arguments, results, model replies, errors.</li>
-    <li><b>Every read is audited</b> as <code>secret.access</code>, with the plugin, the secret name and whether it was granted. The value is never recorded.</li>
+    <li><b>Every read is audited</b> as <code>secret.access</code>, with the plugin, the secret name and whether it was granted. The value is never recorded. Denials are always recorded; granted reads once per plugin and secret every 10 minutes, and again when the value changes.</li>
     <li><b>Kept on the host.</b> With <code>WithRunIn</code>, model calls go back to the host, so keys never enter the sandbox.</li>
   </ul>
+  <div class="note warn"><b>What redaction covers</b><div><p>Redaction protects the sinks: logs, traces and audit records. It doesn't hide a secret from the model. If a tool puts a key in its result, the model sees it, so don't return secrets from tools.</p></div></div>
+  <div class="code" data-title="terminal"><pre><code class="language-bash">go run ./examples/secrets   # Vault, grants, rotation and redaction, offline</code></pre></div>
   <div class="note"><b>Resolve at use</b><div><p>Call <code>ctx.Secret("secret://NAME")</code> when you need the value, not once in <code>Apply</code>. Then a rotated key reaches the plugin as soon as the provider's cache refreshes.</p></div></div>
 </section>
 
@@ -1550,7 +1643,7 @@ eip plugin list</code></pre></div>
   var NAV = [
     { pages: ["introduction"] },
     { title: "Getting Started", pages: ["installation", "quickstart", "ollama"] },
-    { title: "Examples", pages: ["fullstack"] },
+    { title: "Examples", pages: ["fullstack", "production-examples"] },
     { title: "Foundations", pages: ["providers", "generating-text", "streaming", "tools", "structured-output", "threads", "human-in-the-loop"] },
     { title: "Agents", pages: ["agent-loop", "multi-agent", "lifecycles"] },
     { title: "Plugins", pages: ["plugins", "writing-plugins", "runtime-plugins", "plugin-packages", "middleware"] },
@@ -1776,7 +1869,7 @@ eip plugin list</code></pre></div>
     var here = /vercel\.app$|^localhost$|^127\.0\.0\.1$/.test(location.hostname);
     var url = here ? "demo/" : "https://eipagent-docs.vercel.app/demo/";
     box.innerHTML = (here ? '<div class="demo-frame"><iframe src="' + url + '" title="Acme Support Desk demo" loading="lazy"></iframe></div>' : "") +
-      '<p class="demo-cap">' + (here ? "An interactive replay of runs recorded from the Go backend. Pick a scenario, then switch to Ada to decide. " : "") +
+      '<p class="demo-cap">' + (here ? "The live demo, served by the Go backend (on a free instance, so the first visit can take a minute to wake it; until then you can use a replay of recorded runs). Chat as Sam, then switch to Ada to decide. " : "") +
       '<a href="' + url + '">Open the demo in a new tab</a>.</p>';
     // Show the desktop layout scaled to the column, except on phones.
     var frame = box.querySelector(".demo-frame");
