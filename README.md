@@ -12,6 +12,8 @@
   - Each plugin gets only the secrets granted to it.
   - Sandboxes are pluggable, and the agent can run inside one.
 
+**Docs:** open [`docs/index.html`](docs/index.html) in a browser for the full guide, with examples, lifecycles and reference.
+
 Requires **Go 1.27**. The module is private for now, so use it from a checkout of this repo, or with `replace eipagent => /path/to/eipagent` in your `go.mod`.
 
 ```bash
