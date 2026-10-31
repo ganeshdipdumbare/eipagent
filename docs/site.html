@@ -1434,7 +1434,7 @@ eipagent.WithPlugin("llm_openai", map[string]any{"api_key": "secret://OPENAI_API
   <ul>
     <li><b>Grants per plugin.</b> With <code>grants</code>, a plugin reads only the names granted to it.</li>
     <li><b>Identity from the core.</b> The core passes the real calling plugin to the provider. A plugin can't ask as someone else.</li>
-    <li><b>Redacted everywhere.</b> Every value that is handed out is remembered, with its JSON-escaped, URL-encoded and base64 forms. Logs, traces and audit records show <code>[REDACTED]</code> wherever it would have appeared: tool arguments, results, model replies, errors. Values shorter than 4 bytes can't be redacted; their <code>secret.access</code> record says so. Plugins can redact, but only the core registers values.</li>
+    <li><b>Redacted everywhere.</b> Every value that is handed out is remembered, with its JSON-escaped, URL-encoded and base64 forms. Logs, traces and audit records show <code>[REDACTED]</code> wherever it would have appeared: tool arguments, results, model replies, errors. Values shorter than 4 bytes can't be redacted; their <code>secret.access</code> record says so. Only the core registers values, and only built-in plugins can call <code>sdk.Redact</code>: any redaction function also answers "is this a secret?", so third-party plugins don't get one.</li>
     <li><b>Every read is audited</b> as <code>secret.access</code>, with the plugin, the secret name and whether it was granted. The value is never recorded. Denials are always recorded; granted reads once per plugin and secret every 10 minutes, and again when the value changes.</li>
     <li><b>Kept on the host.</b> With <code>WithRunIn</code>, model calls go back to the host, so keys never enter the sandbox.</li>
   </ul>

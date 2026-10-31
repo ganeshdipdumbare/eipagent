@@ -253,7 +253,7 @@ func (e *Engine) compile(spec PluginSpec) (*record, error) {
 		return nil, err
 	}
 	i := interp.New(interp.Options{Env: pluginEnv(rec.perms)})
-	if err := i.Use(buildSymbols(rec.perms)); err != nil {
+	if err := i.Use(buildSymbols(rec.perms, src.kind == "embedded")); err != nil {
 		return nil, err
 	}
 	if _, err := i.Eval(string(src.src)); err != nil {

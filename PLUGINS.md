@@ -48,7 +48,7 @@ The engine parses each plugin's imports before running it. An import the plugin'
 
 - `fs:write` without `fs:read` can't read: `os.OpenFile` then only opens files for writing.
 - `env` shows the environment minus credential-looking variables (`*_API_KEY`, `*_TOKEN`, `*_SECRET`, `*PASSWORD*`, `*_DSN` ...). Only secret providers should declare `env:secrets`, which shows everything; other plugins get keys through `ctx.Secret` and per-plugin grants.
-- Plugins can call `sdk.Redact` but not `sdk.AddRedaction`: only the core registers redaction values.
+- No interpreted plugin can call `sdk.AddRedaction`, and only built-in plugins can call `sdk.Redact` / `RedactMap` / `RedactValue`. Any redaction function also answers "is this string a secret?", so plugins from plugin directories and stores don't get one. Their `ctx.Logf` output is redacted for them. A custom audit or trace sink that needs redaction should be a compiled plugin (`eipagent.Plugin`).
 - Records a plugin submits through the `audit` service are stamped `writer: "plugin:<name>"` by the SDK. For untrusted plugin code, run the agent in a sandbox (`WithRunIn`).
 
 ## Ship a plugin: manifest, lint, package, install

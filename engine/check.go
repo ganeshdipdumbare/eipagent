@@ -30,8 +30,9 @@ func OSPermissions(sym string) (perms []string, ok bool) {
 	return perms, len(perms) > 0
 }
 
-// Check compiles a plugin source the way Load would (declared
-// permissions only, nothing run) and reports the first problem.
+// Check compiles a plugin source the way Load would for a plugin from a
+// plugin directory or store (declared permissions only, nothing run) and
+// reports the first problem.
 func Check(name string, src []byte) error {
 	m, err := parseMeta(name, src)
 	if err != nil {
@@ -46,7 +47,7 @@ func Check(name string, src []byte) error {
 		return err
 	}
 	i := interp.New(interp.Options{Env: []string{}})
-	if err := i.Use(buildSymbols(m.permissions)); err != nil {
+	if err := i.Use(buildSymbols(m.permissions, false)); err != nil {
 		return err
 	}
 	if _, err := i.Eval(string(src)); err != nil {

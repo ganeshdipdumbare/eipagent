@@ -99,8 +99,17 @@ func importPerm(pkg string) string {
 	return "-"
 }
 
+// builtinOnly are sdk symbols only built-in (embedded) plugins get.
+// AddRedaction would let a plugin blank out words in everyone's audit
+// records. Redact* would let it test whether a string it holds is a
+// registered secret: any function that redacts is such an oracle, so
+// third-party plugins don't get one. Their logs are redacted for them
+// (Context.Logf), and sinks are built in or compiled.
+var builtinOnly = map[string]bool{"Redact": true, "RedactMap": true, "RedactValue": true}
+
 // buildSymbols returns the symbol table for a plugin holding perms.
-func buildSymbols(perms []string) map[string]map[string]reflect.Value {
+// builtin is true for plugins embedded in the binary.
+func buildSymbols(perms []string, builtin bool) map[string]map[string]reflect.Value {
 	has := map[string]bool{}
 	for _, p := range perms {
 		has[p] = true
@@ -163,11 +172,11 @@ func buildSymbols(perms []string) map[string]map[string]reflect.Value {
 	}
 	for k, v := range symbols.Symbols {
 		if strings.HasPrefix(k, "eipagent/sdk/") {
-			// Plugins may redact, but not add redaction rules: that would
-			// let one plugin blank out words in everyone's audit records.
+			// No plugin may add redaction rules; only built-in ones may
+			// redact (see builtinOnly).
 			cp := make(map[string]reflect.Value, len(v))
 			for name, sym := range v {
-				if name != "AddRedaction" {
+				if name != "AddRedaction" && (builtin || !builtinOnly[name]) {
 					cp[name] = sym
 				}
 			}

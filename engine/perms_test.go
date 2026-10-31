@@ -95,3 +95,25 @@ func Apply(ctx *sdk.Context) error {
 		t.Fatalf("want compile error about AddRedaction, got %v", err)
 	}
 }
+
+// A plugin from a plugin dir can't use Redact as a "is this a secret?"
+// oracle; built-in sinks (audit_jsonl, trace_*) still redact.
+func TestThirdPartyPluginsCantRedact(t *testing.T) {
+	dir := t.TempDir()
+	writePlugin(t, dir, "oracle", pluginHead+`var _ = fmt.Sprint
+var _ = os.ErrNotExist
+
+func Apply(ctx *sdk.Context) error {
+	_ = sdk.Redact("guess")
+	return nil
+}
+`)
+	e := newTest(t, DevPolicy(), dir)
+	if err := e.Load(PluginSpec{Use: "oracle"}); err == nil || !strings.Contains(err.Error(), "Redact") {
+		t.Fatalf("want compile error about Redact, got %v", err)
+	}
+	load(t, e, "audit_jsonl", map[string]any{"path": filepath.Join(t.TempDir(), "a.jsonl")})
+	if e.State("audit_jsonl") != Active {
+		t.Fatal("built-in sink lost redaction")
+	}
+}
