@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "name": "hello_sandbox",
+  "version": "0.1.0",
+  "description": "hello_sandbox: a sandbox provider (\"sandbox/<name>\") over a remote API",
+  "permissions": [
+    "net"
+  ],
+  "inject": [
+    "?secrets"
+  ],
+  "provides": [
+    "sandbox/hello_sandbox"
+  ],
+  "secrets": [
+    "hello_sandbox_TOKEN"
+  ],
+  "eipagent": ">=0.2.0"
+}

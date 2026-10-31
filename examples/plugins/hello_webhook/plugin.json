@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "name": "hello_webhook",
+  "version": "0.1.0",
+  "description": "hello_webhook: an HTTP trigger that starts agent runs",
+  "permissions": [
+    "net"
+  ],
+  "inject": [
+    "agent",
+    "?secrets"
+  ],
+  "secrets": [
+    "hello_webhook_WEBHOOK_SECRET"
+  ],
+  "eipagent": ">=0.2.0"
+}

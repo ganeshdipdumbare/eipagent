@@ -54,6 +54,9 @@ func run(c context.Context, snap *sdk.Snapshot, st *sdk.RunState, defMax int, pa
 	if st.Emit == nil {
 		st.Emit = func(sdk.Event) {}
 	}
+	if st.ID == "" {
+		st.ID = sdk.NewRunID()
+	}
 	if err := snap.AgentStart(c, st); err != nil {
 		return nil, err
 	}

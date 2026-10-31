@@ -13,6 +13,7 @@ import (
 func init() {
 	Symbols["eipagent/sdk/sdk"] = map[string]reflect.Value{
 		// function, constant and variable definitions
+		"AddRedaction":       reflect.ValueOf(sdk.AddRedaction),
 		"ArgInt":             reflect.ValueOf(sdk.ArgInt),
 		"ArgString":          reflect.ValueOf(sdk.ArgString),
 		"Array":              reflect.ValueOf(sdk.Array),
@@ -36,10 +37,14 @@ func init() {
 		"LastText":           reflect.ValueOf(sdk.LastText),
 		"NewProviderError":   reflect.ValueOf(sdk.NewProviderError),
 		"NewRoot":            reflect.ValueOf(sdk.NewRoot),
+		"NewRunID":           reflect.ValueOf(sdk.NewRunID),
 		"Num":                reflect.ValueOf(sdk.Num),
 		"Object":             reflect.ValueOf(sdk.Object),
 		"PriorityReserved":   reflect.ValueOf(constant.MakeFromLiteral("1000000", token.INT, 0)),
 		"ReadSSE":            reflect.ValueOf(sdk.ReadSSE),
+		"Redact":             reflect.ValueOf(sdk.Redact),
+		"RedactMap":          reflect.ValueOf(sdk.RedactMap),
+		"RedactValue":        reflect.ValueOf(sdk.RedactValue),
 		"RoleAssistant":      reflect.ValueOf(constant.MakeFromLiteral("\"assistant\"", token.STRING, 0)),
 		"RoleSystem":         reflect.ValueOf(constant.MakeFromLiteral("\"system\"", token.STRING, 0)),
 		"RoleTool":           reflect.ValueOf(constant.MakeFromLiteral("\"tool\"", token.STRING, 0)),
@@ -50,6 +55,7 @@ func init() {
 		"ThreadFrom":         reflect.ValueOf(sdk.ThreadFrom),
 		"ToJSON":             reflect.ValueOf(sdk.ToJSON),
 		"UserFrom":           reflect.ValueOf(sdk.UserFrom),
+		"Version":            reflect.ValueOf(constant.MakeFromLiteral("\"0.2.0\"", token.STRING, 0)),
 		"WithRunInfo":        reflect.ValueOf(sdk.WithRunInfo),
 
 		// type definitions
@@ -58,6 +64,7 @@ func init() {
 		"AgentStartFn":    reflect.ValueOf((*sdk.AgentStartFn)(nil)),
 		"Approver":        reflect.ValueOf((*sdk.Approver)(nil)),
 		"Audit":           reflect.ValueOf((*sdk.Audit)(nil)),
+		"AuditSink":       reflect.ValueOf((*sdk.AuditSink)(nil)),
 		"Checkpointer":    reflect.ValueOf((*sdk.Checkpointer)(nil)),
 		"Chunk":           reflect.ValueOf((*sdk.Chunk)(nil)),
 		"Context":         reflect.ValueOf((*sdk.Context)(nil)),

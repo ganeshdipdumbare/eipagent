@@ -18,7 +18,7 @@ import (
 // tool call) with timing and hierarchy. View it with `eip trace view`.
 //
 // Config: path (".eipagent/trace.jsonl"), content (include prompts and
-// results, default false).
+// results, default false). Secret values are redacted.
 var Permissions = []string{"fs:read", "fs:write"}
 
 func Apply(ctx *sdk.Context) error {
@@ -43,6 +43,7 @@ func Apply(ctx *sdk.Context) error {
 		return fmt.Sprintf("%d-%d", time.Now().UnixNano()%1e9, seq)
 	}
 	write := func(trace, id, parent, kind, name string, start time.Time, attrs map[string]any) {
+		attrs = sdk.RedactMap(attrs)
 		b, _ := json.Marshal(map[string]any{"trace": trace, "id": id, "parent": parent, "kind": kind, "name": name,
 			"start": start.UTC().Format(time.RFC3339Nano), "ms": time.Since(start).Milliseconds(), "attrs": attrs})
 		mu.Lock()
@@ -69,7 +70,7 @@ func Apply(ctx *sdk.Context) error {
 		delete(runs, st)
 		delete(starts, id)
 		mu.Unlock()
-		attrs := map[string]any{"thread": st.Thread, "user": st.User, "model": st.Model, "steps": len(res.Steps),
+		attrs := map[string]any{"run": st.ID, "thread": st.Thread, "user": st.User, "model": st.Model, "steps": len(res.Steps),
 			"input_tokens": res.Usage.InputTokens, "output_tokens": res.Usage.OutputTokens, "finish": res.FinishReason}
 		if content {
 			attrs["text"] = res.Text
@@ -97,7 +98,10 @@ func Apply(ctx *sdk.Context) error {
 		t := time.Now()
 		r, err := next(c, req)
 		run := runOf(req.Run)
-		attrs := map[string]any{"step": req.Step}
+		attrs := map[string]any{"step": req.Step, "call_id": req.Call.ID}
+		if req.Tool != nil {
+			attrs["plugin"] = req.Tool.Plugin
+		}
 		if content {
 			attrs["args"] = req.Call.Args
 		}

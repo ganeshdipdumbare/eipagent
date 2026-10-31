@@ -91,7 +91,11 @@ func newLocal(cfg *config) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	eng := engine.New(engine.Options{Dirs: cfg.dirs, Embedded: plugins.FS, Policy: pol, Lock: lock, Logger: cfg.logger})
+	dirs := cfg.dirs
+	if cfg.store != nil {
+		dirs = append(append([]string{}, dirs...), cfg.store.ActiveDir())
+	}
+	eng := engine.New(engine.Options{Dirs: dirs, Embedded: plugins.FS, Policy: pol, Lock: lock, Logger: cfg.logger})
 	for _, p := range cfg.compiled {
 		eng.Register(p)
 	}
@@ -129,6 +133,9 @@ func newLocal(cfg *config) (*Agent, error) {
 		}})
 	}})
 	prof.Plugins = append([]engine.PluginSpec{{Use: "agent_service"}}, prof.Plugins...)
+	if cfg.store != nil {
+		attachStore(cfg.store, eng, prof)
+	}
 	if errs := eng.LoadProfile(prof); len(errs) > 0 {
 		eng.Close()
 		return nil, fmt.Errorf("eipagent: %w", errors.Join(errs...))

@@ -62,6 +62,8 @@ type Tool struct {
 	Run         func(ctx context.Context, args map[string]any) (string, error)
 	// Meta carries hints for middleware/policy: "readonly", "risk", "sandbox"...
 	Meta map[string]any
+	// Plugin is the plugin that registered the tool (set by AddTool).
+	Plugin string
 }
 
 type ToolRequest struct {
@@ -162,6 +164,7 @@ type Event struct {
 }
 
 type RunState struct {
+	ID             string // unique per run; set by the loop when empty
 	Thread         string
 	User           string
 	Roles          []string
@@ -253,8 +256,14 @@ type Skill struct {
 	Prompt      string
 }
 
-// Secrets resolves secret references, provided as "secrets". caller is
-// the requesting plugin instance (set by the core, not the plugin).
+// Secrets resolves secret references, provided as "secrets". It is the
+// secret provider interface: env, Vault, KMS or a custom store each
+// provide one. caller is the requesting plugin: plugins that look the
+// service up get a copy bound to their own identity, so the caller they
+// pass is ignored, every resolved value is redacted from audit / trace
+// output, and each access is recorded as a "secret.access" audit event.
+// Resolve secrets when you use them (not once in Apply) to pick up
+// rotation; providers cache and refresh.
 type Secrets struct {
 	Get func(ctx context.Context, caller, name string) (string, error)
 }
@@ -308,6 +317,13 @@ type Approver struct {
 // engine also reports plugin lifecycle (load, fail, unload) to it.
 type Audit struct {
 	Record func(kind string, data map[string]any)
+}
+
+// AuditSink receives every audit record as one JSON line (already
+// redacted and hash-chained), provided as "audit/sink/<name>". Sinks
+// export to a SIEM or control plane (audit_http).
+type AuditSink struct {
+	Send func(line []byte)
 }
 
 // AgentService lets plugins start runs (jobs, webhooks, teams), provided

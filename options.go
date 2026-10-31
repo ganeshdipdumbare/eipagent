@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"eipagent/engine"
+	"eipagent/pluginpkg"
 	"eipagent/sdk"
 )
 
@@ -26,6 +27,7 @@ type config struct {
 	noDefaults          bool
 	noProviderAuto      bool
 	runIn               *RunIn
+	store               *pluginpkg.Store
 }
 
 // Option configures New.

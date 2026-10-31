@@ -1,0 +1,7 @@
+{
+  "schema": 1,
+  "name": "hello_middleware",
+  "version": "0.1.0",
+  "description": "hello_middleware: wraps model and tool calls (timing, guards, rewriting)",
+  "eipagent": ">=0.2.0"
+}

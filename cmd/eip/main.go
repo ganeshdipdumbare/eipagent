@@ -4,7 +4,8 @@
 //	eip [repl] -model openai:gpt-4.1 -profile eip.json
 //	eip run -model ... "summarize README.md"
 //	eip serve --stdio ...          (used inside sandboxes by WithRunIn)
-//	eip plugin pin -plugins ./plugins -lock eip.lock
+//	eip plugin init|validate|build|inspect|keygen ...   (authoring)
+//	eip plugin install|approve|enable|update|rollback ... (lifecycle)
 //	eip config dump -profile eip.json
 //	eip trace view trace.jsonl > trace.html
 package main
@@ -17,7 +18,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 
 	"eipagent"
@@ -30,6 +30,7 @@ import (
 
 type common struct {
 	model, profile, policy, lock, preset, user string
+	store                                      string
 	dirs                                       multi
 	plugins                                    multi
 }
@@ -48,6 +49,7 @@ func (c *common) flags(fs *flag.FlagSet) {
 	fs.StringVar(&c.user, "user", "", "user id for runs")
 	fs.Var(&c.dirs, "plugins", "plugin directory (repeatable)")
 	fs.Var(&c.plugins, "use", "load a plugin by name (repeatable)")
+	fs.StringVar(&c.store, "store", "", "installed-plugin store to load enabled plugins from (eip plugin install)")
 }
 
 func (c *common) options() []eipagent.Option {
@@ -72,6 +74,14 @@ func (c *common) options() []eipagent.Option {
 	}
 	if c.user != "" {
 		o = append(o, eipagent.WithUser(c.user))
+	}
+	if c.store != "" {
+		st, err := openStore(c.store, nil, false)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "eip:", err)
+			os.Exit(1)
+		}
+		o = append(o, eipagent.WithPluginStore(st))
 	}
 	return append(o, eipagent.WithPreset(c.preset))
 }
@@ -226,35 +236,6 @@ func repl(ctx context.Context, args []string) error {
 		}
 	}
 	return nil
-}
-
-func pluginCmd(args []string) error {
-	if len(args) == 0 || args[0] != "pin" {
-		return fmt.Errorf("usage: eip plugin pin -plugins DIR [-lock eip.lock]")
-	}
-	fs := flag.NewFlagSet("pin", flag.ExitOnError)
-	var dirs multi
-	fs.Var(&dirs, "plugins", "plugin directory (repeatable)")
-	lockPath := fs.String("lock", "eip.lock", "lock file to write")
-	fs.Parse(args[1:])
-	lock := &engine.Lock{Plugins: map[string]string{}}
-	engine.ReadJSON(*lockPath, lock)
-	if lock.Plugins == nil {
-		lock.Plugins = map[string]string{}
-	}
-	for _, d := range dirs {
-		files, _ := filepath.Glob(filepath.Join(d, "*.go"))
-		for _, f := range files {
-			b, err := os.ReadFile(f)
-			if err != nil {
-				return err
-			}
-			name := strings.TrimSuffix(filepath.Base(f), ".go")
-			lock.Plugins[name] = engine.Hash(b)
-			fmt.Printf("pinned %-20s %s\n", name, lock.Plugins[name][:16])
-		}
-	}
-	return engine.WriteLock(*lockPath, lock)
 }
 
 func configCmd(args []string) error {

@@ -305,6 +305,7 @@ func (e *Engine) loadLocked(spec PluginSpec, admin bool) error {
 		}
 		return err // a broken edit never takes down the running version
 	}
+	wasActive := old != nil && old.state == Active
 	if old != nil {
 		rec.order = old.order
 		e.disposeLocked(old)
@@ -314,6 +315,16 @@ func (e *Engine) loadLocked(spec PluginSpec, admin bool) error {
 	}
 	e.recs[name] = rec
 	e.reconcileLocked()
+	if rec.state == Failed && wasActive {
+		// Safe replacement: a version that fails to start never takes
+		// down the one that was running. Bring the old one back.
+		failed := rec.err
+		old.state, old.err = Pending, nil
+		e.recs[name] = old
+		e.reconcileLocked()
+		e.logf("%s: new version failed, previous version restored", name)
+		return fmt.Errorf("%s: new version failed (previous version kept): %w", name, failed)
+	}
 	return rec.err
 }
 

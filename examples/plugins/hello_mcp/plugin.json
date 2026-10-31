@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "name": "hello_mcp",
+  "version": "0.1.0",
+  "description": "hello_mcp: an adapter exposing a remote HTTP tool API as tools",
+  "permissions": [
+    "net"
+  ],
+  "inject": [
+    "?secrets"
+  ],
+  "secrets": [
+    "hello_mcp_TOKEN"
+  ],
+  "eipagent": ">=0.2.0"
+}

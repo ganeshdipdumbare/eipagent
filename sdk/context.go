@@ -216,6 +216,9 @@ func (r *registry) service(name string) (any, bool) {
 
 func (c *Context) Service(name string) any {
 	v, _ := c.reg.service(name)
+	if s, ok := v.(*Secrets); ok && name == "secrets" && s != nil {
+		return c.boundSecrets(s)
+	}
 	return v
 }
 
@@ -245,6 +248,9 @@ func (c *Context) Services(prefix string) []string {
 // ---- Tools and skills ----
 
 func (c *Context) AddTool(t Tool) {
+	if t.Plugin == "" {
+		t.Plugin = c.PluginName()
+	}
 	r := c.reg
 	r.mu.Lock()
 	id := c.nextID()
@@ -296,7 +302,7 @@ func (c *Context) hook(kind string, fn any) {
 }
 
 func (c *Context) Logf(format string, args ...any) {
-	c.reg.log(c.Name, fmt.Sprintf(format, args...))
+	c.reg.log(c.Name, Redact(fmt.Sprintf(format, args...)))
 }
 
 // ConfigString / ConfigInt / ConfigBool read plugin config with defaults.

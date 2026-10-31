@@ -20,12 +20,18 @@ import (
 // Each line is {"body": {...}, "prev": "<hash>", "hash": sha256(prev + body)},
 // so removing or editing any line breaks the chain (eip audit verify).
 //
-// Records: plugin lifecycle (from the core), every model call (model,
-// tokens, user, thread), every tool call (name, args, outcome, approval
-// decision, duration), interrupts and policy denials.
+// Records: plugin lifecycle (from the core), secret access (from the
+// core), every model call (model, tokens, user, thread), every tool call
+// (name, args, outcome, approval decision, duration), interrupts and
+// policy denials. Every record has the standard fields of an audit
+// event (see SECURITY.md): run, thread, user, plugin, tool, provider...
+// Secret values are redacted from everything written.
 //
-// Config: path (".eipagent/audit.jsonl"), args (log tool args, true),
-// results (log tool results, false).
+// Each record is also handed to every "audit/sink/*" service (for
+// example audit_http), so a control plane gets the same chained stream.
+//
+// Config: path (".eipagent/audit.jsonl"; "-" keeps no local file),
+// args (log tool args, true), results (log tool results, false).
 var Permissions = []string{"fs:read", "fs:write"}
 
 func Apply(ctx *sdk.Context) error {
@@ -33,48 +39,70 @@ func Apply(ctx *sdk.Context) error {
 	p := ctx.ConfigString("path", ".eipagent/audit.jsonl")
 	logArgs := ctx.ConfigBool("args", true)
 	logResults := ctx.ConfigBool("results", false)
-	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
-		return err
-	}
 	prev := ""
 	seq := 0
-	if f, err := os.Open(p); err == nil { // continue an existing chain
-		sc := bufio.NewScanner(f)
-		sc.Buffer(make([]byte, 1024*1024), 64*1024*1024)
-		for sc.Scan() {
-			var line struct {
-				Hash string `json:"hash"`
-			}
-			if json.Unmarshal(sc.Bytes(), &line) == nil {
-				prev = line.Hash
-				seq++
-			}
+	var f *os.File
+	if p != "-" {
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			return err
 		}
-		f.Close()
+		if old, err := os.Open(p); err == nil { // continue an existing chain
+			sc := bufio.NewScanner(old)
+			sc.Buffer(make([]byte, 1024*1024), 64*1024*1024)
+			for sc.Scan() {
+				var line struct {
+					Hash string `json:"hash"`
+				}
+				if json.Unmarshal(sc.Bytes(), &line) == nil {
+					prev = line.Hash
+					seq++
+				}
+			}
+			old.Close()
+		}
+		nf, err := os.OpenFile(p, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+		if err != nil {
+			return err
+		}
+		f = nf
+		ctx.OnDispose(func() { f.Close() })
 	}
-	f, err := os.OpenFile(p, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
-	if err != nil {
-		return err
-	}
-	ctx.OnDispose(func() { f.Close() })
 	var mu sync.Mutex
 	record := func(kind string, data map[string]any) {
+		data = sdk.RedactMap(data)
 		mu.Lock()
-		defer mu.Unlock()
 		seq++
 		body, _ := json.Marshal(map[string]any{"seq": seq, "ts": time.Now().UTC().Format(time.RFC3339Nano), "type": kind, "data": data})
 		h := sha256.Sum256(append([]byte(prev), body...))
 		hash := hex.EncodeToString(h[:])
-		line := `{"body":` + string(body) + `,"prev":"` + prev + `","hash":"` + hash + `"}` + "\n"
-		f.WriteString(line)
-		f.Sync()
+		line := []byte(`{"body":` + string(body) + `,"prev":"` + prev + `","hash":"` + hash + `"}` + "\n")
+		if f != nil {
+			f.Write(line)
+			f.Sync()
+		}
 		prev = hash
+		for _, name := range ctx.Services("audit/sink/") { // in chain order; sinks only enqueue
+			if s, ok := ctx.Service(name).(*sdk.AuditSink); ok && s.Send != nil {
+				s.Send(line)
+			}
+		}
+		mu.Unlock()
+	}
+	// runFields are the standard fields every model / tool record carries.
+	runFields := func(st *sdk.RunState, thread, user string) map[string]any {
+		d := map[string]any{"thread": thread, "user": user}
+		if st != nil {
+			d["run"] = st.ID
+		}
+		return d
 	}
 
 	ctx.WrapModel(func(c context.Context, req *sdk.ModelRequest, next sdk.ModelHandler) (*sdk.ModelResponse, error) {
 		t := time.Now()
 		resp, err := next(c, req)
-		d := map[string]any{"model": req.Model, "user": req.User, "thread": req.Thread, "step": req.Step, "ms": time.Since(t).Milliseconds()}
+		d := runFields(req.Run, req.Thread, req.User)
+		provider, _ := sdk.SplitModel(req.Model)
+		d["model"], d["provider"], d["step"], d["ms"] = req.Model, provider, req.Step, time.Since(t).Milliseconds()
 		if err != nil {
 			d["error"] = err.Error()
 		} else {
@@ -86,7 +114,11 @@ func Apply(ctx *sdk.Context) error {
 	ctx.WrapTool(func(c context.Context, req *sdk.ToolRequest, next sdk.ToolHandler) (*sdk.ToolResult, error) {
 		t := time.Now()
 		r, err := next(c, req)
-		d := map[string]any{"tool": req.Call.Name, "call_id": req.Call.ID, "user": req.User, "thread": req.Thread, "ms": time.Since(t).Milliseconds()}
+		d := runFields(req.Run, req.Thread, req.User)
+		d["tool"], d["call_id"], d["step"], d["ms"] = req.Call.Name, req.Call.ID, req.Step, time.Since(t).Milliseconds()
+		if req.Tool != nil {
+			d["plugin"] = req.Tool.Plugin
+		}
 		if logArgs {
 			d["args"] = req.Call.Args
 		}

@@ -1,0 +1,384 @@
+package pluginpkg
+
+import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestTemplatesLintClean(t *testing.T) {
+	for _, kind := range TemplateNames() {
+		t.Run(kind, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "my_"+kind)
+			if _, err := Init(dir, "my_"+kind, kind); err != nil {
+				t.Fatal(err)
+			}
+			src, err := ReadDir(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r := Lint(src)
+			for _, i := range r.Issues {
+				t.Log(i)
+			}
+			if !r.OK() || r.State != StateValidated {
+				t.Fatalf("template %s does not validate: %v", kind, r.Err())
+			}
+			if _, _, err := Build(src, nil); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestInitRefusesOverwrite(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := Init(dir, "a", "tool"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Init(dir, "a", "tool"); err == nil {
+		t.Fatal("expected refusal to overwrite")
+	}
+}
+
+const goodSrc = `//go:build ignore
+
+package plugin
+
+import (
+	"context"
+
+	"eipagent/sdk"
+)
+
+// Greets people.
+var Inject = []string{"?secrets"}
+
+func Apply(ctx *sdk.Context) error {
+	ctx.AddTool(sdk.Tool{Name: "greet", Run: func(c context.Context, a map[string]any) (string, error) { return "hi", nil }})
+	return nil
+}
+`
+
+func source(name, code string, m *Manifest) *Source {
+	return &Source{Name: name, Manifest: m, Files: map[string][]byte{name + ".go": []byte(code)}}
+}
+
+func manifest(name string) *Manifest {
+	return &Manifest{Schema: 1, Name: name, Version: "1.0.0", Description: "test", Inject: []string{"?secrets"}, Tools: []string{"greet"}}
+}
+
+func rules(r *Report) map[string]Level {
+	out := map[string]Level{}
+	for _, i := range r.Issues {
+		if out[i.Rule] != Error {
+			out[i.Rule] = i.Level
+		}
+	}
+	return out
+}
+
+func TestLintRules(t *testing.T) {
+	cases := []struct {
+		name, code string
+		edit       func(*Manifest)
+		rule       string
+	}{
+		{"forbidden import", strings.Replace(goodSrc, `"context"`, "\"context\"\n\t\"unsafe\"", 1) + "\nvar _ = unsafe.Sizeof(0)\n", nil, "forbidden-import"},
+		{"missing net", strings.Replace(goodSrc, `"context"`, "\"context\"\n\t\"net/http\"", 1) + "\nvar _ = http.Get\n", nil, "permission-missing"},
+		{"os env without permission", strings.Replace(goodSrc, `"context"`, "\"context\"\n\t\"os\"", 1) + "\nvar home = os.Getenv(\"HOME\")\n", nil, "permission-missing"},
+		{"manifest permission mismatch", goodSrc, func(m *Manifest) { m.Permissions = []string{"net"} }, "permission-mismatch"},
+		{"undeclared service", strings.Replace(goodSrc, "return nil\n}", "_ = ctx.Service(\"store\")\n\treturn nil\n}", 1), nil, "undeclared-service"},
+		{"bad secret ref", strings.Replace(goodSrc, "return nil\n}", "_, _ = ctx.Secret(\"secret://bad name\")\n\treturn nil\n}", 1), nil, "secret-ref"},
+		{"undeclared secret", strings.Replace(goodSrc, "return nil\n}", "_, _ = ctx.Secret(\"secret://API_KEY\")\n\treturn nil\n}", 1), nil, "secret-ref"},
+		{"bad version", goodSrc, func(m *Manifest) { m.Version = "v1" }, "manifest"},
+		{"incompatible", goodSrc, func(m *Manifest) { m.EIPAgent = ">=99.0.0" }, "compat"},
+		{"tool not in manifest", goodSrc, func(m *Manifest) { m.Tools = nil }, "tools"},
+		{"inject mismatch", goodSrc, func(m *Manifest) { m.Inject = nil }, "inject-mismatch"},
+		{"no Apply", strings.Replace(goodSrc, "func Apply", "func apply", 1), nil, "source"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m := manifest("p")
+			if c.edit != nil {
+				c.edit(m)
+			}
+			r := Lint(source("p", c.code, m))
+			if rules(r)[c.rule] != Error {
+				t.Fatalf("want error %s, got %v", c.rule, r.Issues)
+			}
+			if r.State != StateDraft {
+				t.Fatalf("invalid plugin should stay DRAFT, got %s", r.State)
+			}
+		})
+	}
+	if r := Lint(source("p", goodSrc, manifest("p"))); !r.OK() {
+		t.Fatalf("good plugin: %v", r.Issues)
+	}
+}
+
+func TestCompatible(t *testing.T) {
+	for c, want := range map[string]bool{">=0.2.0": true, ">=0.2.0, <1.0.0": true, "<0.2.0": false, "^0.2.0": true, "^0.1.0": false, "~0.2.0": true, "0.2.5": true, "0.2.0": false, "*": true} {
+		got, err := Compatible(c, "0.2.5")
+		if err != nil || got != want {
+			t.Errorf("%q: got %v %v, want %v", c, got, err, want)
+		}
+	}
+}
+
+func buildPkg(t *testing.T, version, code string, signWith string) []byte {
+	t.Helper()
+	m := manifest("greet")
+	m.Version = version
+	var key []byte
+	_ = key
+	src := source("greet", code, m)
+	if signWith == "" {
+		b, _, err := Build(src, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	sk, err := ParsePrivateKey(signWith)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _, err := Build(src, sk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func TestPackageBuildOpenVerify(t *testing.T) {
+	pub, priv, err := GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, _ := TrustedKeys(pub)
+	signed := buildPkg(t, "1.0.0", goodSrc, priv)
+	if again := buildPkg(t, "1.0.0", goodSrc, priv); !bytes.Equal(signed, again) {
+		t.Fatal("build is not reproducible")
+	}
+	pkg, err := Open(signed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := Verify(pkg, VerifyOptions{TrustedKeys: keys, RequireSignature: true, SHA256: pkg.SHA256})
+	if err != nil || v.Signer == "" {
+		t.Fatalf("verify: %v %+v", err, v)
+	}
+	// Wrong pin.
+	if _, err := Verify(pkg, VerifyOptions{SHA256: strings.Repeat("0", 64)}); err == nil {
+		t.Fatal("pin mismatch accepted")
+	}
+	// Unsigned when signatures are required.
+	unsigned, _ := Open(buildPkg(t, "1.0.0", goodSrc, ""))
+	if _, err := Verify(unsigned, VerifyOptions{TrustedKeys: keys, RequireSignature: true}); err == nil {
+		t.Fatal("unsigned package accepted")
+	}
+	// Signed by someone else.
+	_, other, _ := GenerateKey()
+	foreign, _ := Open(buildPkg(t, "1.0.0", goodSrc, other))
+	if _, err := Verify(foreign, VerifyOptions{TrustedKeys: keys}); err == nil {
+		t.Fatal("untrusted signature accepted")
+	}
+	// Tampered source inside the archive.
+	if _, err := Open(rewrite(t, signed, "greet.go", []byte(strings.Replace(goodSrc, `"hi"`, `"pwned"`, 1)))); err == nil {
+		t.Fatal("tampered file accepted")
+	}
+	// Tampered manifest (escalating permissions) breaks the signature.
+	pm := *pkg.Manifest
+	pm.Permissions = []string{"exec"}
+	tm, err := Open(rewrite(t, signed, ManifestFile, pm.Encode()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Verify(tm, VerifyOptions{TrustedKeys: keys}); err == nil {
+		t.Fatal("tampered manifest accepted")
+	}
+}
+
+func TestOpenRejectsPathTraversal(t *testing.T) {
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	tw.WriteHeader(&tar.Header{Name: "../evil.go", Mode: 0o644, Size: 1, Typeflag: tar.TypeReg})
+	tw.Write([]byte("x"))
+	tw.Close()
+	gz.Close()
+	if _, err := Open(buf.Bytes()); err == nil || !strings.Contains(err.Error(), "unsafe") {
+		t.Fatalf("want unsafe name error, got %v", err)
+	}
+}
+
+// rewrite replaces one file in a package archive, keeping the rest.
+func rewrite(t *testing.T, data []byte, name string, content []byte) []byte {
+	t.Helper()
+	gz, _ := gzip.NewReader(bytes.NewReader(data))
+	tr := tar.NewReader(gz)
+	files := map[string][]byte{}
+	for {
+		h, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		b, _ := io.ReadAll(tr)
+		files[h.Name] = b
+	}
+	files[name] = content
+	out, err := writeArchive(files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+type fakeRuntime struct {
+	active map[string]string
+	fail   bool
+}
+
+func (f *fakeRuntime) Activate(name, hash string) error {
+	if f.fail {
+		return errors.New("boom")
+	}
+	f.active[name] = hash
+	return nil
+}
+func (f *fakeRuntime) Deactivate(name string) error { delete(f.active, name); return nil }
+
+func TestStoreLifecycle(t *testing.T) {
+	dir := t.TempDir()
+	rt := &fakeRuntime{active: map[string]string{}}
+	st, err := OpenStore(dir, StoreOptions{Runtime: rt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v1, err := st.Install(buildPkg(t, "1.0.0", goodSrc, ""), "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v1.State != StateValidated {
+		t.Fatalf("install should hold the version: %s", v1.State)
+	}
+	if err := st.Enable("greet", "1.0.0"); !errors.Is(err, ErrNotApproved) {
+		t.Fatalf("enable before approval: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(st.ActiveDir(), "greet.go")); err == nil {
+		t.Fatal("unapproved plugin is in the active dir")
+	}
+	must(t, st.Approve("greet", "1.0.0", "bob"))
+	must(t, st.Enable("greet", ""))
+	if rt.active["greet"] != v1.Source || st.Pins()["greet"] != v1.Source {
+		t.Fatal("not activated / pinned")
+	}
+	// Update: approved v2 replaces v1, v1 becomes the rollback target.
+	st.opts.AutoApprove = true
+	v2code := strings.Replace(goodSrc, `"hi"`, `"hello"`, 1)
+	v2, err := st.Update(buildPkg(t, "1.1.0", v2code, ""), "alice")
+	if err != nil || v2.State != StateActive {
+		t.Fatalf("update: %v %+v", err, v2)
+	}
+	p, _ := st.Get("greet")
+	if p.Active != "1.1.0" || p.Previous != "1.0.0" {
+		t.Fatalf("after update: %+v", p)
+	}
+	b, _ := os.ReadFile(filepath.Join(st.ActiveDir(), "greet.go"))
+	if !strings.Contains(string(b), "hello") {
+		t.Fatal("active source not updated")
+	}
+	// A failing update keeps the running version.
+	rt.fail = true
+	if _, err := st.Update(buildPkg(t, "1.2.0", strings.Replace(goodSrc, `"hi"`, `"bad"`, 1), ""), "alice"); err == nil {
+		t.Fatal("expected activation failure")
+	}
+	rt.fail = false
+	p, _ = st.Get("greet")
+	if p.Active != "1.1.0" || p.Versions["1.2.0"].State != StateFailed {
+		t.Fatalf("failed update changed state: active=%s 1.2.0=%s", p.Active, p.Versions["1.2.0"].State)
+	}
+	b, _ = os.ReadFile(filepath.Join(st.ActiveDir(), "greet.go"))
+	if !strings.Contains(string(b), "hello") {
+		t.Fatal("failed update left its source in the active dir")
+	}
+	// Rollback.
+	must(t, st.Rollback("greet"))
+	p, _ = st.Get("greet")
+	if p.Active != "1.0.0" || p.Versions["1.1.0"].State != StateApproved {
+		t.Fatalf("rollback: %+v", p)
+	}
+	// Quarantine the active version: it stops and can't be re-enabled.
+	must(t, st.Quarantine("greet", "1.0.0", "CVE-1234"))
+	if _, ok := rt.active["greet"]; ok {
+		t.Fatal("quarantined plugin still active")
+	}
+	if err := st.Enable("greet", "1.0.0"); !errors.Is(err, ErrNotApproved) {
+		t.Fatalf("enable quarantined: %v", err)
+	}
+	// State survives reopening.
+	st2, _ := OpenStore(dir, StoreOptions{})
+	p, _ = st2.Get("greet")
+	if p.Versions["1.0.0"].State != StateQuarantined || p.Versions["1.0.0"].Reason != "CVE-1234" {
+		t.Fatalf("reopened: %+v", p.Versions["1.0.0"])
+	}
+	// Tampering at rest is caught on enable.
+	must(t, st.Approve("greet", "1.1.0", "bob"))
+	pkgPath := filepath.Join(dir, "packages", "greet", "1.1.0.eip")
+	raw, _ := os.ReadFile(pkgPath)
+	os.WriteFile(pkgPath, rewrite(t, raw, "README.md", []byte("x")), 0o600)
+	if err := st.Enable("greet", "1.1.0"); err == nil {
+		t.Fatal("tampered stored package enabled")
+	}
+	p, _ = st.Get("greet")
+	if p.Versions["1.1.0"].State != StateQuarantined {
+		t.Fatalf("tampered version should be quarantined: %s", p.Versions["1.1.0"].State)
+	}
+	must(t, st.Uninstall("greet"))
+	if _, err := st.Get("greet"); !errors.Is(err, ErrNotFound) {
+		t.Fatal("uninstall left the plugin")
+	}
+}
+
+func TestStoreRefusesReservedAndUnsigned(t *testing.T) {
+	pub, _, _ := GenerateKey()
+	keys, _ := TrustedKeys(pub)
+	st, _ := OpenStore(t.TempDir(), StoreOptions{Reserved: []string{"greet"}})
+	if _, err := st.Install(buildPkg(t, "1.0.0", goodSrc, ""), "x"); err == nil {
+		t.Fatal("reserved name installed")
+	}
+	st, _ = OpenStore(t.TempDir(), StoreOptions{Verify: VerifyOptions{TrustedKeys: keys, RequireSignature: true}})
+	if _, err := st.Install(buildPkg(t, "1.0.0", goodSrc, ""), "x"); err == nil {
+		t.Fatal("unsigned installed in secure mode")
+	}
+}
+
+func must(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExamplePluginsValidate(t *testing.T) {
+	dirs, _ := filepath.Glob("../examples/plugins/*")
+	if len(dirs) < 7 {
+		t.Fatalf("expected the example plugins, found %v", dirs)
+	}
+	for _, d := range dirs {
+		src, err := ReadDir(d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r := Lint(src); !r.OK() {
+			t.Errorf("%s: %v", d, r.Err())
+		}
+	}
+}

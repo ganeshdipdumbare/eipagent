@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "name": "hello_provider",
+  "version": "0.1.0",
+  "description": "hello_provider: an LLM provider for an OpenAI-compatible HTTP API",
+  "permissions": [
+    "net"
+  ],
+  "inject": [
+    "?secrets"
+  ],
+  "provides": [
+    "llm/hello_provider"
+  ],
+  "secrets": [
+    "hello_provider_API_KEY"
+  ],
+  "eipagent": ">=0.2.0"
+}

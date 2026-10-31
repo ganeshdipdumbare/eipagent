@@ -502,6 +502,19 @@ func Apply(ctx *sdk.Context) error {
 
 The full guide, including the Yaegi pitfalls, is in [PLUGINS.md](PLUGINS.md). See also [`examples/custom-plugin`](examples/custom-plugin).
 
+### Ship plugins: scaffold, validate, sign, install
+
+```bash
+eip plugin init -template tool weather           # tool, middleware, provider, store, mcp, sandbox, webhook
+eip plugin validate weather                      # lint: imports vs permissions, services, secrets, manifest, compile
+eip plugin build -key signing.key weather        # signed, hashed weather-0.1.0.eip
+eip plugin install weather-0.1.0.eip             # verified and held (VALIDATED)
+eip plugin approve weather 0.1.0                 # APPROVED
+eip plugin enable weather                        # ACTIVE; update / rollback / quarantine / uninstall too
+```
+
+In Go, `eipagent.WithPluginStore(st)` attaches a `pluginpkg.Store` to a running agent, and enable, update and rollback swap plugins live. A version that fails to start never replaces the running one. Examples for every template are in [`examples/plugins`](examples/plugins), and [`examples/plugin-store`](examples/plugin-store) walks the whole lifecycle.
+
 ### Standard plugins (embedded in the binary)
 
 | Area | Plugins |
@@ -513,8 +526,8 @@ The full guide, including the Yaegi pitfalls, is in [PLUGINS.md](PLUGINS.md). Se
 | Tools | `tool_shell`, `tool_fs`, `tool_http_fetch`, `tool_time` |
 | Sandboxes | `sandbox_local`, `sandbox_docker`, `exec_local`, `exec_sandbox`, `tool_sandbox` |
 | Integrations | `mcp_client`, `agents`, `skills_dir` |
-| Ops | `jobs`, `trigger_webhook`, `trace_file` |
-| Security | `policy`, `audit_jsonl`, `secrets_env` |
+| Ops | `jobs`, `trigger_webhook`, `trace_file`, `trace_otlp` |
+| Security | `policy`, `audit_jsonl`, `audit_http`, `secrets_env`, `secrets_vault` |
 
 A model string `provider:model` loads the matching provider automatically. The prefixes are `openai`, `deepseek`, `anthropic`, `gemini`/`google`, `ollama`, `openrouter`, `groq` and `mock`.
 
@@ -587,7 +600,7 @@ Runs one prompt headless. Add `-json` or `-thread ID`.
 go run ./cmd/eip plugin pin -plugins ./plugins -lock eip.lock
 ```
 
-Pins plugin sources for the secure preset.
+Pins plugin sources for the secure preset. `eip plugin help` lists the authoring commands (`init`, `validate`, `build`, `inspect`, `keygen`) and the store lifecycle (`install`, `approve`, `enable`, `disable`, `update`, `rollback`, `quarantine`, `uninstall`, `list`). Add `-store DIR` to `run`, `repl` or `serve` to load a store's enabled plugins.
 
 ```bash
 go run ./cmd/eip trace view .eipagent/trace.jsonl > trace.html
@@ -623,16 +636,18 @@ Shows the policy and every plugin's state.
 - jobs and webhooks
 - the CLI
 - the lifecycle guarantees described above
+- plugin manifests, linting, signed packages, and the install / approve / enable / update / rollback / quarantine lifecycle
+- secret redaction, caller-bound secrets and `secret.access` auditing
+- `secrets_vault`, `audit_http`, `trace_otlp`
 
 **Not yet built:**
 
 - agent teams (a shared task board)
 - creator mode (the agent writes plugins into quarantine)
-- `eip plugin install` and bundles
+- bundles (several plugins in one package) and a remote registry source
+- running a single untrusted plugin out of process, in its own sandbox
+- a KMS-backed secrets provider (write one against `sdk.Secrets`)
 - runtime plugin management inside a `WithRunIn` box
-- `secrets_vault`
-- `audit_http`
-- `trace_otlp`
 - `jobs_sql`
 - `eip serve --http`
 - a microsandbox adapter (microsandbox has no local server API)
