@@ -12,7 +12,7 @@
   - Each plugin gets only the secrets granted to it.
   - Sandboxes are pluggable, and the agent can run inside one.
 
-**Docs:** open [`docs/index.html`](docs/index.html) in a browser for the full guide, with examples, lifecycles and reference.
+**Docs:** https://eipagent-docs.vercel.app has the full guide, with examples, lifecycles and reference. The source is `docs/site.html`; run `docs/build.sh` to regenerate `docs/public/index.html`, then deploy with `vercel deploy --prod` from `docs/public`.
 
 Requires **Go 1.27**. The module is private for now, so use it from a checkout of this repo, or with `replace eipagent => /path/to/eipagent` in your `go.mod`.
 

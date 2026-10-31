@@ -3,3 +3,4 @@
 # built binaries
 /eip
 *.test
+.vercel
