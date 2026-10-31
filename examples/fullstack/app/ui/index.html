@@ -1,0 +1,619 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Acme Support Desk</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: support console — 56px top bar; conversations rail (264px) | chat column | supervisor console (380px). Monochrome Geist palette; amber is reserved for "waiting on a human", green for done, red for refused. */
+:root {
+  --bg: #ffffff; --bg-2: #fafafa; --bg-3: #f4f4f5; --fg: #18181b; --fg-2: #52525b; --fg-3: #a1a1aa;
+  --line: #ececee; --line-2: #e0e0e3; --accent: #0b8eb3;
+  --ok: #15803d; --ok-bg: #ecfdf3; --wait: #b45309; --wait-bg: #fffbeb; --bad: #be123c; --bad-bg: #fff1f2;
+  --bubble: #18181b; --bubble-fg: #fafafa;
+  --shadow: 0 1px 2px rgba(0,0,0,.04), 0 6px 24px rgba(0,0,0,.06);
+  --f-sans: "Geist", ui-sans-serif, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  --f-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0a0a0b; --bg-2: #111113; --bg-3: #18181b; --fg: #f4f4f5; --fg-2: #a1a1aa; --fg-3: #63636b;
+  --line: #1f1f23; --line-2: #2c2c31; --accent: #3cc8ec;
+  --ok: #4ade80; --ok-bg: #0c1f14; --wait: #fbbf24; --wait-bg: #221a08; --bad: #fb7185; --bad-bg: #2a0f16;
+  --bubble: #f4f4f5; --bubble-fg: #0a0a0b; --shadow: 0 1px 2px rgba(0,0,0,.5), 0 8px 28px rgba(0,0,0,.5);
+  color-scheme: dark;
+} }
+:root[data-theme="dark"] {
+  --bg: #0a0a0b; --bg-2: #111113; --bg-3: #18181b; --fg: #f4f4f5; --fg-2: #a1a1aa; --fg-3: #63636b;
+  --line: #1f1f23; --line-2: #2c2c31; --accent: #3cc8ec;
+  --ok: #4ade80; --ok-bg: #0c1f14; --wait: #fbbf24; --wait-bg: #221a08; --bad: #fb7185; --bad-bg: #2a0f16;
+  --bubble: #f4f4f5; --bubble-fg: #0a0a0b; --shadow: 0 1px 2px rgba(0,0,0,.5), 0 8px 28px rgba(0,0,0,.5);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.6 var(--f-sans); -webkit-font-smoothing: antialiased; overflow: hidden; }
+button, input, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+code, .mono { font-family: var(--f-mono); }
+
+.app { display: grid; grid-template-rows: 56px minmax(0, 1fr); grid-template-columns: minmax(0, 1fr); height: 100%; padding-top: env(safe-area-inset-top, 0px); }
+.top { display: flex; align-items: center; gap: 14px; border-bottom: 1px solid var(--line); min-width: 0;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 600; letter-spacing: -0.01em; white-space: nowrap; }
+.brand .logo { width: 26px; height: 26px; border-radius: 7px; background: var(--fg); color: var(--bg); display: grid; place-items: center; font: 700 13px var(--f-sans); }
+.pill { font: 500 11.5px/1 var(--f-sans); color: var(--fg-2); border: 1px solid var(--line-2); border-radius: 999px; padding: 5px 9px; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; }
+.pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); }
+.pill.replay .dot { background: var(--accent); }
+.grow { flex: 1; }
+.seg { display: inline-flex; border: 1px solid var(--line-2); border-radius: 9px; padding: 2px; background: var(--bg-2); }
+.seg button { border: 0; background: none; padding: 5px 10px; border-radius: 7px; cursor: pointer; color: var(--fg-2); display: inline-flex; align-items: center; gap: 7px; font-size: 13px; white-space: nowrap; }
+.seg button[aria-pressed="true"] { background: var(--bg); color: var(--fg); box-shadow: 0 1px 2px rgba(0,0,0,.08); font-weight: 500; }
+.avatar { width: 20px; height: 20px; border-radius: 50%; display: inline-grid; place-items: center; font: 600 10px var(--f-sans); color: #fff; flex: none; }
+.av-sam { background: #4f6bed; } .av-ada { background: #c2410c; } .av-bot { background: var(--fg); color: var(--bg); }
+.iconbtn { width: 34px; height: 34px; display: inline-grid; place-items: center; border: 1px solid var(--line-2); border-radius: 8px; background: var(--bg); cursor: pointer; color: var(--fg-2); }
+.iconbtn:hover { color: var(--fg); }
+.iconbtn svg { width: 16px; height: 16px; }
+
+.main { display: grid; grid-template-columns: 264px minmax(0, 1fr) 380px; min-height: 0; min-width: 0; }
+/* left rail */
+.rail { border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--bg-2); }
+.rail .head { padding: 14px; }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 34px; padding: 0 14px; border-radius: 8px; border: 1px solid var(--line-2); background: var(--bg); cursor: pointer; font-weight: 500; font-size: 13.5px; white-space: nowrap; }
+.btn:hover:not(:disabled) { background: var(--bg-3); }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn.primary { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.btn.primary:hover:not(:disabled) { background: var(--fg); opacity: .88; }
+.btn.ok { background: var(--ok); border-color: var(--ok); color: var(--bg); }
+.btn.danger { color: var(--bad); }
+.btn.wide { width: 100%; }
+.list { overflow-y: auto; padding: 0 8px 12px; flex: 1; }
+.list h6 { margin: 10px 8px 6px; font: 500 11.5px var(--f-sans); text-transform: uppercase; letter-spacing: .06em; color: var(--fg-3); }
+.conv { display: block; width: 100%; text-align: left; border: 0; background: none; padding: 9px 10px; border-radius: 8px; cursor: pointer; }
+.conv:hover { background: var(--bg-3); }
+.conv[aria-current="true"] { background: var(--bg); box-shadow: inset 0 0 0 1px var(--line-2); }
+.conv .t { display: block; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--fg); }
+.conv .s { display: flex; align-items: center; gap: 6px; margin-top: 3px; font-size: 12px; color: var(--fg-3); }
+.tag { display: inline-flex; align-items: center; gap: 5px; font: 500 11px/1 var(--f-sans); padding: 4px 7px; border-radius: 999px; }
+.tag.wait { color: var(--wait); background: var(--wait-bg); }
+.tag.ok { color: var(--ok); background: var(--ok-bg); }
+.tag.bad { color: var(--bad); background: var(--bad-bg); }
+.rail .foot { padding: 12px 14px; border-top: 1px solid var(--line); font-size: 12px; color: var(--fg-3); }
+.rail .foot b { color: var(--fg-2); font-weight: 500; }
+.empty-rail { padding: 10px; color: var(--fg-3); font-size: 13px; }
+
+/* chat */
+.chat { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; grid-template-columns: minmax(0, 1fr); min-height: 0; min-width: 0; }
+.chathead { display: flex; align-items: center; gap: 10px; padding: 12px 24px; border-bottom: 1px solid var(--line); min-height: 52px; }
+.chathead h2 { margin: 0; font-size: 14.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.scroll { overflow-y: auto; overflow-x: hidden; padding: 24px; min-width: 0; }
+.msgs { max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.hello { max-width: 560px; margin: 8vh auto 0; text-align: center; }
+.hello h1 { font-size: 26px; letter-spacing: -0.03em; margin: 0 0 8px; font-weight: 600; }
+.hello p { color: var(--fg-2); margin: 0 0 22px; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+.chip { border: 1px solid var(--line-2); background: var(--bg); border-radius: 999px; padding: 7px 12px; cursor: pointer; font-size: 13px; color: var(--fg-2); text-align: left; }
+.chip:hover:not(:disabled) { color: var(--fg); border-color: var(--fg-3); }
+.chip:disabled { opacity: .4; cursor: default; }
+.chip b { color: var(--fg); font-weight: 500; }
+.row { display: flex; gap: 10px; align-items: flex-start; }
+.row.user { justify-content: flex-end; }
+.bubble { max-width: 78%; padding: 10px 14px; border-radius: 16px; line-height: 1.55; overflow-wrap: anywhere; }
+.row.user .bubble { background: var(--bubble); color: var(--bubble-fg); border-bottom-right-radius: 6px; }
+.row.bot .bubble { background: var(--bg-2); border: 1px solid var(--line); border-bottom-left-radius: 6px; }
+.row.bot .avatar { width: 26px; height: 26px; font-size: 11px; margin-top: 2px; }
+.caret { display: inline-block; width: 7px; height: 14px; background: var(--fg-3); vertical-align: -2px; margin-left: 2px; animation: blink 1s steps(2) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+.toolcard { margin-left: 36px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); overflow: hidden; }
+.toolcard summary { list-style: none; display: flex; align-items: center; gap: 10px; padding: 9px 12px; cursor: pointer; font-size: 13px; }
+.toolcard summary::-webkit-details-marker { display: none; }
+.toolcard .name { font: 500 12.5px var(--f-mono); }
+.toolcard .args { color: var(--fg-3); font: 12px var(--f-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; }
+.toolcard .state { margin-left: auto; flex: none; }
+.toolcard .body { border-top: 1px solid var(--line); padding: 10px 12px; font: 12px/1.6 var(--f-mono); color: var(--fg-2); background: var(--bg-2); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow-y: auto; }
+.toolcard .body b { font-family: var(--f-sans); font-weight: 500; color: var(--fg-3); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; display: block; margin: 6px 0 2px; }
+.toolcard .body b:first-child { margin-top: 0; }
+.spin { width: 14px; height: 14px; border: 2px solid var(--line-2); border-top-color: var(--fg-2); border-radius: 50%; animation: spin .8s linear infinite; display: inline-block; vertical-align: -3px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.approval { margin-left: 36px; border: 1px solid color-mix(in srgb, var(--wait) 45%, var(--line-2)); background: var(--wait-bg); border-radius: 14px; padding: 14px 16px; }
+.approval.done { border-color: var(--line); background: var(--bg-2); }
+.approval h4 { margin: 0 0 4px; font-size: 14px; display: flex; align-items: center; gap: 8px; }
+.approval p { margin: 0 0 10px; color: var(--fg-2); }
+.approval dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 14px; margin: 0 0 12px; font-size: 13px; }
+.approval dt { color: var(--fg-3); }
+.approval dd { margin: 0; font-family: var(--f-mono); font-size: 12.5px; overflow-wrap: anywhere; }
+.approval .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.approval input { height: 34px; border: 1px solid var(--line-2); border-radius: 8px; padding: 0 10px; background: var(--bg); min-width: 0; }
+.approval input.amt { width: 110px; }
+.approval input.why { flex: 1; min-width: 180px; }
+.approval .hint { font-size: 12.5px; color: var(--fg-2); display: flex; align-items: center; gap: 8px; }
+.sysline { text-align: center; font-size: 12px; color: var(--fg-3); }
+.err { border: 1px solid color-mix(in srgb, var(--bad) 40%, var(--line)); background: var(--bad-bg); color: var(--bad); border-radius: 10px; padding: 10px 12px; font-size: 13px; }
+.composer { border-top: 1px solid var(--line); padding: 14px 24px calc(14px + env(safe-area-inset-bottom, 0px)); min-width: 0; }
+.composer .in { max-width: 720px; margin: 0 auto; min-width: 0; }
+.composer .chips { justify-content: flex-start; flex-wrap: nowrap; overflow-x: auto; margin-bottom: 10px; padding-bottom: 2px; scrollbar-width: thin; }
+.composer .chip { white-space: nowrap; flex: none; }
+.box { display: flex; gap: 8px; align-items: flex-end; border: 1px solid var(--line-2); border-radius: 14px; padding: 8px 8px 8px 14px; background: var(--bg); box-shadow: var(--shadow); }
+.box textarea { flex: 1; border: 0; outline: none; resize: none; background: none; min-height: 24px; max-height: 140px; padding: 6px 0; line-height: 1.5; }
+.composer small { display: block; color: var(--fg-3); font-size: 12px; margin-top: 8px; }
+
+/* console */
+.console { border-left: 1px solid var(--line); display: grid; grid-template-rows: auto minmax(0, 1fr); grid-template-columns: minmax(0, 1fr); min-height: 0; min-width: 0; background: var(--bg-2); }
+.tabs { display: flex; gap: 2px; padding: 0 10px; border-bottom: 1px solid var(--line); height: 52px; align-items: stretch; overflow-x: auto; }
+.tabs button { border: 0; background: none; padding: 0 9px; font-size: 13px; font-weight: 500; color: var(--fg-3); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.tabs button[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--fg); }
+.count { font: 600 11px/1 var(--f-sans); background: var(--wait); color: var(--bg); border-radius: 999px; padding: 3px 6px; }
+.count[hidden] { display: none; }
+.pane { overflow-y: auto; padding: 14px; }
+.pane[hidden] { display: none; }
+.pane .intro { color: var(--fg-2); font-size: 12.5px; margin: 0 0 12px; }
+.item { border: 1px solid var(--line); background: var(--bg); border-radius: 12px; padding: 12px; margin-bottom: 10px; }
+.item .top2 { display: flex; align-items: center; gap: 8px; justify-content: space-between; margin-bottom: 6px; }
+.item h5 { margin: 0; font-size: 13.5px; font-weight: 500; }
+.item p { margin: 0 0 8px; color: var(--fg-2); font-size: 12.5px; }
+.item .meta { font: 12px var(--f-mono); color: var(--fg-3); }
+.feed { list-style: none; margin: 0; padding: 0; }
+.feed li { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; gap: 10px; padding: 9px 2px; border-bottom: 1px solid var(--line); font-size: 12.5px; }
+.feed .ic { width: 8px; height: 8px; border-radius: 50%; margin-top: 6px; background: var(--fg-3); }
+.feed .ic.ok { background: var(--ok); } .feed .ic.wait { background: var(--wait); } .feed .ic.bad { background: var(--bad); } .feed .ic.info { background: var(--accent); }
+.feed .what { color: var(--fg); }
+.feed .why { color: var(--fg-3); font-size: 12px; overflow-wrap: anywhere; }
+.feed .h { font: 11px var(--f-mono); color: var(--fg-3); }
+.chain { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); margin-bottom: 12px; font-size: 12.5px; }
+table { width: 100%; border-collapse: collapse; font-size: 12.5px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--fg-3); font-weight: 500; background: var(--bg-2); }
+tr:last-child td { border-bottom: 0; }
+.ev { font: 12px/1.5 var(--f-mono); border-bottom: 1px solid var(--line); padding: 8px 2px; overflow-wrap: anywhere; }
+.ev b { font-weight: 500; color: var(--fg); }
+.ev span { color: var(--fg-3); }
+.ev mark { background: var(--wait-bg); color: var(--wait); padding: 0 3px; border-radius: 4px; }
+.none { color: var(--fg-3); font-size: 13px; text-align: center; padding: 28px 10px; }
+.banner { margin: 0 0 12px; font-size: 12.5px; color: var(--fg-2); padding: 10px 12px; border-radius: 10px; border: 1px dashed var(--line-2); }
+
+@media (max-width: 1180px) { .main { grid-template-columns: 240px minmax(0, 1fr) 330px; } }
+@media (max-width: 960px) {
+  body { overflow: auto; }
+  .app { height: auto; min-height: 100%; }
+  .main { grid-template-columns: minmax(0, 1fr); }
+  .rail { border-right: 0; border-bottom: 1px solid var(--line); }
+  .list { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 10px; }
+  .list h6 { display: none; }
+  .conv { min-width: 200px; }
+  .rail .foot { display: none; }
+  .chat { min-height: 70vh; }
+  .console { border-left: 0; border-top: 1px solid var(--line); min-height: 420px; }
+  .top .pill.model { display: none; }
+}
+@media (max-width: 560px) {
+  .brand span.name { display: none; }
+  .seg button span:not(.avatar) { display: none; }
+  .scroll, .chathead { padding-left: 16px; padding-right: 16px; }
+  .composer { padding-left: 16px; padding-right: 16px; }
+  .toolcard, .approval { margin-left: 0; }
+  .bubble { max-width: 92%; }
+}
+@media (max-width: 420px) { #mode { display: none; } .top { gap: 10px; } }
+@media (prefers-reduced-motion: reduce) { .caret, .spin { animation: none; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="brand"><span class="logo">A</span><span class="name">Acme Support Desk</span></div>
+    <span class="pill" id="mode"><span class="dot"></span><span id="modetext">Connecting…</span></span>
+    <span class="pill model mono" id="model" hidden></span>
+    <span class="grow"></span>
+    <div class="seg" role="group" aria-label="Signed in as">
+      <button type="button" data-user="sam" aria-pressed="true"><span class="avatar av-sam">SR</span><span>Sam · Agent</span></button>
+      <button type="button" data-user="ada" aria-pressed="false"><span class="avatar av-ada">AO</span><span>Ada · Supervisor</span></button>
+    </div>
+    <button class="iconbtn" id="theme" type="button" aria-label="Toggle dark mode"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button>
+  </header>
+
+  <div class="main">
+    <aside class="rail" aria-label="Conversations">
+      <div class="head"><button class="btn primary wide" id="newconv" type="button">+ New conversation</button></div>
+      <div class="list" id="convs"><h6>Conversations</h6></div>
+      <div class="foot">Refunds above <b id="limit">$50</b> need a supervisor. Emails always need approval.</div>
+    </aside>
+
+    <section class="chat" aria-label="Conversation">
+      <div class="chathead"><span class="avatar av-bot">✦</span><h2 id="title">New conversation</h2><span class="grow"></span><span id="threadtag"></span></div>
+      <div class="scroll" id="scroll"><div class="msgs" id="msgs"></div></div>
+      <div class="composer">
+        <div class="in">
+          <div class="chips" id="chips"></div>
+          <form class="box" id="form">
+            <textarea id="input" rows="1" placeholder="Write as the customer…" aria-label="Message"></textarea>
+            <button class="btn primary" id="send" type="submit">Send</button>
+          </form>
+          <small id="composehint">Messages are written as the customer. The assistant answers using Acme's tools.</small>
+        </div>
+      </div>
+    </section>
+
+    <aside class="console" aria-label="Supervisor console">
+      <div class="tabs" role="tablist">
+        <button role="tab" aria-selected="true" data-tab="approvals">Approvals <span class="count" id="appcount" hidden>0</span></button>
+        <button role="tab" aria-selected="false" data-tab="activity">Audit trail</button>
+        <button role="tab" aria-selected="false" data-tab="orders">Orders</button>
+        <button role="tab" aria-selected="false" data-tab="hood">Under the hood</button>
+      </div>
+      <div class="pane" id="pane-approvals"></div>
+      <div class="pane" id="pane-activity" hidden></div>
+      <div class="pane" id="pane-orders" hidden></div>
+      <div class="pane" id="pane-hood" hidden></div>
+    </aside>
+  </div>
+</div>
+
+<script src="recording.js" onerror="void 0"></script>
+<script>
+(function () {
+  "use strict";
+  var $ = function (s) { return document.querySelector(s); };
+  var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); };
+  var md = function (s) { return esc(s).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/\n/g, "<br>"); };
+  var money = function (n) { return "$" + Number(n).toFixed(2); };
+  var USERS = { sam: { name: "Sam Rivera", role: "agent" }, ada: { name: "Ada Okafor", role: "supervisor" } };
+  var PROMPTS = [
+    { label: "Track an order", text: "Where is my order #1077?" },
+    { label: "Small refund (automatic)", text: "My mug from order #1042 arrived broken. Can I get a refund?" },
+    { label: "Large refund (needs a supervisor)", text: "My headphones from order #1077 never arrived. I'd like a refund." },
+    { label: "Email with a card number (redacted + approval)", text: "Please email me the receipt for order #1120. My card is 4111 1111 1111 1111 if you need it." },
+    { label: "Policy question", text: "What's your return policy?" }
+  ];
+  var state = { user: "sam", thread: null, busy: false, live: false, replay: null, hood: [] };
+
+  // ---------------------------------------------------------------- API
+  // Live mode talks to the Go backend. Replay mode (no backend, e.g. on
+  // the docs website) plays runs recorded from that backend.
+  var api = {
+    get: function (path) { return fetch(path).then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); }); },
+    stream: function (path, body, onEvent) {
+      return fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then(function (r) {
+        if (!r.ok) return r.json().then(function (j) { throw new Error(j.error || r.status); });
+        var reader = r.body.getReader(), dec = new TextDecoder(), buf = "";
+        function pump() {
+          return reader.read().then(function (x) {
+            if (x.done) return;
+            buf += dec.decode(x.value, { stream: true });
+            var parts = buf.split("\n\n"); buf = parts.pop();
+            parts.forEach(function (p) { var line = p.split("\n").filter(function (l) { return l.indexOf("data: ") === 0; })[0]; if (line) onEvent(JSON.parse(line.slice(6))); });
+            return pump();
+          });
+        }
+        return pump();
+      });
+    }
+  };
+
+  var replay = {
+    scenes: [], scene: null, snap: null, branch: null,
+    start: function (rec) {
+      this.scenes = rec.scenes; this.snap = rec.empty;
+    },
+    sceneFor: function (text) { return this.scenes.filter(function (s) { return s.text === text; })[0]; },
+    play: function (events, onEvent) {
+      var i = 0, speed = 1;
+      return new Promise(function (resolve) {
+        function next() {
+          if (i >= events.length) return resolve();
+          var ev = events[i++];
+          setTimeout(function () { onEvent(ev[1]); next(); }, Math.min(ev[0] * speed, 700));
+        }
+        next();
+      });
+    },
+    message: function (thread, text, onEvent) {
+      var s = this.sceneFor(text);
+      if (!s) return Promise.reject(new Error("In replay mode, pick one of the suggested messages. Run the demo locally to chat freely."));
+      this.scene = s; this.branch = null;
+      var self = this;
+      return this.play(s.events, onEvent).then(function () { self.snap = s.after; });
+    },
+    decide: function (thread, decision, onEvent) {
+      var s = this.scene, b = s && s.branches && s.branches[decision.Type];
+      if (!b) return Promise.reject(new Error("This decision wasn't recorded. Run the demo locally to try it."));
+      this.branch = b;
+      var self = this;
+      return this.play(b.events, onEvent).then(function () { self.snap = b.after; });
+    }
+  };
+
+  function backend() {
+    return api.get("api/health").then(function (h) { state.live = true; return h; }).catch(function () {
+      if (window.EIP_RECORDING) { state.replay = window.EIP_RECORDING; replay.start(state.replay); return { mode: "replay", model: state.replay.model, refund_limit: state.replay.refund_limit }; }
+      return { mode: "offline" };
+    });
+  }
+  function load(kind, thread) {
+    if (state.live) {
+      var path = { threads: "api/threads", thread: "api/threads/" + thread, approvals: "api/approvals", audit: "api/audit", orders: "api/orders" }[kind];
+      return api.get(path);
+    }
+    var s = replay.snap || {};
+    if (kind === "thread") return Promise.resolve((s.threads_full || {})[thread] || { id: thread, messages: [], pending: [] });
+    return Promise.resolve(s[kind] || {});
+  }
+
+  // ------------------------------------------------------------- render
+  var msgs = $("#msgs"), scroll = $("#scroll");
+  var cards = {}; // tool call id -> card element
+  var botBubble = null;
+  function toBottom() { scroll.scrollTop = scroll.scrollHeight; }
+
+  function hello() {
+    msgs.innerHTML = '<div class="hello"><h1>How can we help?</h1><p>You are writing as an Acme customer. Pick a scenario or type your own message.</p><div class="chips" id="hellochips"></div></div>';
+    PROMPTS.forEach(function (p) { $("#hellochips").appendChild(chip(p)); });
+  }
+  function chip(p) {
+    var b = document.createElement("button");
+    b.type = "button"; b.className = "chip"; b.innerHTML = "<b>" + esc(p.label) + "</b> · " + esc(p.text.length > 46 ? p.text.slice(0, 46) + "…" : p.text);
+    b.addEventListener("click", function () { if (!state.busy) send(p.text); });
+    return b;
+  }
+  function renderChips() {
+    var c = $("#chips"); c.innerHTML = "";
+    if (msgs.querySelector(".hello")) return;
+    PROMPTS.forEach(function (p) { var b = chip(p); b.innerHTML = esc(p.label); b.title = p.text; c.appendChild(b); });
+  }
+  function addUser(text) {
+    var hello = msgs.querySelector(".hello"); if (hello) hello.remove();
+    msgs.insertAdjacentHTML("beforeend", '<div class="row user"><div class="bubble">' + esc(text) + "</div></div>");
+    botBubble = null; toBottom();
+  }
+  function addBotText(text, streaming) {
+    if (!botBubble) {
+      msgs.insertAdjacentHTML("beforeend", '<div class="row bot"><span class="avatar av-bot">✦</span><div class="bubble"><span class="t"></span></div></div>');
+      botBubble = msgs.lastElementChild.querySelector(".bubble");
+      botBubble.dataset.raw = "";
+    }
+    botBubble.dataset.raw += text;
+    botBubble.innerHTML = md(botBubble.dataset.raw) + (streaming ? '<span class="caret"></span>' : "");
+    toBottom();
+  }
+  function endBotText() { if (botBubble) { botBubble.innerHTML = md(botBubble.dataset.raw); } botBubble = null; }
+  function argsLine(a) { return Object.keys(a || {}).map(function (k) { var v = a[k]; return k + "=" + (typeof v === "string" ? JSON.stringify(v.length > 40 ? v.slice(0, 40) + "…" : v) : JSON.stringify(v)); }).join("  "); }
+  function stateTag(kind) {
+    return { run: '<span class="spin" aria-label="Running"></span>', ok: '<span class="tag ok">done</span>', bad: '<span class="tag bad">refused</span>', err: '<span class="tag bad">error</span>', wait: '<span class="tag wait">waiting for approval</span>' }[kind];
+  }
+  function addTool(call, kind, result) {
+    endBotText();
+    var d = document.createElement("details");
+    d.className = "toolcard";
+    d.innerHTML = '<summary><span class="name">' + esc(call.Name || call.name || call.tool) + '</span><span class="args">' + esc(argsLine(call.Args || call.args)) + '</span><span class="state">' + stateTag(kind) + '</span></summary><div class="body"><b>Arguments</b>' + esc(JSON.stringify(call.Args || call.args || {}, null, 2)) + '<span class="res"></span></div>';
+    msgs.appendChild(d);
+    var id = call.ID || call.id || call.call_id;
+    cards[id] = d;
+    if (result != null) setToolResult(id, result, kind);
+    toBottom();
+    return d;
+  }
+  function setToolResult(id, result, kind) {
+    var d = cards[id]; if (!d) return;
+    d.querySelector(".state").innerHTML = stateTag(kind);
+    var r = result;
+    try { r = JSON.stringify(JSON.parse(result), null, 2); } catch (e) {}
+    d.querySelector(".res").innerHTML = "<b>Result</b>" + esc(r);
+  }
+  function addApproval(thread, it) {
+    endBotText();
+    var call = it.ToolCall || {}, args = call.Args || {}, sup = USERS[state.user].role === "supervisor";
+    var isRefund = it.Kind === "refund_approval";
+    var el = document.createElement("div");
+    el.className = "approval"; el.dataset.id = it.ID;
+    var rows = Object.keys(args).map(function (k) { return "<dt>" + esc(k) + "</dt><dd>" + esc(typeof args[k] === "number" && isRefund && k === "amount" ? money(args[k]) : args[k]) + "</dd>"; }).join("");
+    var rec = state.replay && replay.scene && replay.scene.branches ? replay.scene.branches : null;
+    var editVal = rec && rec.edit ? rec.edit.decision.Args.amount : (args.amount ? (args.amount / 2).toFixed(2) : "");
+    var whyVal = rec && rec.reject ? rec.reject.decision.Message : "";
+    el.innerHTML = '<h4><span class="tag wait">Paused</span>' + (isRefund ? "Refund needs a supervisor" : "Email needs approval") + "</h4>" +
+      "<p>" + esc(it.Message) + " The run is saved; nothing happens until someone decides.</p><dl>" + rows + "</dl>" +
+      (sup ? '<div class="actions">' +
+        '<button class="btn ok" type="button" data-d="approve">Approve</button>' +
+        (isRefund ? '<input class="amt" type="number" step="0.01" min="0" value="' + esc(editVal) + '" aria-label="Refund amount"' + (rec ? " readonly" : "") + '><button class="btn" type="button" data-d="edit">Refund this amount</button>' : "") +
+        '<input class="why" type="text" placeholder="Reason for rejecting" value="' + esc(whyVal) + '" aria-label="Reason"' + (rec ? " readonly" : "") + '><button class="btn danger" type="button" data-d="reject">Reject</button></div>'
+        : '<div class="hint"><span class="avatar av-ada">AO</span>Switch to Ada (Supervisor) at the top to decide.</div>');
+    msgs.appendChild(el);
+    el.querySelectorAll("[data-d]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var type = b.dataset.d, d = { InterruptID: it.ID, Type: type };
+        if (type === "edit") { var amt = parseFloat(el.querySelector(".amt").value); if (!(amt > 0)) return; d.Args = Object.assign({}, args, { amount: amt }); }
+        if (type === "reject") { d.Message = el.querySelector(".why").value.trim() || "Declined by supervisor"; }
+        decide(thread, d, el);
+      });
+    });
+    if (cards[it.ID]) cards[it.ID].querySelector(".state").innerHTML = stateTag("wait");
+    toBottom();
+  }
+  function sys(text) { msgs.insertAdjacentHTML("beforeend", '<div class="sysline">' + esc(text) + "</div>"); toBottom(); }
+  function error(text) { endBotText(); msgs.insertAdjacentHTML("beforeend", '<div class="err">' + esc(text) + "</div>"); toBottom(); }
+
+  // event stream -> UI
+  function onEvent(e) {
+    switch (e.Type) {
+      case "text": addBotText(e.Text, true); break;
+      case "tool_call": addTool(e.ToolCall, "run"); break;
+      case "tool_result":
+        var c = e.ToolCall || {};
+        setToolResult(c.ID, e.Result, /^(blocked|denied|rejected|error|limit reached)/.test(e.Result || "") ? "bad" : "ok");
+        break;
+      case "interrupt": addApproval(state.thread, { ID: e.ToolCall.ID, ToolCall: e.ToolCall, Message: e.Text, Kind: e.ToolCall.Name === "issue_refund" ? "refund_approval" : "approval" }); break;
+      case "model_call": hood(e); break;
+      case "step_end": hood(e); break;
+      case "done": endBotText(); hood(e); break;
+      case "error": error(e.Text); break;
+    }
+  }
+
+  // ------------------------------------------------------------- actions
+  function setBusy(b) { state.busy = b; $("#send").disabled = b; $("#input").disabled = b; document.querySelectorAll(".chip").forEach(function (c) { c.disabled = b; }); }
+  function ensureThread() {
+    if (state.thread) return Promise.resolve(state.thread);
+    if (!state.live) { state.thread = state.pendingScene ? state.pendingScene.thread : "t-replay"; return Promise.resolve(state.thread); }
+    return fetch("api/threads", { method: "POST" }).then(function (r) { return r.json(); }).then(function (j) { state.thread = j.id; return j.id; });
+  }
+  function send(text) {
+    if (state.busy || !text.trim()) return;
+    if (!state.live && !replay.sceneFor(text)) { error("This page is a replay of recorded runs, so it can only play the suggested messages. Run the demo locally to chat freely: go run ./examples/fullstack"); return; }
+    if (!state.live) { state.thread = null; state.pendingScene = replay.sceneFor(text); msgs.innerHTML = ""; cards = {}; } // each replayed scene is its own conversation
+    setBusy(true); state.hood = [];
+    ensureThread().then(function (id) {
+      if (!msgs.querySelector(".row")) msgs.innerHTML = "";
+      $("#title").textContent = text;
+      addUser(text);
+      var p = state.live ? api.stream("api/threads/" + id + "/messages", { text: text, user: state.user }, onEvent) : replay.message(id, text, onEvent);
+      return p;
+    }).catch(function (e) { error(e.message); }).then(function () { setBusy(false); refreshAll(); renderChips(); });
+  }
+  function decide(thread, d, el) {
+    if (USERS[state.user].role !== "supervisor") return;
+    el.querySelectorAll("button, input").forEach(function (b) { b.disabled = true; });
+    var label = { approve: "Approved", edit: "Edited and approved", reject: "Rejected" }[d.Type];
+    el.classList.add("done");
+    el.querySelector("h4").innerHTML = '<span class="tag ' + (d.Type === "reject" ? "bad" : "ok") + '">' + label + "</span>by Ada Okafor";
+    setBusy(true);
+    var p = state.live ? api.stream("api/threads/" + thread + "/decisions", { user: state.user, decisions: [d] }, onEvent) : replay.decide(thread, d, onEvent);
+    p.catch(function (e) { error(e.message); }).then(function () { setBusy(false); refreshAll(); });
+  }
+  function openThread(id) {
+    state.thread = id; cards = {}; botBubble = null;
+    return load("thread", id).then(function (v) {
+      msgs.innerHTML = "";
+      $("#title").textContent = v.title || "Conversation";
+      (v.messages || []).forEach(function (m) {
+        if (m.role === "user") addUser(m.text);
+        else if (m.role === "assistant") { addBotText(m.text, false); endBotText(); }
+        else if (m.role === "tool") addTool(m, m.result == null ? "wait" : m.is_error ? "bad" : "ok", m.result);
+      });
+      (v.pending || []).forEach(function (it) { addApproval(id, it); });
+      if (!v.messages || !v.messages.length) hello();
+      renderChips(); highlightConv();
+    });
+  }
+
+  // ------------------------------------------------------------- panes
+  function refreshAll() { refreshConvs(); refreshApprovals(); refreshAudit(); refreshOrders(); }
+  function highlightConv() { document.querySelectorAll(".conv").forEach(function (c) { c.setAttribute("aria-current", String(c.dataset.id === state.thread)); }); }
+  function refreshConvs() {
+    load("threads").then(function (j) {
+      var box = $("#convs"); box.innerHTML = "<h6>Conversations</h6>";
+      var ts = (j.threads || []).slice().reverse();
+      if (!ts.length) box.insertAdjacentHTML("beforeend", '<div class="empty-rail">No conversations yet.</div>');
+      ts.forEach(function (t) {
+        var b = document.createElement("button");
+        b.type = "button"; b.className = "conv"; b.dataset.id = t.id;
+        b.innerHTML = '<span class="t">' + esc(t.title || "New conversation") + '</span><span class="s">' + (t.waiting ? '<span class="tag wait">Needs approval</span>' : '<span class="tag ok">Open</span>') + '<span class="mono">' + esc(t.id) + "</span></span>";
+        b.addEventListener("click", function () { if (!state.busy) openThread(t.id); });
+        box.appendChild(b);
+      });
+      highlightConv();
+    });
+  }
+  function refreshApprovals() {
+    load("approvals").then(function (j) {
+      var list = j.approvals || [], pane = $("#pane-approvals");
+      var c = $("#appcount"); c.textContent = list.length; c.hidden = !list.length;
+      pane.innerHTML = '<p class="intro">Runs paused for a human decision, across every conversation. They are stored with the thread, so they survive a server restart.</p>';
+      if (!list.length) { pane.insertAdjacentHTML("beforeend", '<div class="none">Nothing waiting. Try the “Large refund” scenario.</div>'); return; }
+      list.forEach(function (a) {
+        var args = (a.ToolCall || {}).Args || {};
+        var el = document.createElement("div"); el.className = "item";
+        el.innerHTML = '<div class="top2"><h5>' + esc(a.Kind === "refund_approval" ? "Refund " + money(args.amount) + " · order " + args.order_id : "Email to " + (args.to || "")) + '</h5><span class="tag wait">waiting</span></div><p>' + esc(a.Message) + '</p><div class="top2"><span class="meta">' + esc(a.thread) + '</span><button class="btn" type="button">Open</button></div>';
+        el.querySelector("button").addEventListener("click", function () { openThread(a.thread); });
+        pane.appendChild(el);
+      });
+    });
+  }
+  function auditRow(e) {
+    var d = e.data || {}, ic = "", what = "", why = "";
+    switch (e.type) {
+      case "plugin.active": ic = "info"; what = "Plugin " + d.plugin + " active"; why = (d.kind || "") + (d.perms && d.perms.length ? " · perms " + d.perms.join(",") : ""); break;
+      case "plugin.disposed": what = "Plugin " + d.plugin + " unloaded"; break;
+      case "plugin.failed": case "plugin.refused": ic = "bad"; what = "Plugin " + d.plugin + " " + e.type.split(".")[1]; why = d.error || ""; break;
+      case "model.call": what = "Model call · " + d.model; why = "step " + d.step + " · " + (d.input_tokens || 0) + " in / " + (d.output_tokens || 0) + " out tokens" + (d.tool_calls ? " · " + d.tool_calls + " tool call(s)" : "") + " · user " + (d.user || "-"); break;
+      case "tool.call":
+        ic = d.outcome === "ok" ? "ok" : d.outcome === "interrupted" ? "wait" : "bad";
+        what = d.tool + " · " + d.outcome;
+        why = (d.decision ? d.decision + " by " + (d.decided_by || "?") + " · " : "") + JSON.stringify(d.args || {});
+        break;
+      default: what = e.type;
+    }
+    return '<li><span class="ic ' + ic + '"></span><div><div class="what">' + esc(what) + '</div><div class="why">' + esc(why) + '</div></div><span class="h">#' + esc(e.seq) + " " + esc((e.hash || "").slice(0, 6)) + "</span></li>";
+  }
+  function refreshAudit() {
+    load("audit").then(function (j) {
+      var pane = $("#pane-activity"), list = (j.entries || []).filter(function (e) { return e.type !== "plugin.disposed"; });
+      pane.innerHTML = '<div class="chain">' + (j.verified ? '<span class="tag ok">Chain verified</span>' : '<span class="tag bad">Chain broken</span>') + "<span>" + (j.count || list.length) + " entries · each line is hash-linked to the one before (audit_jsonl)</span></div>";
+      if (!list.length) { pane.insertAdjacentHTML("beforeend", '<div class="none">No activity yet.</div>'); return; }
+      pane.insertAdjacentHTML("beforeend", '<ul class="feed">' + list.map(auditRow).join("") + "</ul>");
+    });
+  }
+  function refreshOrders() {
+    load("orders").then(function (j) {
+      var pane = $("#pane-orders");
+      var rows = (j.orders || []).map(function (o) {
+        var cls = /refunded/.test(o.status) ? "ok" : o.status === "in transit" ? "wait" : "";
+        return "<tr><td class=\"mono\">#" + esc(o.id) + "</td><td>" + esc(o.item) + "<br><span class=\"mono\" style=\"color:var(--fg-3)\">" + esc(o.customer) + "</span></td><td class=\"mono\">" + money(o.total) + (o.refunded ? "<br><span style=\"color:var(--ok)\">−" + money(o.refunded) + "</span>" : "") + "</td><td>" + (cls ? '<span class="tag ' + cls + '">' + esc(o.status) + "</span>" : esc(o.status)) + "</td></tr>";
+      }).join("");
+      var out = (j.outbox || []).map(function (m) { return '<div class="item"><h5>' + esc(m.subject) + '</h5><p class="meta">to ' + esc(m.to) + '</p><p style="white-space:pre-wrap">' + esc(m.body) + "</p></div>"; }).join("");
+      pane.innerHTML = '<p class="intro">The shop data the tools read and change. Refunds and sent emails show up here.</p><table><thead><tr><th>Order</th><th>Item</th><th>Total</th><th>Status</th></tr></thead><tbody>' + rows + "</tbody></table>" +
+        '<p class="intro" style="margin-top:16px">Outbox</p>' + (out || '<div class="none">No emails sent.</div>');
+    });
+  }
+  function hood(e) {
+    var pane = $("#pane-hood");
+    if (!pane.dataset.init) { pane.dataset.init = "1"; pane.innerHTML = '<p class="intro">Events from the current run. “Model saw” is the last customer message after every middleware ran — card numbers are masked by mw_pii before the model gets them.</p><div id="hoodlist"></div>'; }
+    var list = $("#hoodlist"), line = "";
+    if (e.Type === "model_call") {
+      var t = esc(e.Text).replace(/(\*{4,}[\d ]*\d{4})/g, "<mark>$1</mark>");
+      line = "<b>model call</b> <span>step " + e.Step + " · " + esc(e.Data.model) + " · " + e.Data.messages + " messages · " + e.Data.tools + " tools</span><br><span>Model saw:</span> " + t;
+    } else if (e.Type === "step_end") {
+      line = "<b>step " + e.Step + " done</b> <span>" + (e.Usage ? e.Usage.TotalTokens : 0) + " tokens</span>";
+    } else if (e.Type === "done") {
+      var d = e.Data || {};
+      line = "<b>run finished: " + esc(d.finish) + "</b> <span>" + d.steps + " steps · " + (d.usage ? d.usage.TotalTokens : 0) + " tokens" + (d.interrupts && d.interrupts.length ? " · paused for " + d.interrupts.length + " approval(s), state saved" : "") + "</span>";
+    }
+    if (line) list.insertAdjacentHTML("beforeend", '<div class="ev">' + line + "</div>");
+  }
+
+  // ------------------------------------------------------------- wiring
+  document.querySelectorAll(".tabs [role=tab]").forEach(function (t) {
+    t.addEventListener("click", function () {
+      document.querySelectorAll(".tabs [role=tab]").forEach(function (x) { x.setAttribute("aria-selected", String(x === t)); $("#pane-" + x.dataset.tab).hidden = x !== t; });
+    });
+  });
+  document.querySelectorAll(".seg button").forEach(function (b) {
+    b.addEventListener("click", function () {
+      state.user = b.dataset.user;
+      document.querySelectorAll(".seg button").forEach(function (x) { x.setAttribute("aria-pressed", String(x === b)); });
+      if (state.thread) openThread(state.thread);
+    });
+  });
+  $("#newconv").addEventListener("click", function () { if (state.busy) return; state.thread = null; cards = {}; $("#title").textContent = "New conversation"; hello(); renderChips(); highlightConv(); });
+  $("#form").addEventListener("submit", function (e) { e.preventDefault(); var v = $("#input").value; $("#input").value = ""; send(v); });
+  $("#input").addEventListener("keydown", function (e) { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("#form").requestSubmit(); } });
+  $("#theme").addEventListener("click", function () {
+    var r = document.documentElement, dark = r.dataset.theme ? r.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+    r.dataset.theme = dark ? "light" : "dark";
+  });
+
+  backend().then(function (h) {
+    if (h.mode === "live") { $("#modetext").textContent = "Live"; }
+    else if (h.mode === "replay") {
+      $("#mode").classList.add("replay"); $("#modetext").textContent = "Replay of a recorded run";
+      $("#composehint").textContent = "Replay mode: pick a suggested scenario. Each one replays a real run recorded from the Go backend. Run it locally to chat freely.";
+      $("#input").placeholder = "Pick a suggested scenario above (replay mode)";
+    } else { $("#modetext").textContent = "Backend offline"; }
+    if (h.model) { $("#model").textContent = h.model; $("#model").hidden = false; }
+    if (h.refund_limit) $("#limit").textContent = "$" + h.refund_limit;
+    hello(); refreshAll(); hood({ Type: "init" });
+    if (state.live) setInterval(function () { if (!state.busy) { refreshApprovals(); refreshConvs(); } }, 4000);
+  });
+})();
+</script>
+</body>
+</html>

@@ -71,8 +71,13 @@ func (t *Thread) Stream(ctx context.Context, prompt string, opts ...RunOption) *
 
 // Resume answers the thread's pending interrupts and continues the run.
 func (t *Thread) Resume(ctx context.Context, decisions ...sdk.Decision) (*Result, error) {
+	return t.ResumeWith(ctx, decisions)
+}
+
+// ResumeWith is Resume with run options (identity, events, limits).
+func (t *Thread) ResumeWith(ctx context.Context, decisions []sdk.Decision, opts ...RunOption) (*Result, error) {
 	if t.a.remote != nil {
-		return t.a.remote.thread(ctx, t.id, "", decisions, nil)
+		return t.a.remote.thread(ctx, t.id, "", decisions, opts)
 	}
 	cp, ts, err := t.load(ctx)
 	if err != nil {
@@ -81,12 +86,17 @@ func (t *Thread) Resume(ctx context.Context, decisions ...sdk.Decision) (*Result
 	if len(ts.Pending) == 0 {
 		return nil, fmt.Errorf("eipagent: thread %s has nothing to resume", t.id)
 	}
-	ro := t.a.runOpts(nil)
+	ro := t.a.runOpts(opts)
 	st := t.a.newState(ro)
 	st.Thread, st.Values = t.id, ts.Values
 	st.Messages = append([]sdk.Message{}, ts.Messages...)
 	st.Pending, st.Decisions = ts.Pending, decisions
 	return t.runAndSave(ctx, cp, ts, st, ro)
+}
+
+// ResumeStream is ResumeWith with streaming events.
+func (t *Thread) ResumeStream(ctx context.Context, decisions []sdk.Decision, opts ...RunOption) *Stream {
+	return startStream(func(o RunOption) (*Result, error) { return t.ResumeWith(ctx, decisions, append(opts, o)...) })
 }
 
 func (t *Thread) runAndSave(ctx context.Context, cp *sdk.Checkpointer, ts *sdk.ThreadState, st *sdk.RunState, ro *runOptions) (*Result, error) {
@@ -143,4 +153,13 @@ func (t *Thread) Delete(ctx context.Context) error {
 		return err
 	}
 	return cp.Delete(ctx, t.id)
+}
+
+// Threads lists stored thread IDs with the given prefix ("" = all).
+func (a *Agent) Threads(ctx context.Context, prefix string) ([]string, error) {
+	cp, err := (&Thread{a: a}).cp()
+	if err != nil {
+		return nil, err
+	}
+	return cp.List(ctx, prefix)
 }

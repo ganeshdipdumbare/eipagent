@@ -161,6 +161,11 @@ func steps(c context.Context, snap *sdk.Snapshot, st *sdk.RunState, defMax int, 
 
 	// execute runs a batch of calls and appends results to history.
 	execute := func(step int, calls []sdk.ToolCall, decisions map[string]*sdk.Decision) []sdk.Interrupt {
+		for i := range calls { // events report the arguments that actually run
+			if d := decisions[calls[i].ID]; d != nil && d.Type == "edit" && d.Args != nil {
+				calls[i].Args = d.Args
+			}
+		}
 		out := make([]sdk.Message, len(calls))
 		ints := make([]*sdk.Interrupt, len(calls))
 		if parallel && len(calls) > 1 {
@@ -242,8 +247,11 @@ func steps(c context.Context, snap *sdk.Snapshot, st *sdk.RunState, defMax int, 
 
 	// Resume: run the calls that were waiting for a human decision.
 	if len(st.Pending) > 0 {
+		// Partial resume: decided calls run now; undecided ones stay
+		// pending, and the model continues only once every call is answered.
 		decisions := map[string]*sdk.Decision{}
 		var calls []sdk.ToolCall
+		var waiting []sdk.Interrupt
 		for _, p := range st.Pending {
 			var dec *sdk.Decision
 			for j := range st.Decisions {
@@ -252,16 +260,20 @@ func steps(c context.Context, snap *sdk.Snapshot, st *sdk.RunState, defMax int, 
 				}
 			}
 			if dec == nil {
-				return nil, fmt.Errorf("resume: no decision for interrupt %s", p.ID)
+				waiting = append(waiting, p)
+				continue
 			}
 			if p.ToolCall != nil {
 				calls = append(calls, *p.ToolCall)
 				decisions[p.ToolCall.ID] = dec
 			}
 		}
+		if len(calls) == 0 {
+			return nil, fmt.Errorf("resume: no decision matches a pending interrupt")
+		}
 		st.Pending = nil
 		st.Decisions = nil
-		pending := execute(0, calls, decisions)
+		pending := append(waiting, execute(0, calls, decisions)...)
 		if fatalErr != nil {
 			return nil, fatalErr
 		}

@@ -222,6 +222,10 @@ td code { white-space: nowrap; }
 .btn.primary { background: var(--fg); color: var(--bg); border-color: var(--fg); }
 .btn.primary:hover { opacity: .9; background: var(--fg); }
 
+.demo-frame { position: relative; margin: 8px 0 10px; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; box-shadow: var(--shadow); background: var(--bg); height: 640px; }
+.demo-frame iframe { display: block; width: 100%; height: 100%; border: 0; }
+.demo-frame.scaled iframe { position: absolute; top: 0; left: 0; width: 1280px; height: 820px; transform-origin: 0 0; }
+.demo-cap { font-size: 13.5px; color: var(--fg-3) !important; }
 /* prev / next */
 .pager { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 56px; padding-top: 24px; border-top: 1px solid var(--line); }
 .pager a { display: block; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; text-decoration: none; transition: border-color .15s; }
@@ -290,6 +294,7 @@ td code { white-space: nowrap; }
     </a>
     <nav class="toplinks" aria-label="Sections">
       <a href="#introduction" data-top="docs" aria-current="page">Docs</a>
+      <a href="#fullstack" data-top="demo">Demo</a>
       <a href="#providers" data-top="providers">Providers</a>
       <a href="#reference-options" data-top="reference">Reference</a>
     </nav>
@@ -326,7 +331,7 @@ td code { white-space: nowrap; }
   <p class="lede">eipagent is the Go toolkit for building AI agents where everything is a plugin. The core only loads plugins and routes calls between them: the agent loop, every model provider, tools, memory, middleware, sandboxes and security rules are plugins you can add, swap or remove, even while the agent runs.</p>
   <div class="hero-actions">
     <a class="btn primary" href="#quickstart">Get started</a>
-    <a class="btn" href="#ollama">Run locally with Ollama</a>
+    <a class="btn" href="#fullstack">See the full-stack demo</a>
   </div>
   <h3>Why eipagent?</h3>
   <p>Building agents for a company means juggling providers, tools, memory, approvals, sandboxes and security reviews. eipagent gives you one small API for the common path, and a plugin for everything else, so you change behavior by changing configuration instead of forking the framework.</p>
@@ -381,6 +386,7 @@ fmt.Println(res.Text)</code></pre></div></div></div>
   <h3>Next steps</h3>
   <ul>
     <li><a href="#quickstart">Quickstart</a>: your first agent with a tool, in one file.</li>
+    <li><a href="#fullstack">Full-stack demo</a>: a support desk with approvals, redaction and an audit trail, and how its Go backend is written.</li>
     <li><a href="#lifecycles">Lifecycles</a>: exactly what happens, in what order, during a run.</li>
     <li><a href="#writing-plugins">Writing a plugin</a>: one Go file, no compile step.</li>
   </ul>
@@ -472,6 +478,267 @@ go run ./examples/ollama                 # every demo</code></pre></div>
   <p>Use any model with <code>-model qwen3.5:4b</code>. Set <code>OLLAMA_HOST</code> to use Ollama on another machine. Demos that use tools work best with a tool-capable model of 4B parameters or more.</p>
 </section>
 
+
+<section id="fullstack" class="page">
+  <h1>Full-stack demo: a support desk</h1>
+  <p class="lede">A complete app built on eipagent: a Go backend and a web UI for Acme, an online shop. The assistant tracks orders, answers policy questions, issues refunds and emails customers. Refunds over $50 and every email wait for a supervisor, card numbers never reach the model, and every action lands in a tamper-evident audit log.</p>
+  <div id="demo-embed"></div>
+  <h3>Run it locally</h3>
+  <div class="code" data-title="terminal"><pre><code class="language-bash">go run ./examples/fullstack                           # http://localhost:8080, built-in demo model
+go run ./examples/fullstack -model ollama:qwen3.5:4b  # the same app on a real local model
+go test ./examples/fullstack/...                      # every flow, end to end over HTTP</code></pre></div>
+  <p>Act as Sam (support agent) to chat as the customer, then switch to Ada (supervisor) to approve, edit or reject. Threads and the audit log live in <code>.eipagent/support-desk</code>, so stop the server mid-approval, start it again, and the request is still waiting.</p>
+  <h3>Architecture</h3>
+  <div class="flow" role="img" aria-label="Architecture"><div class="row"><span class="node ">Browser UI</span><span class="edge">POST, server-sent events</span><span class="node info">Go net/http server</span><span class="edge">Stream · ResumeStream</span><span class="node ok">eipagent Agent</span></div><div class="row"><span class="node ok">eipagent Agent</span><span class="edge">plugins</span><span class="node ">tools</span><span class="node wait">refund_policy</span><span class="node wait">mw_hitl</span><span class="node ">mw_pii</span><span class="node ">mw_limits</span></div><div class="row"><span class="node ok">eipagent Agent</span><span class="edge">services</span><span class="node ">checkpoint_file</span><span class="node ">audit_jsonl</span><span class="node info">llm/demo or llm/ollama</span></div></div>
+  <p>The backend is one Go package (<code>examples/fullstack/app</code>) of about 500 lines. The browser talks to it with plain JSON and server-sent events.</p>
+  <div class="table"><table>
+    <thead><tr><th>Endpoint</th><th>What it does</th><th>SDK call</th></tr></thead>
+    <tbody>
+      <tr><td><code>POST /api/threads/{id}/messages</code></td><td>Customer message, streamed reply</td><td><code>Thread.Stream</code></td></tr>
+      <tr><td><code>POST /api/threads/{id}/decisions</code></td><td>Supervisor decision, streamed continuation</td><td><code>Thread.ResumeStream</code></td></tr>
+      <tr><td><code>GET /api/approvals</code></td><td>Every paused run, across conversations</td><td><code>Agent.Threads</code>, <code>Thread.Pending</code></td></tr>
+      <tr><td><code>GET /api/threads/{id}</code></td><td>History with tool calls and results</td><td><code>Thread.Messages</code></td></tr>
+      <tr><td><code>GET /api/audit</code></td><td>Audit feed and chain status</td><td><code>audit.Verify</code></td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>1. Build the agent</h3>
+  <p>Everything the app does is configuration: typed tools, a custom business rule, and standard plugins for approvals, redaction, limits, durable threads and auditing.</p>
+  <div class="code" data-title="app/server.go"><pre><code class="language-go">// New builds the agent and the HTTP API.
+func New(cfg Config) (*Server, error) {
+	if cfg.Model == "" {
+		cfg.Model = "demo:support"
+	}
+	if cfg.RefundLimit == 0 {
+		cfg.RefundLimit = 50
+	}
+	shop := NewShop()
+	opts := []eipagent.Option{
+		eipagent.WithModel(cfg.Model),
+		eipagent.WithInstructions(instructions),
+		eipagent.WithMaxSteps(8),
+		eipagent.WithTools(Tools(shop)...),
+		// Business rule: refunds above the limit wait for a supervisor.
+		eipagent.WithCompiledPlugin(RefundPolicy(cfg.RefundLimit)),
+		// Every outgoing email needs a human OK.
+		eipagent.WithPlugin("mw_hitl", map[string]any{"interrupt_on": map[string]any{
+			"send_email": map[string]any{"allowed": []any{"approve", "edit", "reject"}, "description": "Send this email to the customer?"},
+		}}),
+		// Card numbers never reach the model.
+		eipagent.WithPlugin("mw_pii", map[string]any{"types": []any{"credit_card"}, "strategy": "mask"}),
+		eipagent.WithPlugin("mw_limits", map[string]any{"tool_calls_run": 12}),
+		// Durable threads (pauses survive restarts) and a tamper-evident log.
+		eipagent.WithPlugin("checkpoint_file", map[string]any{"dir": filepath.Join(cfg.DataDir, "threads")}),
+		eipagent.WithPlugin("audit_jsonl", map[string]any{"path": filepath.Join(cfg.DataDir, "audit.jsonl")}),
+		eipagent.WithCompiledPlugin(Inspector()),
+		eipagent.WithLogger(func(scope, msg string) {}),
+	}
+	if strings.HasPrefix(cfg.Model, "demo:") {
+		opts = append(opts, eipagent.WithCompiledPlugin(DemoModel()))
+	}
+	agent, err := eipagent.New(opts...)
+	if err != nil {
+		return nil, err
+	}
+	s := &amp;Server{agent: agent, shop: shop, cfg: cfg, mux: http.NewServeMux()}
+	s.routes()
+	return s, nil
+}</code></pre></div>
+
+  <h3>2. Turn business operations into tools</h3>
+  <p>Each tool is a typed Go function. Marking <code>issue_refund</code> as high risk lets policy and review plugins treat it differently.</p>
+  <div class="code" data-title="app/tools.go"><pre><code class="language-go">type RefundIn struct {
+	OrderID string  `json:"order_id" desc:"order number"`
+	Amount  float64 `json:"amount" desc:"amount in USD"`
+	Reason  string  `json:"reason" desc:"short reason for the refund"`
+}
+refund := eipagent.WithMeta(eipagent.Tool("issue_refund", "Refund money to the customer's card",
+	func(ctx context.Context, in RefundIn) (string, error) {
+		o, err := shop.Refund(in.OrderID, in.Amount)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Refunded $%.2f to the card ending %s for order %s (%s). Reference %s.",
+			in.Amount, o.Card, o.ID, o.Item, o.RefundRef), nil
+	}), "risk", "high")</code></pre></div>
+
+  <h3>3. Write a business rule as a plugin</h3>
+  <p>“Refunds above $50 need a supervisor” is a few lines of middleware. Returning an <code>Interrupt</code> pauses the run before the tool executes. When the run resumes, the request carries the supervisor’s decision and the rule lets it through.</p>
+  <div class="code" data-title="app/policy.go"><pre><code class="language-go">// RefundPolicy is a business rule written as a plugin: agents may refund
+// up to limit on their own; anything above pauses the run until a
+// supervisor approves, edits or rejects it. The pause is durable: it is
+// stored with the thread and survives a server restart.
+func RefundPolicy(limit float64) eipagent.Plugin {
+	return eipagent.Plugin{Name: "refund_policy", Apply: func(ctx *eipagent.PluginContext) error {
+		ctx.WrapTool(func(c context.Context, req *sdk.ToolRequest, next sdk.ToolHandler) (*sdk.ToolResult, error) {
+			if req.Call.Name != "issue_refund" || req.Decision != nil {
+				return next(c, req) // other tools, or a supervisor already decided
+			}
+			amount, _ := req.Call.Args["amount"].(float64)
+			if amount &lt;= limit {
+				return next(c, req)
+			}
+			call := req.Call
+			return &amp;sdk.ToolResult{Interrupt: &amp;sdk.Interrupt{
+				ID:       call.ID,
+				Kind:     "refund_approval",
+				ToolCall: &amp;call,
+				Message:  fmt.Sprintf("Refund of $%.2f is above the $%.0f agent limit.", amount, limit),
+				Allowed:  []string{"approve", "edit", "reject"},
+				Payload:  map[string]any{"amount": amount, "limit": limit},
+			}}, nil
+		})
+		return nil
+	}}
+}</code></pre></div>
+
+  <h3>4. Stream runs to the browser</h3>
+  <p>A customer message starts a run on the thread. Every event (tokens, tool calls, results, interrupts) is forwarded as a server-sent event, followed by the result.</p>
+  <div class="code" data-title="app/server.go"><pre><code class="language-go">func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Text string `json:"text"`
+		User string `json:"user"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&amp;body); err != nil || strings.TrimSpace(body.Text) == "" {
+		writeErr(w, 400, errors.New("send {\"text\": \"...\"}"))
+		return
+	}
+	u, ok := users[body.User]
+	if !ok {
+		writeErr(w, 401, errors.New("unknown user"))
+		return
+	}
+	stream := s.agent.Thread(r.PathValue("id")).Stream(r.Context(), body.Text, eipagent.AsUser(body.User, u.Role))
+	sendSSE(w, stream)
+}</code></pre></div><div class="code" data-title="app/server.go"><pre><code class="language-go">// sendSSE forwards every agent event to the browser, then the result.
+func sendSSE(w http.ResponseWriter, stream *eipagent.Stream) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	flusher, _ := w.(http.Flusher)
+	send := func(v any) {
+		b, _ := json.Marshal(v)
+		fmt.Fprintf(w, "data: %s\n\n", b)
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+	for e := range stream.Events() {
+		send(e)
+	}
+	res, err := stream.Result()
+	switch {
+	case errors.Is(err, eipagent.ErrThreadBusy):
+		send(map[string]any{"Type": "error", "Text": "Someone else updated this conversation. Reload and try again."})
+	case err != nil:
+		send(map[string]any{"Type": "error", "Text": err.Error()})
+	default:
+		send(map[string]any{"Type": "done", "Data": map[string]any{
+			"text": res.Text, "finish": res.FinishReason, "interrupts": res.Interrupts, "usage": res.Usage, "steps": len(res.Steps),
+		}})
+	}
+}</code></pre></div>
+
+  <h3>5. Approve, edit or reject, then resume</h3>
+  <p>The approvals queue is just the pending interrupts of every thread. A decision is checked against the user’s role, stamped with who made it, and resumes the paused run as a new stream.</p>
+  <div class="code" data-title="app/server.go"><pre><code class="language-go">// approvals lists every paused run, across all conversations.
+func (s *Server) approvals(w http.ResponseWriter, r *http.Request) {
+	ids, _ := s.agent.Threads(r.Context(), "t-")
+	type item struct {
+		Thread string `json:"thread"`
+		Title  string `json:"title"`
+		sdk.Interrupt
+	}
+	out := []item{}
+	for _, id := range ids {
+		v, err := s.view(r.Context(), id, false)
+		if err != nil {
+			continue
+		}
+		for _, in := range v.Pending {
+			out = append(out, item{Thread: id, Title: v.Title, Interrupt: in})
+		}
+	}
+	writeJSON(w, 200, map[string]any{"approvals": out})
+}</code></pre></div><div class="code" data-title="app/server.go"><pre><code class="language-go">func (s *Server) postDecisions(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		User      string         `json:"user"`
+		Decisions []sdk.Decision `json:"decisions"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&amp;body); err != nil || len(body.Decisions) == 0 {
+		writeErr(w, 400, errors.New("send {\"decisions\": [...]}"))
+		return
+	}
+	u, ok := users[body.User]
+	if !ok || u.Role != "supervisor" {
+		writeErr(w, 403, errors.New("only supervisors can decide on approvals"))
+		return
+	}
+	for i := range body.Decisions {
+		body.Decisions[i].By = body.User // recorded in the audit log
+	}
+	stream := s.agent.Thread(r.PathValue("id")).ResumeStream(r.Context(), body.Decisions, eipagent.AsUser(body.User, u.Role))
+	sendSSE(w, stream)
+}</code></pre></div>
+
+  <h3>6. Consume the stream in the browser</h3>
+  <div class="code" data-title="ui (simplified)"><pre><code class="language-javascript">// Post a message and render events as they stream in.
+const res = await fetch(`/api/threads/${id}/messages`, {
+  method: "POST",
+  body: JSON.stringify({ text, user: "sam" }),
+});
+const reader = res.body.getReader();
+const decoder = new TextDecoder();
+let buf = "";
+for (;;) {
+  const { done, value } = await reader.read();
+  if (done) break;
+  buf += decoder.decode(value, { stream: true });
+  const parts = buf.split("\n\n");
+  buf = parts.pop();
+  for (const part of parts) {
+    const e = JSON.parse(part.slice("data: ".length));
+    if (e.Type === "text") appendText(e.Text);            // streamed tokens
+    if (e.Type === "tool_call") showToolCard(e.ToolCall);  // lookup_order, issue_refund, ...
+    if (e.Type === "interrupt") showApprovalCard(e);       // paused for a supervisor
+    if (e.Type === "done") refreshQueues(e.Data);          // finish: stop | interrupted
+  }
+}</code></pre></div>
+
+  <h3>The approval flow, step by step</h3>
+  <ol class="timeline" aria-label="Approval flow"><li class=""><span class="n">01</span><span class="h">customer</span><span class="d">Sam’s customer writes “My headphones from order #1077 never arrived.” The browser posts it and starts reading the event stream.</span></li><li class=""><span class="n">02</span><span class="h">lookup_order</span><span class="d">The model looks up the order. The tool card appears in the chat as the event arrives.</span></li><li class=""><span class="n">03</span><span class="h">issue_refund</span><span class="d">The model asks to refund $149.00. The call goes through every tool middleware.</span></li><li class="loop"><span class="n">04</span><span class="h">refund_policy</span><span class="d">The plugin sees $149 &gt; $50 and returns an interrupt instead of calling the tool. No money moves.</span></li><li class="loop"><span class="n">05</span><span class="h">checkpoint</span><span class="d">The loop finishes the run as <code>interrupted</code> and the thread, with the pending call, is saved by <code>checkpoint_file</code>.</span></li><li class="loop"><span class="n">06</span><span class="h">queue</span><span class="d"><code>GET /api/approvals</code> lists it for every supervisor. It is still there after a server restart.</span></li><li class=""><span class="n">07</span><span class="h">decide</span><span class="d">Ada edits the amount to $74.50. The server checks her role, stamps <code>Decision.By</code>, and calls <code>ResumeStream</code>.</span></li><li class=""><span class="n">08</span><span class="h">resume</span><span class="d">The loop runs the pending call with the edited arguments; <code>refund_policy</code> sees a decision and lets it through.</span></li><li class="end"><span class="n">09</span><span class="h">answer + audit</span><span class="d">The model confirms the partial refund. <code>audit_jsonl</code> records the call with <code>decision: edit, decided_by: ada</code> in its hash chain.</span></li></ol>
+
+  <h3>Several approvals in one run</h3>
+  <p>A real model may ask for the refund and the confirmation email in the same step. The run then pauses on both, and the queue shows two items. Each decision resumes only its own call; the others stay pending, and the model continues once every call in that step has an answer. Nothing in the app handles this specially: it is how <code>Thread.Resume</code> and <code>ResumeStream</code> work.</p>
+  <p>When a supervisor edits a call, the run uses the edited arguments, the stream reports them, and the model sees the result. In a run on <code>qwen3.5:4b</code>, after Ada cut a $149 refund to $74.50, the model told the customer a partial refund was issued and asked whether to refund the rest.</p>
+
+  <h3>Masking card numbers</h3>
+  <p>When the customer writes “My card is 4111 1111 1111 1111”, <code>mw_pii</code> masks it before every model call. The app’s <code>Inspector</code> plugin runs innermost and reports what the model actually received, which the UI shows under “Under the hood”: <code>My card is ***************1111</code>. The receipt email that follows still waits for approval through <code>mw_hitl</code>.</p>
+
+  <h3>What the SDK handles for you</h3>
+  <div class="table"><table>
+  <thead><tr><th>You need</th><th>Without an agent framework</th><th>With eipagent</th></tr></thead>
+  <tbody>
+    <tr><td>Pause a run before a risky action</td><td>Custom state machine around the model loop</td><td>Return an <code>Interrupt</code> from a <code>WrapTool</code> hook, or load <code>mw_hitl</code></td></tr>
+    <tr><td>Resume hours later, on another server</td><td>Serialize history and pending calls yourself</td><td><code>checkpoint_file</code> or <code>checkpoint_sql</code>, then <code>Thread.ResumeStream</code></td></tr>
+    <tr><td>Approve, edit or reject a call</td><td>Rewrite messages by hand so the model understands</td><td><code>Approve</code>, <code>Edit</code>, <code>Reject</code> decisions; the loop feeds the outcome back to the model</td></tr>
+    <tr><td>Know who approved what</td><td>Ad-hoc logging</td><td><code>Decision.By</code> plus <code>audit_jsonl</code>, hash-chained and verifiable</td></tr>
+    <tr><td>Keep card numbers away from the model</td><td>Scrub every prompt path</td><td><code>mw_pii</code> masks them before every model call</td></tr>
+    <tr><td>Stream tokens and tool activity to a UI</td><td>Provider-specific streaming code</td><td>One <code>Events()</code> iterator, the same for every provider</td></tr>
+    <tr><td>Two supervisors clicking at once</td><td>Locks around your storage</td><td>Versioned saves return <code>ErrThreadBusy</code> to the second writer</td></tr>
+    <tr><td>Swap the model</td><td>Rewrite the client code</td><td>Change <code>-model</code>: <code>demo:support</code>, <code>ollama:qwen3.5:4b</code>, <code>anthropic:…</code></td></tr>
+  </tbody>
+</table></div>
+
+  <h3>Test the hard parts</h3>
+  <p>The end-to-end test drives the HTTP API. This part restarts the server in the middle of an approval and finishes it after the restart:</p>
+  <div class="code" data-title="app/app_test.go"><pre><code class="language-go">// The pause survives a server restart.
+srv.Close()
+c2, _ := newServer(t, dir)
+c2.get("/api/approvals", &amp;ap)
+if len(ap.Approvals) != 1 {
+	t.Fatalf("approval lost on restart: %+v", ap)
+}</code></pre></div>
+</section>
 
 <section id="providers" class="page">
   <h1>Providers and models</h1>
@@ -621,6 +888,7 @@ for res.Interrupted() {
 	res, _ = th.Resume(ctx, eipagent.Approve(in.ID))
 	// or eipagent.Reject(id, why), eipagent.Edit(id, args), eipagent.Respond(id, text)
 }</code></pre></div>
+  <p>If one model step asks for several approvals, each decision resumes only its own call. The model continues once every pending call has an answer.</p>
   <div class="note"><b>Tip</b><div><p>The pause is saved in the checkpointer. With <code>checkpoint_sql</code>, another process can resume it, hours later and on a different machine.</p><p>To decide right away instead, for example by prompting in a CLI, pass <code>eipagent.WithApprover(func(ctx, in) (*Decision, error))</code>.</p></div></div>
   <p>To let a model screen calls before a person sees them, add <code>mw_auto_review</code>. A reviewer model approves, denies or escalates each call.</p>
   <div class="code" data-title="go"><pre><code class="language-go">eipagent.WithPlugin("mw_auto_review", map[string]any{"model": "anthropic:claude-haiku-5-5"})</code></pre></div>
@@ -1103,6 +1371,7 @@ go run ./cmd/eip trace view .eipagent/trace.jsonl > t.html</code></pre></div>
   var NAV = [
     { pages: ["introduction"] },
     { title: "Getting Started", pages: ["installation", "quickstart", "ollama"] },
+    { title: "Examples", pages: ["fullstack"] },
     { title: "Foundations", pages: ["providers", "generating-text", "streaming", "tools", "structured-output", "threads", "human-in-the-loop"] },
     { title: "Agents", pages: ["agent-loop", "multi-agent", "lifecycles"] },
     { title: "Plugins", pages: ["plugins", "writing-plugins", "runtime-plugins", "middleware"] },
@@ -1237,7 +1506,7 @@ go run ./cmd/eip trace view .eipagent/trace.jsonl > t.html</code></pre></div>
         var a = document.createElement("a"); a.href = "#" + h.id; a.textContent = h.textContent; toc.appendChild(a);
       });
       if (!hs.length) toc.innerHTML = '<a href="#' + id + '" class="on">' + title(id) + "</a>";
-      var top = id.indexOf("reference") === 0 || id === "cli" ? "reference" : id === "providers" ? "providers" : "docs";
+      var top = id.indexOf("reference") === 0 || id === "cli" ? "reference" : id === "providers" ? "providers" : id === "fullstack" ? "demo" : "docs";
       document.querySelectorAll(".toplinks a").forEach(function (a) { if (a.dataset.top === top) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current"); });
       try { document.title = title(id) + " · eipagent Docs"; } catch (e) {}
       document.body.classList.remove("nav-open");
@@ -1321,6 +1590,30 @@ go run ./cmd/eip trace view .eipagent/trace.jsonl > t.html</code></pre></div>
   // land under the sticky header.
   try { history.scrollRestoration = "manual"; } catch (e) {}
   current = null;
+  // Embed the live demo where it's served next to the docs (Vercel, local).
+  (function () {
+    var box = document.getElementById("demo-embed");
+    if (!box) return;
+    var here = /vercel\.app$|^localhost$|^127\.0\.0\.1$/.test(location.hostname);
+    var url = here ? "demo/" : "https://eipagent-docs.vercel.app/demo/";
+    box.innerHTML = (here ? '<div class="demo-frame"><iframe src="' + url + '" title="Acme Support Desk demo" loading="lazy"></iframe></div>' : "") +
+      '<p class="demo-cap">' + (here ? "An interactive replay of runs recorded from the Go backend. Pick a scenario, then switch to Ada to decide. " : "") +
+      '<a href="' + url + '">Open the demo in a new tab</a>.</p>';
+    // Show the desktop layout scaled to the column, except on phones.
+    var frame = box.querySelector(".demo-frame");
+    function fit() {
+      if (!frame) return;
+      var w = frame.clientWidth, scaled = window.innerWidth >= 640;
+      frame.classList.toggle("scaled", scaled);
+      var ifr = frame.querySelector("iframe");
+      ifr.style.transform = scaled ? "scale(" + (w / 1280) + ")" : "";
+      frame.style.height = scaled ? Math.round(820 * w / 1280) + "px" : "640px";
+    }
+    window.addEventListener("resize", fit);
+    window.addEventListener("hashchange", function () { setTimeout(fit, 0); });
+    document.addEventListener("click", function () { setTimeout(fit, 0); });
+    setTimeout(fit, 0);
+  })();
   show(location.hash.slice(1));
   var settle = function () { var t = pageFor(location.hash.slice(1)); if (t.anchor) t.anchor.scrollIntoView(); else window.scrollTo(0, 0); };
   var userScrolled = false;

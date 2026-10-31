@@ -2,6 +2,7 @@ package eipagent_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -193,5 +194,75 @@ func TestAutoReview(t *testing.T) {
 	}
 	if !strings.Contains(res.Steps[0].ToolResults[0].Content, "denied by reviewer") {
 		t.Fatalf("got %q", res.Steps[0].ToolResults[0].Content)
+	}
+}
+
+func TestResumeStreamAndThreads(t *testing.T) {
+	var deleted []string
+	a := mockAgent(t, []any{
+		map[string]any{"tool": "delete_file", "args": map[string]any{"path": "x"}},
+		map[string]any{"text": "all done now"},
+	}, eipagent.WithTools(deleteTool(&deleted)), eipagent.WithPlugin("mw_hitl", map[string]any{"interrupt_on": map[string]any{"delete_file": true}}))
+	th := a.Thread("support/7")
+	res, err := th.Generate(bg, "delete x")
+	if err != nil || !res.Interrupted() {
+		t.Fatal(err)
+	}
+	ids, err := a.Threads(bg, "support/")
+	if err != nil || len(ids) != 1 || ids[0] != "support/7" {
+		t.Fatalf("threads: %v %v", ids, err)
+	}
+	d := eipagent.Approve(res.Interrupts[0].ID)
+	d.By = "ada"
+	s := th.ResumeStream(bg, []eipagent.Decision{d}, eipagent.AsUser("ada", "supervisor"))
+	var text strings.Builder
+	sawResult := false
+	for e := range s.Events() {
+		if e.Type == "text" {
+			text.WriteString(e.Text)
+		}
+		if e.Type == "tool_result" {
+			sawResult = true
+		}
+	}
+	res, err = s.Result()
+	if err != nil || !sawResult || text.String() != "all done now" || len(deleted) != 1 {
+		t.Fatalf("resume stream: %v %q %v", err, text.String(), deleted)
+	}
+}
+
+func TestPartialResume(t *testing.T) {
+	var deleted []string
+	email := eipagent.Tool("send_email", "e", func(ctx context.Context, in struct{}) (string, error) { return "sent", nil })
+	// One model step asks for two tools that both need approval.
+	twoCalls := eipagent.Plugin{Name: "two_calls", Apply: func(ctx *eipagent.PluginContext) error {
+		n := 0
+		return ctx.Provide("llm/two", &sdk.Provider{Name: "two", Generate: func(c context.Context, req *sdk.ModelRequest) (*sdk.ModelResponse, error) {
+			n++
+			if n == 1 {
+				return &sdk.ModelResponse{Message: sdk.Message{Role: "assistant", ToolCalls: []sdk.ToolCall{
+					{ID: "a", Name: "delete_file", Args: map[string]any{"path": "x"}}, {ID: "b", Name: "send_email", Args: map[string]any{}}}}}, nil
+			}
+			return &sdk.ModelResponse{Message: sdk.Message{Role: "assistant", Content: fmt.Sprintf("model call %d", n)}}, nil
+		}})
+	}}
+	a, err := eipagent.New(eipagent.WithModel("two:m"), eipagent.WithCompiledPlugin(twoCalls),
+		eipagent.WithTools(deleteTool(&deleted), email), eipagent.WithPlugin("mw_hitl", map[string]any{"interrupt_on": map[string]any{"*": true}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	th := a.Thread("p")
+	res, _ := th.Generate(bg, "go")
+	if len(res.Interrupts) != 2 {
+		t.Fatalf("want 2 interrupts, got %+v", res.Interrupts)
+	}
+	res, err = th.Resume(bg, eipagent.Approve("a"))
+	if err != nil || len(res.Interrupts) != 1 || res.Interrupts[0].ID != "b" || len(deleted) != 1 || res.Text != "" {
+		t.Fatalf("after first decision: %v %+v", err, res)
+	}
+	res, err = th.Resume(bg, eipagent.Reject("b", "not now"))
+	if err != nil || res.Interrupted() || res.Text != "model call 2" {
+		t.Fatalf("after second decision the model continues once: %v %+v", err, res)
 	}
 }
