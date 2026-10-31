@@ -4,3 +4,4 @@
 /eip
 *.test
 .vercel
+.DS_Store
