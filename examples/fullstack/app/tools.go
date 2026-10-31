@@ -49,16 +49,30 @@ func Tools(shop *Shop) []eipagent.ToolDef {
 				in.Amount, o.Card, o.ID, o.Item, o.RefundRef), nil
 		}), "risk", "high")
 
-	type EmailIn struct {
-		To      string `json:"to" desc:"customer email address"`
-		Subject string `json:"subject"`
-		Body    string `json:"body"`
-	}
-	email := eipagent.Tool("send_email", "Email the customer",
-		func(ctx context.Context, in EmailIn) (string, error) {
-			shop.Send(Email{To: in.To, Subject: in.Subject, Body: in.Body})
-			return "Email sent to " + in.To + ".", nil
-		})
+	return []eipagent.ToolDef{lookup, search, refund}
+}
 
-	return []eipagent.ToolDef{lookup, search, refund, email}
+type EmailIn struct {
+	To      string `json:"to" desc:"customer email address"`
+	Subject string `json:"subject"`
+	Body    string `json:"body"`
+}
+
+// Mailer is a compiled plugin that owns the send_email tool. Delivery
+// goes through a mail relay whose token it reads from the "secrets"
+// service when it sends: only this plugin is granted MAIL_RELAY_TOKEN,
+// every read lands in the audit log as secret.access, and the value is
+// redacted from logs, traces and audit records.
+func Mailer(shop *Shop) eipagent.Plugin {
+	return eipagent.Plugin{Name: "mailer", Inject: []string{"secrets"}, Apply: func(ctx *eipagent.PluginContext) error {
+		ctx.AddTool(eipagent.Tool("send_email", "Email the customer",
+			func(c context.Context, in EmailIn) (string, error) {
+				if _, err := ctx.Secret("secret://MAIL_RELAY_TOKEN"); err != nil {
+					return "", fmt.Errorf("mail relay: %w", err)
+				}
+				shop.Send(Email{To: in.To, Subject: in.Subject, Body: in.Body})
+				return "Email sent to " + in.To + ".", nil
+			}))
+		return nil
+	}}
 }

@@ -327,13 +327,14 @@ tr:last-child td { border-bottom: 0; }
 
   // On the docs website the live backend runs on a free instance that
   // sleeps when idle, so keep asking for about a minute while it wakes
-  // (the visitor can skip to the replay). Elsewhere, ask once.
+  // (the visitor can skip to the replay); a 404 means there is no backend
+  // behind the site, so go straight to the replay. Elsewhere, ask once.
   function health(ms) {
     var ctl = window.AbortController ? new AbortController() : null;
     var t = ctl && setTimeout(function () { ctl.abort(); }, ms);
     return fetch("api/health", ctl ? { signal: ctl.signal } : {}).then(function (r) {
       clearTimeout(t);
-      if (!r.ok) throw new Error(r.status);
+      if (!r.ok) { var err = new Error(r.status); err.status = r.status; throw err; }
       return r.json();
     }, function (e) { clearTimeout(t); throw e; });
   }
@@ -351,9 +352,10 @@ tr:last-child td { border-bottom: 0; }
       text.innerHTML = 'Waking the live backend… <a href="#" id="skipwake">use replay</a>';
       $("#skipwake").addEventListener("click", function (e) { e.preventDefault(); finish(toReplay()); });
       (function attempt() {
-        health(15000).then(function (h) { if (!done) finish(live(h)); }, function () {
+        health(15000).then(function (h) { if (!done) finish(live(h)); }, function (e) {
           if (done) return;
-          if (Date.now() > deadline) finish(toReplay());
+          // 404: no backend is configured here at all, so don't wait.
+          if (e && e.status === 404 || Date.now() > deadline) finish(toReplay());
           else setTimeout(attempt, 3000);
         });
       })();
@@ -557,17 +559,23 @@ tr:last-child td { border-bottom: 0; }
       });
     });
   }
+  function run(d) { return d.run ? " · run " + String(d.run).slice(0, 6) : ""; }
   function auditRow(e) {
     var d = e.data || {}, ic = "", what = "", why = "";
     switch (e.type) {
       case "plugin.active": ic = "info"; what = "Plugin " + d.plugin + " active"; why = (d.kind || "") + (d.perms && d.perms.length ? " · perms " + d.perms.join(",") : ""); break;
       case "plugin.disposed": what = "Plugin " + d.plugin + " unloaded"; break;
       case "plugin.failed": case "plugin.refused": ic = "bad"; what = "Plugin " + d.plugin + " " + e.type.split(".")[1]; why = d.error || ""; break;
-      case "model.call": what = "Model call · " + d.model; why = "step " + d.step + " · " + (d.input_tokens || 0) + " in / " + (d.output_tokens || 0) + " out tokens" + (d.tool_calls ? " · " + d.tool_calls + " tool call(s)" : "") + " · user " + (d.user || "-"); break;
+      case "model.call": what = "Model call · " + d.model; why = "step " + d.step + " · " + (d.input_tokens || 0) + " in / " + (d.output_tokens || 0) + " out tokens" + (d.tool_calls ? " · " + d.tool_calls + " tool call(s)" : "") + " · user " + (d.user || "-") + run(d); break;
       case "tool.call":
         ic = d.outcome === "ok" ? "ok" : d.outcome === "interrupted" ? "wait" : "bad";
-        what = d.tool + " · " + d.outcome;
-        why = (d.decision ? d.decision + " by " + (d.decided_by || "?") + " · " : "") + JSON.stringify(d.args || {});
+        what = d.tool + " · " + d.outcome + (d.plugin ? " · plugin " + d.plugin : "");
+        why = (d.decision ? d.decision + " by " + (d.decided_by || "?") + " · " : "") + JSON.stringify(d.args || {}) + run(d);
+        break;
+      case "secret.access":
+        ic = d.outcome === "granted" ? "info" : "bad";
+        what = "Secret " + d.secret + " · " + d.outcome + " to " + d.plugin;
+        why = d.error || "value never logged; redacted wherever it appears";
         break;
       default: what = e.type;
     }

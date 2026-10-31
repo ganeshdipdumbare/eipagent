@@ -382,6 +382,7 @@ fmt.Println(res.Text)</code></pre></div></div></div>
     <li><a href="#fullstack">Full-stack demo</a>: a support desk with approvals, redaction and an audit trail, and how its Go backend is written.</li>
     <li><a href="#lifecycles">Lifecycles</a>: exactly what happens, in what order, during a run.</li>
     <li><a href="#writing-plugins">Writing a plugin</a>: one Go file, no compile step.</li>
+    <li><a href="#plugin-packages">Shipping plugins</a>: validate, sign, install, approve, update and roll back.</li>
   </ul>
 </section>
 
@@ -482,7 +483,7 @@ go run ./examples/fullstack -model ollama:qwen3.5:4b  # the same app on a real l
 go test ./examples/fullstack/...                      # every flow, end to end over HTTP</code></pre></div>
   <p>Act as Sam (support agent) to chat as the customer, then switch to Ada (supervisor) to approve, edit or reject. Threads and the audit log live in <code>.eipagent/support-desk</code>, so stop the server mid-approval, start it again, and the request is still waiting.</p>
   <h3>Architecture</h3>
-  <div class="flow" role="img" aria-label="Architecture"><div class="row"><span class="node ">Browser UI</span><span class="edge">POST, server-sent events</span><span class="node info">Go net/http server</span><span class="edge">Stream · ResumeStream</span><span class="node ok">eipagent Agent</span></div><div class="row"><span class="node ok">eipagent Agent</span><span class="edge">plugins</span><span class="node ">tools</span><span class="node wait">refund_policy</span><span class="node wait">mw_hitl</span><span class="node ">mw_pii</span><span class="node ">mw_limits</span></div><div class="row"><span class="node ok">eipagent Agent</span><span class="edge">services</span><span class="node ">checkpoint_file</span><span class="node ">audit_jsonl</span><span class="node info">llm/demo or llm/ollama</span></div></div>
+  <div class="flow" role="img" aria-label="Architecture"><div class="row"><span class="node ">Browser UI</span><span class="edge">POST, server-sent events</span><span class="node info">Go net/http server</span><span class="edge">Stream · ResumeStream</span><span class="node ok">eipagent Agent</span></div><div class="row"><span class="node ok">eipagent Agent</span><span class="edge">plugins</span><span class="node ">tools</span><span class="node wait">refund_policy</span><span class="node wait">mw_hitl</span><span class="node ">mw_pii</span><span class="node ">mw_limits</span><span class="node ">mailer</span></div><div class="row"><span class="node ok">eipagent Agent</span><span class="edge">services</span><span class="node ">checkpoint_file</span><span class="node ">audit_jsonl</span><span class="node ">secrets_env</span><span class="node info">llm/demo or llm/ollama</span></div></div>
   <p>The backend is one Go package (<code>examples/fullstack/app</code>) of about 500 lines. The browser talks to it with plain JSON and server-sent events.</p>
   <div class="table"><table>
     <thead><tr><th>Endpoint</th><th>What it does</th><th>SDK call</th></tr></thead>
@@ -506,6 +507,9 @@ func New(cfg Config) (*Server, error) {
 		cfg.RefundLimit = 50
 	}
 	shop := NewShop()
+	if os.Getenv("MAIL_RELAY_TOKEN") == "" {
+		os.Setenv("MAIL_RELAY_TOKEN", "demo-relay-token-5f2c9a") // a stand-in; production reads it from Vault
+	}
 	opts := []eipagent.Option{
 		eipagent.WithModel(cfg.Model),
 		eipagent.WithInstructions(instructions),
@@ -513,6 +517,9 @@ func New(cfg Config) (*Server, error) {
 		eipagent.WithTools(Tools(shop)...),
 		// Business rule: refunds above the limit wait for a supervisor.
 		eipagent.WithCompiledPlugin(RefundPolicy(cfg.RefundLimit)),
+		// Email goes out through a plugin that alone may read the relay token.
+		eipagent.WithPlugin("secrets_env", map[string]any{"allow": []any{"MAIL_RELAY_TOKEN"}, "grants": map[string]any{"mailer": []any{"MAIL_RELAY_TOKEN"}}}),
+		eipagent.WithCompiledPlugin(Mailer(shop)),
 		// Every outgoing email needs a human OK.
 		eipagent.WithPlugin("mw_hitl", map[string]any{"interrupt_on": map[string]any{
 			"send_email": map[string]any{"allowed": []any{"approve", "edit", "reject"}, "description": "Send this email to the customer?"},
@@ -707,6 +714,23 @@ for (;;) {
   <h3>Masking card numbers</h3>
   <p>When the customer writes “My card is 4111 1111 1111 1111”, <code>mw_pii</code> masks it before every model call. The app’s <code>Inspector</code> plugin runs innermost and reports what the model actually received, which the UI shows under “Under the hood”: <code>My card is ***************1111</code>. The receipt email that follows still waits for approval through <code>mw_hitl</code>.</p>
 
+  <h3>A secret only one plugin can read</h3>
+  <p>Emails go out through a mail relay that needs a token. Instead of a global variable, a small <code>mailer</code> plugin owns the <code>send_email</code> tool and asks the <code>secrets</code> service for the token each time it sends. <code>secrets_env</code> grants <code>MAIL_RELAY_TOKEN</code> to <code>mailer</code> and nobody else. The core tells the provider which plugin is asking, so another plugin can't claim to be <code>mailer</code>.</p>
+  <div class="code" data-title="app/tools.go"><pre><code class="language-go">func Mailer(shop *Shop) eipagent.Plugin {
+	return eipagent.Plugin{Name: "mailer", Inject: []string{"secrets"}, Apply: func(ctx *eipagent.PluginContext) error {
+		ctx.AddTool(eipagent.Tool("send_email", "Email the customer",
+			func(c context.Context, in EmailIn) (string, error) {
+				if _, err := ctx.Secret("secret://MAIL_RELAY_TOKEN"); err != nil {
+					return "", fmt.Errorf("mail relay: %w", err)
+				}
+				shop.Send(Email{To: in.To, Subject: in.Subject, Body: in.Body})
+				return "Email sent to " + in.To + ".", nil
+			}))
+		return nil
+	}}
+}</code></pre></div>
+  <p>Approve an email and open the Activity tab: you'll see <code>Secret MAIL_RELAY_TOKEN · granted to mailer</code>, and the <code>send_email</code> row names <code>mailer</code> as the plugin that ran it. Every row carries the run id, so you can group a run's model calls, tool calls and secret reads. The token's value is never written. If it ever showed up in a tool result, a model reply or an error, the audit log, traces and logs would show <code>[REDACTED]</code> instead.</p>
+
   <h3>What the SDK handles for you</h3>
   <div class="table"><table>
   <thead><tr><th>You need</th><th>Without an agent framework</th><th>With eipagent</th></tr></thead>
@@ -716,6 +740,7 @@ for (;;) {
     <tr><td>Approve, edit or reject a call</td><td>Rewrite messages by hand so the model understands</td><td><code>Approve</code>, <code>Edit</code>, <code>Reject</code> decisions; the loop feeds the outcome back to the model</td></tr>
     <tr><td>Know who approved what</td><td>Ad-hoc logging</td><td><code>Decision.By</code> plus <code>audit_jsonl</code>, hash-chained and verifiable</td></tr>
     <tr><td>Keep card numbers away from the model</td><td>Scrub every prompt path</td><td><code>mw_pii</code> masks them before every model call</td></tr>
+    <tr><td>Give one component an API key, and only that one</td><td>Environment variables every package can read</td><td>Per-plugin grants in <code>secrets_env</code> or <code>secrets_vault</code>; every read audited; values redacted from logs, traces and audit</td></tr>
     <tr><td>Stream tokens and tool activity to a UI</td><td>Provider-specific streaming code</td><td>One <code>Events()</code> iterator, the same for every provider</td></tr>
     <tr><td>Two supervisors clicking at once</td><td>Locks around your storage</td><td>Versioned saves return <code>ErrThreadBusy</code> to the second writer</td></tr>
     <tr><td>Swap the model</td><td>Rewrite the client code</td><td>Change <code>-model</code>: <code>demo:support</code>, <code>ollama:qwen3.5:4b</code>, <code>anthropic:…</code></td></tr>
@@ -1046,6 +1071,83 @@ for _, s := range agent.Status() {
   <div class="code" data-title="terminal"><pre><code class="language-bash">go run ./examples/ollama -demo plugins   # watch it live with a local model</code></pre></div>
 </section>
 
+<section id="plugin-packages" class="page">
+  <h1>Shipping plugins</h1>
+  <p>A plugin written by another team or a vendor has to reach production safely. The SDK has a pipeline for that: a manifest, a linter, signed packages, and a store that holds each version until someone approves it, then swaps it into a running agent. The <code>eip plugin</code> CLI and the <code>eipagent/pluginpkg</code> Go package do the same things, so a control plane can drive it.</p>
+  <div class="flow" role="img" aria-label="From source to running plugin"><div class="row"><span class="node ">init</span><span class="edge">write code</span><span class="node wait">DRAFT</span><span class="edge">validate</span><span class="node info">VALIDATED</span><span class="edge">build + sign</span><span class="node ">.eip package</span></div></div>
+
+  <h2>Scaffold</h2>
+  <div class="code" data-title="terminal"><pre><code class="language-bash">eip plugin init -template tool weather
+# templates: tool, middleware, provider, store, mcp, sandbox, webhook</code></pre></div>
+  <p>This creates <code>weather/weather.go</code>, <code>weather/plugin.json</code> and a README. Every template, already generated, is in <a href="https://github.com/ganeshdipdumbare/eipagent/tree/main/examples/plugins"><code>examples/plugins</code></a>.</p>
+
+  <h2>The manifest</h2>
+  <div class="code" data-title="weather/plugin.json"><pre><code class="language-json">{
+  "schema": 1,
+  "name": "weather",
+  "version": "0.1.0",
+  "description": "Current weather for a city",
+  "permissions": ["net"],
+  "inject": ["?secrets"],
+  "secrets": ["WEATHER_API_KEY"],
+  "tools": ["weather"],
+  "eipagent": "&gt;=0.2.0, &lt;1.0.0"
+}</code></pre></div>
+  <p><code>permissions</code> and <code>inject</code> must equal the <code>var Permissions</code> and <code>var Inject</code> in the code. <code>secrets</code> lists names, never values. <code>eipagent</code> is the range of SDK versions the plugin works with.</p>
+
+  <h2>Validate</h2>
+  <div class="code" data-title="terminal"><pre><code class="language-bash">eip plugin validate weather</code></pre></div>
+  <div class="table"><table>
+    <thead><tr><th>Rule</th><th>Fails when</th></tr></thead>
+    <tbody>
+      <tr><td><code>forbidden-import</code></td><td>The code uses <code>unsafe</code>, <code>syscall</code>, <code>os.Exit</code> or anything else plugins never get</td></tr>
+      <tr><td><code>permission-missing</code></td><td>An import or <code>os</code> call needs a permission the plugin doesn't declare. An unused permission is a warning.</td></tr>
+      <tr><td><code>permission-mismatch</code>, <code>inject-mismatch</code></td><td>The manifest and the code disagree</td></tr>
+      <tr><td><code>undeclared-service</code></td><td>The code calls <code>Service("x")</code> but <code>x</code> isn't in <code>Inject</code></td></tr>
+      <tr><td><code>secret-ref</code></td><td>A <code>secret://</code> reference is malformed or not listed in <code>secrets</code></td></tr>
+      <tr><td><code>tools</code>, <code>provides</code></td><td>A tool or service the code registers isn't in the manifest</td></tr>
+      <tr><td><code>manifest</code>, <code>compat</code></td><td>The manifest is invalid, or this SDK version is outside its range</td></tr>
+      <tr><td><code>compile</code></td><td>The code doesn't compile with only its declared permissions</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Build and sign</h2>
+  <div class="code" data-title="terminal"><pre><code class="language-bash">eip plugin keygen -out ~/.eip/signing.key            # ed25519; share signing.key.pub
+eip plugin build -key ~/.eip/signing.key weather     # writes weather-0.1.0.eip
+eip plugin inspect weather-0.1.0.eip                 # manifest, hashes, signer</code></pre></div>
+  <p>A package is a reproducible archive: the manifest with the sha256 of every file, an ed25519 signature over the manifest, and the files. Opening one rejects path tricks, links, extra or missing files and hash mismatches.</p>
+
+  <h2>Install, approve, enable</h2>
+  <div class="code" data-title="terminal"><pre><code class="language-bash">cat signing.key.pub &gt;&gt; .eipagent/plugins/trusted_keys
+eip plugin install -by alice weather-0.1.0.eip       # VALIDATED: stored, not running
+eip plugin approve -by bob weather 0.1.0             # APPROVED
+eip plugin enable weather                            # ACTIVE
+eip run -store .eipagent/plugins -model openai:gpt-4.1 "weather in Oslo?"</code></pre></div>
+  <div class="flow" role="img" aria-label="Installed plugin lifecycle"><div class="row"><span class="node ">install</span><span class="edge">signature · pin · lint</span><span class="node info">VALIDATED</span><span class="edge">approve</span><span class="node info">APPROVED</span><span class="edge">enable</span><span class="node ok">ACTIVE</span></div><div class="row"><span class="node ok">ACTIVE</span><span class="edge">disable</span><span class="node info">APPROVED</span></div><div class="row"><span class="node info">APPROVED</span><span class="edge">enable fails: compile · Apply · missing dependency</span><span class="node bad">FAILED</span><span class="edge">previous version keeps running</span><span class="node ok">ACTIVE · old</span></div><div class="row"><span class="node ok">ACTIVE</span><span class="edge">rollback</span><span class="node ok">ACTIVE · previous version</span></div><div class="row"><span class="node ">any version</span><span class="edge">quarantine · or package changed on disk</span><span class="node bad">QUARANTINED</span><span class="edge">approve again</span><span class="node info">APPROVED</span></div></div>
+  <ul>
+    <li><b>Nothing runs before approval.</b> Installed versions sit in the store. The agent only loads what has been enabled.</li>
+    <li><b>Checked twice.</b> On install: the signature against <code>trusted_keys</code> (required unless <code>-allow-unsigned</code>), an optional <code>-sha256</code> pin, compatibility and the linter. On enable: the stored package again, so one edited on disk is quarantined instead of loaded.</li>
+    <li><b>Updates can't take you down.</b> If a new version fails to compile, fails to start or is missing a dependency, the old one keeps running and the new one is marked FAILED.</li>
+    <li><b>Built-in names are reserved.</b> A package can't replace <code>policy</code>, <code>tool_shell</code> or any other standard plugin.</li>
+    <li><b>Everything is recorded.</b> The store keeps who installed and approved each version and who signed it. With an audit plugin loaded, each step is also an audit event.</li>
+  </ul>
+
+  <h2>From Go, in a running agent</h2>
+  <div class="code" data-title="go"><pre><code class="language-go">st, _ := pluginpkg.OpenStore(".eipagent/plugins", pluginpkg.StoreOptions{
+	Verify: pluginpkg.VerifyOptions{TrustedKeys: keys, RequireSignature: true},
+})
+agent, _ := eipagent.New(eipagent.WithModel("openai:gpt-4.1"), eipagent.WithPluginStore(st))
+
+st.Install(pkg, "alice")                // held
+st.Approve("weather", "0.1.0", "bob")   // approved
+st.Enable("weather", "")                // live in this agent
+st.Update(newPkg, "alice")              // switches if approved; old version kept on failure
+st.Rollback("weather")                  // back to the previous version
+st.Quarantine("weather", "0.1.0", "security advisory")</code></pre></div>
+  <div class="code" data-title="terminal"><pre><code class="language-bash">go run ./examples/plugin-store   # one plugin through every state, including a failed update</code></pre></div>
+  <div class="note warn"><b>What a signature means</b><div><p>Signing and approval tell you who published a plugin and that someone reviewed it. They don't make the code safe. Plugins run in the agent's process. For code you don't trust, run the whole agent in a sandbox with <code>WithRunIn</code>.</p></div></div>
+</section>
+
 <section id="middleware" class="page">
   <h1>Middleware</h1>
   <p>Middleware wraps every model call and every tool call. The standard pack is configured as plugins:</p>
@@ -1162,6 +1264,34 @@ eipagent.WithPlugin("trigger_webhook", map[string]any{"routes": []any{
 eipagent.WithPlugin("audit_jsonl", map[string]any{"path": "/var/log/eipagent/audit.jsonl"})</code></pre></div>
   <div class="code" data-title="terminal"><pre><code class="language-bash">go run ./cmd/eip trace view .eipagent/trace.jsonl > trace.html   # timeline of every run, model call and tool call</code></pre></div>
   <p>The audit log records every plugin load, model call and tool call, including who approved what. Each line is hash-chained to the one before, so <code>audit.Verify(path)</code> detects any edited or deleted line.</p>
+
+  <h2>Send them off the machine</h2>
+  <div class="code" data-title="go"><pre><code class="language-go">// Audit records to a SIEM or control plane: NDJSON batches, HMAC-signed, retried.
+eipagent.WithPlugin("audit_jsonl", map[string]any{"path": "-"}), // "-" = no local file
+eipagent.WithPlugin("audit_http", map[string]any{
+	"url":      "https://siem.internal/eipagent",
+	"hmac_key": "secret://AUDIT_HMAC_KEY",
+	"headers":  map[string]any{"Authorization": "secret://SIEM_TOKEN"},
+}),
+
+// Traces to any OpenTelemetry collector (OTLP/HTTP).
+eipagent.WithPlugin("trace_otlp", map[string]any{"endpoint": "http://otel-collector:4318"}),</code></pre></div>
+  <p><code>audit_http</code> receives the same records as the local log, with their hashes, so the receiver can check the chain itself. <code>trace_otlp</code> sends one trace per run, with a span for each model call and each tool call, using the OpenTelemetry <code>gen_ai.*</code> attribute names.</p>
+
+  <h2>Standard fields</h2>
+  <p>Audit records and spans share field names, so a control plane can join them:</p>
+  <div class="table"><table>
+    <thead><tr><th>Field</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><code>run</code></td><td>Unique id of one Generate, Stream or Resume</td></tr>
+      <tr><td><code>thread</code>, <code>user</code></td><td>The conversation and who it runs for</td></tr>
+      <tr><td><code>plugin</code></td><td>The plugin that owns the tool, or that read a secret</td></tr>
+      <tr><td><code>tool</code>, <code>call_id</code>, <code>step</code></td><td>Which tool call, and in which step of the run</td></tr>
+      <tr><td><code>provider</code>, <code>model</code>, token counts</td><td>Model call metadata</td></tr>
+      <tr><td><code>decision</code>, <code>decided_by</code>, <code>outcome</code></td><td>Approvals and policy results</td></tr>
+    </tbody>
+  </table></div>
+  <p>Event types: <code>model.call</code>, <code>tool.call</code>, <code>secret.access</code>, <code>plugin.active</code> / <code>failed</code> / <code>refused</code> / <code>disposed</code>, and the store events <code>plugin.install</code>, <code>approve</code>, <code>enable</code>, <code>enable_failed</code>, <code>rollback</code>, <code>quarantine</code>, <code>uninstall</code>.</p>
 </section>
 
 
@@ -1170,13 +1300,46 @@ eipagent.WithPlugin("audit_jsonl", map[string]any{"path": "/var/log/eipagent/aud
   <p><code>eipagent.New()</code> starts in the <b>secure</b> preset. It is built in layers:</p>
   <ul>
     <li><b>Trust gate.</b> Plugin files must match a sha256 pin. Each plugin can import only what its permissions allow.</li>
+    <li><b>Signed, approved plugins.</b> Packages are signed, checked by a linter, held until approved, and pinned when enabled. A version that fails to start never replaces the running one. See <a href="#plugin-packages">Shipping plugins</a>.</li>
     <li><b>Locked policy.</b> An admin policy loads last, and nothing can override it. Locked plugins always run first and can't be removed.</li>
-    <li><b>Secrets by grant.</b> Config refers to <code>secret://NAME</code>. Each plugin can read only the secrets granted to it.</li>
+    <li><b>Secrets by grant.</b> Config refers to <code>secret://NAME</code>. Each plugin can read only the secrets granted to it, every read is audited, and values are redacted from logs, traces and audit. See <a href="#secrets">Secrets</a>.</li>
     <li><b>Containment.</b> Sandboxes have no network by default, web fetching is allowlisted, and webhooks must be signed.</li>
     <li><b>People in control.</b> Approvals, reviewer models, limits and token budgets.</li>
-    <li><b>Evidence.</b> A tamper-evident audit log.</li>
+    <li><b>Evidence.</b> A tamper-evident audit log, shipped off the machine with <code>audit_http</code>, plus OpenTelemetry traces.</li>
   </ul>
   <div class="note warn"><b>Limit</b><div><p>Permission scoping inside the interpreter is defense in depth, not a hard boundary. For untrusted plugin code, run the agent in a container or microVM with <code>WithRunIn</code>.</p></div></div>
+</section>
+
+<section id="secrets" class="page">
+  <h1>Secrets</h1>
+  <p>Config never holds a key. It holds a reference, <code>secret://NAME</code>, and a secrets provider resolves it when a plugin asks.</p>
+  <div class="code" data-title="go"><pre><code class="language-go">eipagent.WithPlugin("secrets_vault", map[string]any{
+	"address":     "https://vault.internal:8200", // token from $VAULT_TOKEN or token_file
+	"mount":       "secret",
+	"prefix":      "eipagent",                    // secret://OPENAI_API_KEY -> secret/data/eipagent/OPENAI_API_KEY
+	"ttl_seconds": 300,                           // re-read after 5 minutes: rotation needs no restart
+	"grants": map[string]any{
+		"llm_openai": []any{"OPENAI_API_KEY"},
+		"mailer":     []any{"MAIL_RELAY_TOKEN"},
+	},
+})
+eipagent.WithPlugin("llm_openai", map[string]any{"api_key": "secret://OPENAI_API_KEY"})</code></pre></div>
+  <div class="table"><table>
+    <thead><tr><th>Provider</th><th>Reads from</th></tr></thead>
+    <tbody>
+      <tr><td><code>secrets_env</code></td><td>Allow-listed environment variables</td></tr>
+      <tr><td><code>secrets_vault</code></td><td>HashiCorp Vault KV v2, cached with a TTL. If Vault is unreachable once the cache expires, lookups fail rather than serve stale values.</td></tr>
+      <tr><td>Your own</td><td>Any plugin that provides <code>"secrets"</code> as <code>sdk.Secrets{Get: func(ctx, caller, name)}</code>, for example over a cloud secret manager or KMS</td></tr>
+    </tbody>
+  </table></div>
+  <ul>
+    <li><b>Grants per plugin.</b> With <code>grants</code>, a plugin reads only the names granted to it.</li>
+    <li><b>Identity from the core.</b> The core passes the real calling plugin to the provider. A plugin can't ask as someone else.</li>
+    <li><b>Redacted everywhere.</b> Every value that is handed out is remembered. Logs, traces and audit records show <code>[REDACTED]</code> wherever it would have appeared: tool arguments, results, model replies, errors.</li>
+    <li><b>Every read is audited</b> as <code>secret.access</code>, with the plugin, the secret name and whether it was granted. The value is never recorded.</li>
+    <li><b>Kept on the host.</b> With <code>WithRunIn</code>, model calls go back to the host, so keys never enter the sandbox.</li>
+  </ul>
+  <div class="note"><b>Resolve at use</b><div><p>Call <code>ctx.Secret("secret://NAME")</code> when you need the value, not once in <code>Apply</code>. Then a rotated key reaches the plugin as soon as the provider's cache refreshes.</p></div></div>
 </section>
 
 <section id="policy" class="page">
@@ -1316,8 +1479,8 @@ eipagent.WithPlugin("audit_jsonl", map[string]any{"path": "/var/log/eipagent/aud
       <tr><td>Tools</td><td><code>tool_shell</code>, <code>tool_fs</code>, <code>tool_http_fetch</code>, <code>tool_time</code></td></tr>
       <tr><td>Sandboxes</td><td><code>sandbox_local</code>, <code>sandbox_docker</code>, <code>exec_local</code>, <code>exec_sandbox</code>, <code>tool_sandbox</code></td></tr>
       <tr><td>Integrations</td><td><code>mcp_client</code>, <code>agents</code>, <code>skills_dir</code></td></tr>
-      <tr><td>Operations</td><td><code>jobs</code>, <code>trigger_webhook</code>, <code>trace_file</code></td></tr>
-      <tr><td>Security</td><td><code>policy</code>, <code>audit_jsonl</code>, <code>secrets_env</code></td></tr>
+      <tr><td>Operations</td><td><code>jobs</code>, <code>trigger_webhook</code>, <code>trace_file</code>, <code>trace_otlp</code></td></tr>
+      <tr><td>Security</td><td><code>policy</code>, <code>audit_jsonl</code>, <code>audit_http</code>, <code>secrets_env</code>, <code>secrets_vault</code></td></tr>
     </tbody>
   </table></div>
 </section>
@@ -1329,6 +1492,22 @@ go run ./cmd/eip run -model openai:gpt-4.1 "hello"        # one prompt, headless
 go run ./cmd/eip plugin pin -plugins ./plugins            # pin plugin files for the secure preset
 go run ./cmd/eip config dump -profile eip.json            # show the policy and every plugin's state
 go run ./cmd/eip trace view .eipagent/trace.jsonl > t.html</code></pre></div>
+  <h2>Plugin commands</h2>
+  <div class="code" data-title="terminal"><pre><code class="language-bash">eip plugin init -template tool NAME        # scaffold (tool, middleware, provider, store, mcp, sandbox, webhook)
+eip plugin validate PATH                   # lint
+eip plugin build -key KEY PATH             # signed NAME-VERSION.eip
+eip plugin inspect PKG                     # manifest, hashes, signer
+eip plugin keygen -out KEY                 # ed25519 signing key pair
+
+eip plugin install [-sha256 X] PKG         # verify and hold
+eip plugin approve NAME VERSION
+eip plugin enable NAME [VERSION]
+eip plugin update PKG                      # install and switch if approved
+eip plugin rollback NAME
+eip plugin quarantine -reason R NAME VERSION
+eip plugin disable | uninstall NAME
+eip plugin list</code></pre></div>
+  <p>Store commands take <code>-store DIR</code> (default <code>.eipagent/plugins</code>). <code>run</code>, <code>repl</code> and <code>serve</code> take <code>-store DIR</code> to load its enabled plugins.</p>
 </section>
 
   <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
@@ -1367,9 +1546,9 @@ go run ./cmd/eip trace view .eipagent/trace.jsonl > t.html</code></pre></div>
     { title: "Examples", pages: ["fullstack"] },
     { title: "Foundations", pages: ["providers", "generating-text", "streaming", "tools", "structured-output", "threads", "human-in-the-loop"] },
     { title: "Agents", pages: ["agent-loop", "multi-agent", "lifecycles"] },
-    { title: "Plugins", pages: ["plugins", "writing-plugins", "runtime-plugins", "middleware"] },
+    { title: "Plugins", pages: ["plugins", "writing-plugins", "runtime-plugins", "plugin-packages", "middleware"] },
     { title: "Infrastructure", pages: ["sandboxes", "persistence", "integrations", "automation", "observability"] },
-    { title: "Security", pages: ["security", "policy"] },
+    { title: "Security", pages: ["security", "secrets", "policy"] },
     { title: "Reference", pages: ["reference-options", "reference-run", "reference-result", "reference-hooks", "reference-plugins", "cli"] }
   ];
   var ICON = {

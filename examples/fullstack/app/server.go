@@ -56,6 +56,9 @@ func New(cfg Config) (*Server, error) {
 		cfg.RefundLimit = 50
 	}
 	shop := NewShop()
+	if os.Getenv("MAIL_RELAY_TOKEN") == "" {
+		os.Setenv("MAIL_RELAY_TOKEN", "demo-relay-token-5f2c9a") // a stand-in; production reads it from Vault
+	}
 	opts := []eipagent.Option{
 		eipagent.WithModel(cfg.Model),
 		eipagent.WithInstructions(instructions),
@@ -63,6 +66,9 @@ func New(cfg Config) (*Server, error) {
 		eipagent.WithTools(Tools(shop)...),
 		// Business rule: refunds above the limit wait for a supervisor.
 		eipagent.WithCompiledPlugin(RefundPolicy(cfg.RefundLimit)),
+		// Email goes out through a plugin that alone may read the relay token.
+		eipagent.WithPlugin("secrets_env", map[string]any{"allow": []any{"MAIL_RELAY_TOKEN"}, "grants": map[string]any{"mailer": []any{"MAIL_RELAY_TOKEN"}}}),
+		eipagent.WithCompiledPlugin(Mailer(shop)),
 		// Every outgoing email needs a human OK.
 		eipagent.WithPlugin("mw_hitl", map[string]any{"interrupt_on": map[string]any{
 			"send_email": map[string]any{"allowed": []any{"approve", "edit", "reject"}, "description": "Send this email to the customer?"},

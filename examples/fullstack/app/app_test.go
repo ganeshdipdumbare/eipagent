@@ -139,14 +139,24 @@ func TestSupportDeskFlows(t *testing.T) {
 		Verified bool
 	}
 	c2.get("/api/audit", &au)
-	found := false
+	found, mailer, runID := false, false, false
 	for _, e := range au.Entries {
-		if d, _ := e["data"].(map[string]any); d != nil && d["decided_by"] == "ada" && d["decision"] == "edit" {
+		d, _ := e["data"].(map[string]any)
+		if d == nil {
+			continue
+		}
+		if d["decided_by"] == "ada" && d["decision"] == "edit" {
 			found = true
 		}
+		if e["type"] == "tool.call" && d["tool"] == "send_email" && d["plugin"] == "mailer" {
+			mailer = true // the tool's owning plugin is recorded
+		}
+		if e["type"] == "model.call" && d["run"] != nil && d["run"] != "" {
+			runID = true
+		}
 	}
-	if !au.Verified || !found {
-		t.Fatalf("audit: verified=%v found=%v", au.Verified, found)
+	if !au.Verified || !found || !mailer || !runID {
+		t.Fatalf("audit: verified=%v found=%v mailer=%v run=%v", au.Verified, found, mailer, runID)
 	}
 
 	// The thread view pairs tool calls with results.
@@ -173,4 +183,26 @@ func TestEditedArgsInEvents(t *testing.T) {
 		}
 	}
 	t.Fatal("no tool_result event")
+}
+
+func TestApprovedEmailReadsRelaySecret(t *testing.T) {
+	c, s := newServer(t, t.TempDir())
+	c.stream("/api/threads/t-m/messages", map[string]any{"text": "Please email me the receipt for order #1120.", "user": "sam"})
+	var ap struct{ Approvals []map[string]any }
+	c.get("/api/approvals", &ap)
+	if len(ap.Approvals) == 0 {
+		t.Fatal("no email approval")
+	}
+	c.stream("/api/threads/t-m/decisions", map[string]any{"user": "ada", "decisions": []any{map[string]any{"InterruptID": ap.Approvals[0]["ID"], "Type": "approve"}}})
+	if len(s.shop.Outbox()) != 1 {
+		t.Fatalf("outbox: %v", s.shop.Outbox())
+	}
+	var au struct{ Entries []map[string]any }
+	c.get("/api/audit", &au)
+	for _, e := range au.Entries {
+		if d, _ := e["data"].(map[string]any); e["type"] == "secret.access" && d["plugin"] == "mailer" && d["outcome"] == "granted" {
+			return
+		}
+	}
+	t.Fatal("no secret.access by mailer in the audit log")
 }
