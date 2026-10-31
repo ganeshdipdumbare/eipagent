@@ -1,0 +1,29 @@
+{
+  "require_pins": true,
+  "hot_reload": false,
+  "allow": [],
+  "deny": ["creator", "sandbox_local"],
+  "grants": {
+    "*": ["net"],
+    "audit_jsonl": ["fs:read", "fs:write"],
+    "secrets_env": ["env"],
+    "sandbox_docker": ["exec"],
+    "db_sql": ["db"], "checkpoint_sql": ["db"], "store_sql": ["db"]
+  },
+  "locked": ["policy", "audit_jsonl", "secrets_env"],
+  "require": [
+    { "use": "audit_jsonl", "config": { "path": "/var/log/eipagent/audit.jsonl" } },
+    { "use": "secrets_env", "config": {
+        "allow": ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "EIP_DATABASE_URL"],
+        "grants": { "llm_openai": ["OPENAI_API_KEY"], "llm_anthropic": ["ANTHROPIC_API_KEY"], "db_sql": ["EIP_DATABASE_URL"] } } },
+    { "use": "policy" }
+  ],
+  "rules": {
+    "mode": "workspace-write",
+    "require_sandbox": true,
+    "allow_models": ["anthropic:*", "openai:gpt-4.1*"],
+    "deny_tools": ["*__delete_*"],
+    "max_tokens_run": 400000,
+    "roles": { "analyst": { "mode": "read-only" } }
+  }
+}

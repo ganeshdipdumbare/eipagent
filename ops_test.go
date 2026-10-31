@@ -1,0 +1,103 @@
+package eipagent_test
+
+import (
+	"bytes"
+	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"net"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"eipagent"
+)
+
+func TestTraceAndViewer(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "trace.jsonl")
+	a := mockAgent(t, nil, eipagent.WithPlugins("tool_time"), eipagent.WithPlugin("trace_file", map[string]any{"path": path}))
+	if _, err := a.Generate(bg, "what time is it"); err != nil {
+		t.Fatal(err)
+	}
+	a.Close()
+	raw, _ := os.ReadFile(path)
+	if c := strings.Count(string(raw), "\n"); c != 4 { // run + 2 model + 1 tool
+		t.Fatalf("expected 4 spans, got %d: %s", c, raw)
+	}
+	out, err := exec.Command("go", "run", "./cmd/eip", "trace", "view", path).CombinedOutput()
+	if err != nil || !bytes.Contains(out, []byte("current_time")) || !bytes.Contains(out, []byte("<title>Agent trace</title>")) {
+		t.Fatalf("viewer: %v %.300s", err, out)
+	}
+}
+
+func waitFor(t *testing.T, cond func() bool) {
+	t.Helper()
+	for i := 0; i < 300; i++ {
+		if cond() {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("timed out")
+}
+
+func TestScheduledJob(t *testing.T) {
+	when := time.Now().Add(3 * time.Second).UTC().Format(time.RFC3339Nano)
+	a := mockAgent(t, []any{map[string]any{"text": "report sent"}}, eipagent.WithPlugin("jobs", map[string]any{
+		"tick_seconds": 1, "jobs": []any{map[string]any{"name": "report", "schedule": "once " + when, "prompt": "send the report", "user": "ops"}},
+	}))
+	waitFor(t, func() bool {
+		ids, _ := a.Engine().Root().Snapshot().Services["checkpointer"].(*eipagent.Checkpointer).List(bg, "job-")
+		return len(ids) == 1
+	})
+}
+
+func TestWebhook(t *testing.T) {
+	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	addr := ln.Addr().String()
+	ln.Close()
+	t.Setenv("HOOK_TOKEN", "s3cret")
+	got := make(chan string, 1)
+	tool := eipagent.Tool("noop", "n", func(ctx context.Context, in struct{}) (string, error) { return "", nil })
+	a := mockAgent(t, nil, eipagent.WithTools(tool), eipagent.WithPlugin("trigger_webhook", map[string]any{
+		"addr": addr, "routes": []any{map[string]any{"path": "/gh", "secret": "secret://HOOK_TOKEN", "user": "bot", "thread": "gh-{repo.name}", "prompt": "event {action}"}},
+	}))
+	body := []byte(`{"action":"opened","repo":{"name":"eip"}}`)
+	post := func(sig string) int {
+		req, _ := http.NewRequest("POST", "http://"+addr+"/gh", bytes.NewReader(body))
+		req.Header.Set("X-Signature-256", sig)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if code := post("sha256=bad"); code != 401 {
+		t.Fatalf("unsigned must be rejected, got %d", code)
+	}
+	mac := hmac.New(sha256.New, []byte("s3cret"))
+	mac.Write(body)
+	if code := post("sha256=" + hex.EncodeToString(mac.Sum(nil))); code != 202 {
+		t.Fatalf("signed: %d", code)
+	}
+	waitFor(t, func() bool {
+		msgs, _ := a.Thread("gh-eip").Messages(bg)
+		if len(msgs) > 0 {
+			select {
+			case got <- msgs[0].Content:
+			default:
+			}
+			return true
+		}
+		return false
+	})
+	if c := <-got; c != "event opened" {
+		t.Fatalf("prompt: %q", c)
+	}
+}

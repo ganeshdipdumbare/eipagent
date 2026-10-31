@@ -1,0 +1,5 @@
+# runtime state written by plugins (threads, audit, traces, sandboxes)
+.eipagent/
+# built binaries
+/eip
+*.test
