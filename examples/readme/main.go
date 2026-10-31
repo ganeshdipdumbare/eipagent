@@ -245,7 +245,7 @@ func runtimePlugins(string) {
 
 	check(eng.Load(eipagent.PluginSpec{Use: "mw_pii", Config: map[string]any{"strategy": "mask"}}))
 	check(eng.Load(eipagent.PluginSpec{Use: "mw_pii", Config: map[string]any{"strategy": "hash"}})) // update config
-	check(eng.Reload("mw_pii"))                                                                    // update code from source
+	check(eng.Reload("mw_pii"))                                                                     // update code from source
 	check(eng.Unload("store_inmem"))
 	fmt.Println(eng.State("memory_store")) // PENDING again; its tools are gone
 
