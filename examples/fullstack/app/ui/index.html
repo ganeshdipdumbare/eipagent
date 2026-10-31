@@ -195,6 +195,7 @@ tr:last-child td { border-bottom: 0; }
   .toolcard, .approval { margin-left: 0; }
   .bubble { max-width: 92%; }
 }
+#modetext a { color: inherit; }
 @media (max-width: 420px) { #mode { display: none; } .top { gap: 10px; } }
 @media (prefers-reduced-motion: reduce) { .caret, .spin { animation: none; } }
 </style>
@@ -324,10 +325,38 @@ tr:last-child td { border-bottom: 0; }
     }
   };
 
+  // On the docs website the live backend runs on a free instance that
+  // sleeps when idle, so keep asking for about a minute while it wakes
+  // (the visitor can skip to the replay). Elsewhere, ask once.
+  function health(ms) {
+    var ctl = window.AbortController ? new AbortController() : null;
+    var t = ctl && setTimeout(function () { ctl.abort(); }, ms);
+    return fetch("api/health", ctl ? { signal: ctl.signal } : {}).then(function (r) {
+      clearTimeout(t);
+      if (!r.ok) throw new Error(r.status);
+      return r.json();
+    }, function (e) { clearTimeout(t); throw e; });
+  }
   function backend() {
-    return api.get("api/health").then(function (h) { state.live = true; return h; }).catch(function () {
+    var toReplay = function () {
       if (window.EIP_RECORDING) { state.replay = window.EIP_RECORDING; replay.start(state.replay); return { mode: "replay", model: state.replay.model, refund_limit: state.replay.refund_limit }; }
       return { mode: "offline" };
+    };
+    var live = function (h) { state.live = true; return h; };
+    if (!window.EIP_RECORDING) return health(10000).then(live, toReplay);
+    return new Promise(function (resolve) {
+      var deadline = Date.now() + 75000, done = false;
+      var finish = function (v) { if (!done) { done = true; resolve(v); } };
+      var text = $("#modetext");
+      text.innerHTML = 'Waking the live backend… <a href="#" id="skipwake">use replay</a>';
+      $("#skipwake").addEventListener("click", function (e) { e.preventDefault(); finish(toReplay()); });
+      (function attempt() {
+        health(15000).then(function (h) { if (!done) finish(live(h)); }, function () {
+          if (done) return;
+          if (Date.now() > deadline) finish(toReplay());
+          else setTimeout(attempt, 3000);
+        });
+      })();
     });
   }
   function load(kind, thread) {

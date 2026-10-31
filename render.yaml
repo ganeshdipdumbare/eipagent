@@ -1,0 +1,13 @@
+# Render Blueprint for the full-stack demo backend (examples/fullstack).
+# Render dashboard -> New -> Blueprint -> pick this repo. Free plan: the
+# service sleeps when idle and its disk is temporary, which is fine for
+# the demo (it reseeds on start).
+services:
+  - type: web
+    name: eipagent-support-desk
+    runtime: docker
+    plan: free
+    dockerfilePath: ./examples/fullstack/Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/health
+    autoDeploy: true
