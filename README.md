@@ -36,6 +36,15 @@ go run ./examples/readme         # runs every example in this README
 
 Every snippet below comes from [`examples/readme/main.go`](examples/readme/main.go). `go test` builds and runs that file with the offline mock model, so the snippets always match the API. To use a real model, replace `"mock:demo"` with a model string such as `anthropic:claude-sonnet-5-5`, `openai:gpt-4.1`, `gemini:gemini-2.5-pro`, `deepseek:deepseek-chat` or `ollama:llama3`. Set the provider's API key (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY` and so on) in the environment.
 
+**Run everything locally with [Ollama](https://ollama.com).** No API keys are needed and nothing leaves your machine:
+
+```bash
+ollama pull lfm3
+go run ./examples/ollama -demo text      # also: stream, tools, object, thread, approve, shell, vision
+```
+
+The model string is just `ollama:<model>` (for example `ollama:qwen3.5:4b`). Set `OLLAMA_HOST` to use an Ollama running on another machine. See [`examples/ollama`](examples/ollama/main.go).
+
 ### Generate with a typed tool
 
 ```go
