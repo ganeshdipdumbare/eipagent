@@ -116,7 +116,7 @@ func LastText(msgs []Message) string {
 
 // Secret resolves a config value: "secret://NAME" goes through the
 // "secrets" service; anything else is returned as is.
-func (c *Context) Secret(ref string) (string, error) {
+func (c *Plugin) Secret(ref string) (string, error) {
 	if !strings.HasPrefix(ref, "secret://") {
 		return ref, nil
 	}

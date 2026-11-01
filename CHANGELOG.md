@@ -2,6 +2,40 @@
 
 All notable changes to eipagent. Versions follow [semantic versioning](https://semver.org); see [Versioning](README.md#versioning) for what that covers while the major version is 0.
 
+## v0.4.0 — 2026-11-01
+
+One vocabulary, in Go terms, and a documentation section that says what to use when. **Nothing breaks:** every old name below keeps working until v1.0 and logs a notice once. `eip plugin fix` rewrites plugin files.
+
+```bash
+go get github.com/ganeshdipdumbare/eipagent@v0.4.0
+```
+
+### Renamed (old names still accepted)
+
+| Before | Now |
+|---|---|
+| `sdk.Context`, `eipagent.PluginContext` | `sdk.Plugin`, `eipagent.PluginAPI` (`func Apply(p *sdk.Plugin) error`) |
+| `var Inject`, `eipagent.Plugin{Inject}`, manifest `"inject"` | `var Requires`, `eipagent.Plugin{Requires}`, manifest `"requires"` |
+| `OnAgentStart`, `OnAgentEnd`, `OnStepPrepare`, `OnModelAfter`, `OnDispose` | `OnRunStart`, `OnRunEnd`, `BeforeStep`, `AfterModel`, `OnUnload` |
+| services `llm/<name>`, `checkpointer`, `store`, `exec` | `model/<name>`, `threads`, `memory`, `workspace` |
+| `llm_openai`, `llm_anthropic`, `llm_gemini`, `llm_mock` | `model_openai`, `model_anthropic`, `model_gemini`, `model_mock` |
+| `mw_retry`, `mw_fallback`, `mw_limits`, `mw_summarize`, `mw_hitl`, `mw_auto_review`, `mw_pii`, `mw_tool_errors`, `mw_logger` | `hook_retry`, `hook_fallback`, `hook_limits`, `hook_summarize`, `hook_approval`, `hook_review`, `hook_pii`, `hook_tool_errors`, `hook_log` |
+| `checkpoint_inmem`, `checkpoint_file`, `checkpoint_sql` | `threads_inmem`, `threads_file`, `threads_sql` |
+| `store_inmem`, `store_file`, `store_sql` | `memory_inmem`, `memory_file`, `memory_sql` |
+| `memory_store`, `agents`, `skills_dir`, `mcp_client`, `tool_http_fetch` | `tool_memory`, `tool_subagents`, `tool_skills`, `tool_mcp`, `tool_fetch` |
+| `exec_local`, `exec_sandbox` | `workspace_local`, `workspace_sandbox` |
+| `jobs`, `audit_jsonl`, `loop_default` | `trigger_schedule`, `audit_file`, `loop` |
+| `eip plugin init -template middleware / provider / store / webhook` | `hook / model / memory / trigger` |
+
+Old names work in profiles, `WithPlugin`, policy lists (allow, deny, locked, grants), secret grants, `Requires` and `Service` lookups. Instance names don't change: a plugin loaded as `llm_openai` keeps that name (and its grants).
+
+### Added
+
+- **Options for common setups:** `WithPersistence("memory" | "file" | "postgres", …)`, `WithApprovals(tools…)`, `WithSandbox(provider)`, `WithAudit(path)`, `WithTracing(endpoint)`, `WithMCP(name, command | url, args…)`.
+- **Plumbing loads itself:** a plugin waiting on `workspace`, `sandbox/local`, `db`, `threads`, `memory` or `loop` gets the default provider, shown as `auto` in `Status()`.
+- **`eip plugin init` asks what the plugin should do**; `validate` and `inspect` end with a one-line summary of what the code does; **`eip plugin fix`** rewrites old names; lint warns about them (`old-name`).
+- **Docs:** one Plugins section, made up of: a five-minute intro; "What to use when"; a page per kind (tools, hooks, model providers, threads and memory, sandboxes and workspaces, triggers, telemetry and audit, secrets, policy) with when to use it, every built-in and its config, how to write your own, and gotchas; permissions; and the plugin API. The built-in reference and template code are generated from the plugins (`go run ./docs/gen`), and a test fails if they drift.
+
 ## v0.3.0 — 2026-10-31
 
 The first tagged release. Install it with:

@@ -13,8 +13,8 @@ import (
 // supervisor approves, edits or rejects it. The pause is durable: it is
 // stored with the thread and survives a server restart.
 func RefundPolicy(limit float64) eipagent.Plugin {
-	return eipagent.Plugin{Name: "refund_policy", Apply: func(ctx *eipagent.PluginContext) error {
-		ctx.WrapTool(func(c context.Context, req *sdk.ToolRequest, next sdk.ToolHandler) (*sdk.ToolResult, error) {
+	return eipagent.Plugin{Name: "refund_policy", Apply: func(p *eipagent.PluginAPI) error {
+		p.WrapTool(func(c context.Context, req *sdk.ToolRequest, next sdk.ToolHandler) (*sdk.ToolResult, error) {
 			if req.Call.Name != "issue_refund" || req.Decision != nil {
 				return next(c, req) // other tools, or a supervisor already decided
 			}
@@ -37,12 +37,12 @@ func RefundPolicy(limit float64) eipagent.Plugin {
 }
 
 // Inspector shows what the model actually received after every other
-// middleware ran (for example, card numbers already masked by mw_pii).
+// middleware ran (for example, card numbers already masked by hook_pii).
 // It runs innermost and reports through the run's event stream.
 func Inspector() eipagent.Plugin {
-	return eipagent.Plugin{Name: "inspector", Apply: func(ctx *eipagent.PluginContext) error {
-		ctx.SetPriority(-100)
-		ctx.WrapModel(func(c context.Context, req *sdk.ModelRequest, next sdk.ModelHandler) (*sdk.ModelResponse, error) {
+	return eipagent.Plugin{Name: "inspector", Apply: func(p *eipagent.PluginAPI) error {
+		p.SetPriority(-100)
+		p.WrapModel(func(c context.Context, req *sdk.ModelRequest, next sdk.ModelHandler) (*sdk.ModelResponse, error) {
 			if req.Run != nil && req.Run.Emit != nil {
 				last := ""
 				for i := len(req.Messages) - 1; i >= 0; i-- {

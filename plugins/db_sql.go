@@ -20,9 +20,9 @@ import (
 // name (service suffix), max_open (10), max_idle (5).
 var Permissions = []string{"db"}
 
-func Apply(ctx *sdk.Context) error {
-	driver := ctx.ConfigString("driver", "pgx")
-	dsn, err := ctx.Secret(ctx.ConfigString("dsn", "secret://EIP_DATABASE_URL"))
+func Apply(p *sdk.Plugin) error {
+	driver := p.ConfigString("driver", "pgx")
+	dsn, err := p.Secret(p.ConfigString("dsn", "secret://EIP_DATABASE_URL"))
 	if err != nil {
 		return err
 	}
@@ -30,8 +30,8 @@ func Apply(ctx *sdk.Context) error {
 	if err != nil {
 		return fmt.Errorf("db_sql: %w (is the driver imported in the host?)", err)
 	}
-	db.SetMaxOpenConns(ctx.ConfigInt("max_open", 10))
-	db.SetMaxIdleConns(ctx.ConfigInt("max_idle", 5))
+	db.SetMaxOpenConns(p.ConfigInt("max_open", 10))
+	db.SetMaxIdleConns(p.ConfigInt("max_idle", 5))
 	db.SetConnMaxLifetime(30 * time.Minute)
 	c, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -39,10 +39,10 @@ func Apply(ctx *sdk.Context) error {
 		db.Close()
 		return fmt.Errorf("db_sql: ping: %w", err)
 	}
-	ctx.OnDispose(func() { db.Close() })
+	p.OnUnload(func() { db.Close() })
 	name := "db"
-	if n := ctx.ConfigString("name", ""); n != "" {
+	if n := p.ConfigString("name", ""); n != "" {
 		name = "db/" + n
 	}
-	return ctx.Provide(name, db)
+	return p.Provide(name, db)
 }

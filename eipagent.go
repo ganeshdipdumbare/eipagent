@@ -41,8 +41,11 @@ type (
 	Policy       = engine.Policy
 	PluginStatus = engine.PluginStatus
 
-	// For writing compiled plugins and middleware.
-	PluginContext = sdk.Context
+	// For writing compiled plugins and middleware. PluginAPI is what a
+	// plugin's Apply receives (sdk.Plugin).
+	PluginAPI = sdk.Plugin
+	// Deprecated: use PluginAPI. Kept until v1.0.
+	PluginContext = sdk.Plugin
 	ModelRequest  = sdk.ModelRequest
 	ModelResponse = sdk.ModelResponse
 	ModelHandler  = sdk.ModelHandler
@@ -55,9 +58,9 @@ type (
 )
 
 var (
-	ErrNoLoop       = errors.New("eipagent: no \"loop\" service; load a loop plugin (e.g. loop_default)")
+	ErrNoLoop       = errors.New("eipagent: no \"loop\" service; load a loop plugin (e.g. loop)")
 	ErrThreadBusy   = errors.New("eipagent: thread was modified concurrently; retry")
-	ErrNoCheckpoint = errors.New("eipagent: threads need a \"checkpointer\" service; load checkpoint_inmem, checkpoint_file or checkpoint_sql")
+	ErrNoCheckpoint = errors.New("eipagent: threads need a \"threads\" service; load threads_inmem, threads_file or threads_sql (or use WithPersistence)")
 )
 
 // Agent is a running kernel plus defaults for runs.
@@ -140,6 +143,9 @@ func newLocal(cfg *config) (*Agent, error) {
 		eng.Close()
 		return nil, fmt.Errorf("eipagent: %w", errors.Join(errs...))
 	}
+	if !cfg.noDefaults {
+		autoload(eng)
+	}
 	if pol.HotReload {
 		go eng.Watch(a.stop, func(s string) { eng.Root().Logf("%s", s) })
 	}
@@ -210,7 +216,7 @@ func (a *Agent) Generate(ctx context.Context, prompt string, opts ...RunOption) 
 }
 
 // Resume continues a run that stopped with interrupts, without a
-// checkpointer: the state travels in the previous Result.
+// thread storage: the state travels in the previous Result.
 func (a *Agent) Resume(ctx context.Context, prev *Result, decisions []sdk.Decision, opts ...RunOption) (*Result, error) {
 	ro := a.runOpts(opts)
 	st := a.newState(ro)
@@ -300,15 +306,15 @@ type providerPreset struct {
 }
 
 var providerPresets = map[string]providerPreset{
-	"openai":     {"llm_openai", map[string]any{"name": "openai"}},
-	"deepseek":   {"llm_openai", map[string]any{"name": "deepseek", "base_url": "https://api.deepseek.com", "api_key": "secret://DEEPSEEK_API_KEY", "structured": "json_object"}},
-	"ollama":     {"llm_openai", map[string]any{"name": "ollama", "base_url": "http://localhost:11434/v1", "api_key": ""}},
-	"openrouter": {"llm_openai", map[string]any{"name": "openrouter", "base_url": "https://openrouter.ai/api/v1", "api_key": "secret://OPENROUTER_API_KEY"}},
-	"groq":       {"llm_openai", map[string]any{"name": "groq", "base_url": "https://api.groq.com/openai/v1", "api_key": "secret://GROQ_API_KEY", "structured": "json_object"}},
-	"anthropic":  {"llm_anthropic", map[string]any{"name": "anthropic"}},
-	"gemini":     {"llm_gemini", map[string]any{"name": "gemini"}},
-	"google":     {"llm_gemini", map[string]any{"name": "google"}},
-	"mock":       {"llm_mock", map[string]any{"name": "mock"}},
+	"openai":     {"model_openai", map[string]any{"name": "openai"}},
+	"deepseek":   {"model_openai", map[string]any{"name": "deepseek", "base_url": "https://api.deepseek.com", "api_key": "secret://DEEPSEEK_API_KEY", "structured": "json_object"}},
+	"ollama":     {"model_openai", map[string]any{"name": "ollama", "base_url": "http://localhost:11434/v1", "api_key": ""}},
+	"openrouter": {"model_openai", map[string]any{"name": "openrouter", "base_url": "https://openrouter.ai/api/v1", "api_key": "secret://OPENROUTER_API_KEY"}},
+	"groq":       {"model_openai", map[string]any{"name": "groq", "base_url": "https://api.groq.com/openai/v1", "api_key": "secret://GROQ_API_KEY", "structured": "json_object"}},
+	"anthropic":  {"model_anthropic", map[string]any{"name": "anthropic"}},
+	"gemini":     {"model_gemini", map[string]any{"name": "gemini"}},
+	"google":     {"model_gemini", map[string]any{"name": "google"}},
+	"mock":       {"model_mock", map[string]any{"name": "mock"}},
 }
 
 // providerSpec returns the plugin row a model string needs, if any.
@@ -322,7 +328,7 @@ func providerSpec(model string) (engine.PluginSpec, bool) {
 	for k, v := range p.config {
 		cfg[k] = v
 	}
-	return engine.PluginSpec{Use: p.use, As: "llm_" + prov, Config: cfg}, true
+	return engine.PluginSpec{Use: p.use, As: "model_" + prov, Config: cfg}, true
 }
 
 // ---- Config resolution ----
@@ -330,7 +336,7 @@ func providerSpec(model string) (engine.PluginSpec, bool) {
 func (c *config) resolve() (*engine.Profile, *engine.Policy, *engine.Lock, error) {
 	prof := &engine.Profile{}
 	if !c.noDefaults {
-		prof.Plugins = []engine.PluginSpec{{Use: "loop_default"}, {Use: "secrets_env"}, {Use: "checkpoint_inmem"}}
+		prof.Plugins = []engine.PluginSpec{{Use: "loop"}, {Use: "secrets_env"}, {Use: "threads_inmem"}}
 	}
 	for _, path := range c.profiles {
 		var p engine.Profile
@@ -352,7 +358,9 @@ func (c *config) resolve() (*engine.Profile, *engine.Policy, *engine.Lock, error
 	if spec, ok := providerSpec(prof.Model); ok && !c.noDefaults && !c.noProviderAuto {
 		have := false
 		for _, s := range prof.Plugins {
-			if s.Name() == spec.Name() || (s.Use == spec.Use && s.Config["name"] == spec.Config["name"]) {
+			// The app may load the provider itself, under its current or its
+			// pre-v0.4 name (llm_mock for model_mock).
+			if sdk.CanonicalPlugin(s.Name()) == spec.Name() || (sdk.CanonicalPlugin(s.Use) == spec.Use && s.Config["name"] == spec.Config["name"]) {
 				have = true
 			}
 		}
@@ -399,16 +407,17 @@ func (c *config) resolve() (*engine.Profile, *engine.Policy, *engine.Lock, error
 }
 
 // Defaults give way to a user plugin of the same family, so adding
-// checkpoint_file replaces checkpoint_inmem instead of clashing with it.
+// threads_file replaces threads_inmem instead of clashing with it.
 func dropOverriddenDefaults(specs []engine.PluginSpec) []engine.PluginSpec {
-	families := map[string]string{"loop_default": "loop_", "secrets_env": "secrets_", "checkpoint_inmem": "checkpoint_"}
+	families := map[string]string{"loop": "loop_", "secrets_env": "secrets_", "threads_inmem": "threads_"}
 	var out []engine.PluginSpec
 	for i, s := range specs {
 		fam, isDefault := families[s.Name()]
 		overridden := false
 		if isDefault {
 			for _, o := range specs[i+1:] {
-				if o.Use != s.Use && strings.HasPrefix(o.Use, fam) {
+				use := sdk.CanonicalPlugin(o.Use) // old names (checkpoint_file, loop_default) count too
+				if use == s.Use || (o.Use != s.Use && strings.HasPrefix(use, fam)) {
 					overridden = true
 				}
 			}

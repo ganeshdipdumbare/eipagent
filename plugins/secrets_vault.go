@@ -55,21 +55,21 @@ func validName(n string) bool {
 	return true
 }
 
-func Apply(ctx *sdk.Context) error {
-	addr := strings.TrimRight(ctx.ConfigString("address", os.Getenv("VAULT_ADDR")), "/")
+func Apply(p *sdk.Plugin) error {
+	addr := strings.TrimRight(p.ConfigString("address", os.Getenv("VAULT_ADDR")), "/")
 	if addr == "" {
 		return fmt.Errorf("secrets_vault: set config address or VAULT_ADDR")
 	}
-	tokenEnv := ctx.ConfigString("token_env", "VAULT_TOKEN")
-	tokenFile := ctx.ConfigString("token_file", "")
-	namespace := ctx.ConfigString("namespace", "")
-	mount := strings.Trim(ctx.ConfigString("mount", "secret"), "/")
-	prefix := strings.Trim(ctx.ConfigString("prefix", "eipagent"), "/")
-	field := ctx.ConfigString("field", "value")
-	paths := ctx.ConfigMap("paths")
-	ttl := time.Duration(ctx.ConfigInt("ttl_seconds", 300)) * time.Second
-	allow := ctx.ConfigStrings("allow")
-	grants := ctx.ConfigMap("grants")
+	tokenEnv := p.ConfigString("token_env", "VAULT_TOKEN")
+	tokenFile := p.ConfigString("token_file", "")
+	namespace := p.ConfigString("namespace", "")
+	mount := strings.Trim(p.ConfigString("mount", "secret"), "/")
+	prefix := strings.Trim(p.ConfigString("prefix", "eipagent"), "/")
+	field := p.ConfigString("field", "value")
+	paths := p.ConfigMap("paths")
+	ttl := time.Duration(p.ConfigInt("ttl_seconds", 300)) * time.Second
+	allow := p.ConfigStrings("allow")
+	grants := p.ConfigMap("grants")
 	if len(allow) == 0 && grants == nil {
 		// Never default to "every plugin may read everything in the mount".
 		return fmt.Errorf("secrets_vault: set grants (per plugin) or allow (name patterns)")
@@ -94,21 +94,21 @@ func Apply(ctx *sdk.Context) error {
 		return t, nil
 	}
 	fetch := func(c context.Context, name string) (string, error) {
-		p, f := prefix+"/"+name, field
+		kvPath, f := prefix+"/"+name, field
 		if prefix == "" {
-			p = name
+			kvPath = name
 		}
 		if v, ok := paths[name].(string); ok && v != "" {
-			p, f = v, field
+			kvPath, f = v, field
 			if i := strings.LastIndex(v, "#"); i >= 0 {
-				p, f = v[:i], v[i+1:]
+				kvPath, f = v[:i], v[i+1:]
 			}
 		}
 		tok, err := token()
 		if err != nil {
 			return "", err
 		}
-		req, err := http.NewRequestWithContext(c, "GET", addr+"/v1/"+mount+"/data/"+strings.Trim(p, "/"), nil)
+		req, err := http.NewRequestWithContext(c, "GET", addr+"/v1/"+mount+"/data/"+strings.Trim(kvPath, "/"), nil)
 		if err != nil {
 			return "", err
 		}
@@ -146,14 +146,20 @@ func Apply(ctx *sdk.Context) error {
 	var mu sync.Mutex
 	vals := map[string]string{}
 	exp := map[string]time.Time{}
-	return ctx.Provide("secrets", &sdk.Secrets{
+	return p.Provide("secrets", &sdk.Secrets{
 		Get: func(c context.Context, caller, name string) (string, error) {
 			if !validName(name) {
 				return "", fmt.Errorf("invalid secret name %q", name)
 			}
 			if grants != nil {
 				granted := false
-				list, _ := grants[caller].([]any)
+				var list []any
+				for _, n := range sdk.PluginAliases(caller) { // grants may use pre-v0.4 plugin names
+					if l, ok := grants[n].([]any); ok {
+						list = l
+						break
+					}
+				}
 				for _, g := range list {
 					if g == name {
 						granted = true

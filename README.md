@@ -19,7 +19,7 @@
 Requires **Go 1.27**. Install a tagged release:
 
 ```bash
-go get github.com/ganeshdipdumbare/eipagent@v0.3.0
+go get github.com/ganeshdipdumbare/eipagent@v0.4.0
 ```
 
 The repository is private, so Go needs to know that and needs git access: run `go env -w GOPRIVATE=github.com/ganeshdipdumbare/*` once, and `gh auth setup-git` (or an SSH key) so `git` can fetch it. Releases and breaking changes are listed in [CHANGELOG.md](CHANGELOG.md); see [Versioning](#versioning).
@@ -63,7 +63,7 @@ The model string is just `ollama:<model>` (for example `ollama:qwen3.5:4b`). Set
 | [`examples/observability`](examples/observability/main.go) | `audit_http` to an in-process SIEM that checks HMAC signatures and the hash chain; `trace_otlp` to an in-process OpenTelemetry collector, printing the span tree and the shared fields (`run`, `thread`, `user`, `plugin`, `provider`) |
 | [`examples/plugin-validate`](examples/plugin-validate/main.go) | the linter's report on a plugin with mistakes, then a signed package, and what verification refuses: a tampered file, a manifest that grants itself `exec`, an unknown signer, an unsigned package, a wrong pin |
 | [`examples/plugin-store`](examples/plugin-store/main.go) | one plugin through install, approval, enable, update, a failed update that keeps the old version, rollback and quarantine, in a running agent |
-| [`examples/plugins`](examples/plugins) | a ready-made plugin for every `eip plugin init` template: tool, middleware, provider, store, MCP adapter, sandbox, webhook |
+| [`examples/plugins`](examples/plugins) | a ready-made plugin for every `eip plugin init` choice: tool, hook, model provider, memory, sandbox, trigger, MCP adapter |
 
 ### Generate with a typed tool
 
@@ -139,7 +139,7 @@ If the reply doesn't parse, eipagent asks the model once to repair it and then r
 ```go
 agent, err := eipagent.New(
 	eipagent.WithModel("openai:gpt-4.1"),
-	eipagent.WithPlugin("checkpoint_file", map[string]any{"dir": ".eipagent/threads"}), // or checkpoint_sql
+	eipagent.WithPlugin("threads_file", map[string]any{"dir": ".eipagent/threads"}), // or threads_sql
 )
 th := agent.Thread("customer-42")
 th.Generate(ctx, "My name is Ada.")
@@ -147,7 +147,7 @@ th.Generate(ctx, "What's my name?") // sees the earlier turn
 msgs, _ := th.Messages(ctx)
 ```
 
-Without a checkpointer plugin, threads are kept in memory (`checkpoint_inmem`).
+Without `WithPersistence`, threads are kept in memory (`threads_inmem`).
 
 ### Human in the loop
 
@@ -155,7 +155,7 @@ Without a checkpointer plugin, threads are kept in memory (`checkpoint_inmem`).
 agent, _ := eipagent.New(
 	eipagent.WithModel("openai:gpt-4.1"),
 	eipagent.WithTools(refund),
-	eipagent.WithPlugin("mw_hitl", map[string]any{"interrupt_on": map[string]any{"refund": true}}),
+	eipagent.WithPlugin("hook_approval", map[string]any{"interrupt_on": map[string]any{"refund": true}}),
 )
 th := agent.Thread("ticket-981")
 res, _ := th.Generate(ctx, "Refund order A-17")
@@ -166,40 +166,40 @@ for res.Interrupted() { // paused before the tool ran; the pause is saved
 }
 ```
 
-The pause lives in the checkpointer. With `checkpoint_sql`, a different process or pod can resume it, possibly hours later. Two other ways to answer interrupts:
+The pause is saved with the thread. With `threads_sql`, a different process or pod can resume it, possibly hours later. Two other ways to answer interrupts:
 
 - **Without a thread:** call `agent.Resume(ctx, res, decisions)`. The state travels in `res`.
 - **In-process, synchronously:** pass `eipagent.WithApprover(func(ctx, in) (*Decision, error))`, for example to prompt in a CLI.
 
-To pause on everything risky instead of naming tools, use `{"non_readonly": true}` or `{"risk": ["high"]}`. You can also put `mw_auto_review` in front: a reviewer model then approves, denies or escalates each call to a human.
+To pause on everything risky instead of naming tools, use `{"non_readonly": true}` or `{"risk": ["high"]}`. You can also put `hook_review` in front: a reviewer model then approves, denies or escalates each call to a human.
 
-### Middleware from the standard plugins
+### Hooks from the standard plugins
 
 ```go
 agent, _ := eipagent.New(
 	eipagent.WithModel("anthropic:claude-sonnet-5-5"),
-	eipagent.WithPlugin("mw_retry", map[string]any{"max_retries": 3}),                         // 429/5xx with backoff
-	eipagent.WithPlugin("mw_fallback", map[string]any{"models": []any{"openai:gpt-4.1"}}),     // next model on failure
-	eipagent.WithPlugin("mw_limits", map[string]any{"model_calls_run": 20, "tool_calls_run": 50}),
-	eipagent.WithPlugin("mw_pii", map[string]any{"types": []any{"email", "credit_card"}}),     // redact, mask, hash or block
-	eipagent.WithPlugin("mw_summarize", map[string]any{"trigger_messages": 40, "keep_messages": 10}),
+	eipagent.WithPlugin("hook_retry", map[string]any{"max_retries": 3}),                         // 429/5xx with backoff
+	eipagent.WithPlugin("hook_fallback", map[string]any{"models": []any{"openai:gpt-4.1"}}),     // next model on failure
+	eipagent.WithPlugin("hook_limits", map[string]any{"model_calls_run": 20, "tool_calls_run": 50}),
+	eipagent.WithPlugin("hook_pii", map[string]any{"types": []any{"email", "credit_card"}}),     // redact, mask, hash or block
+	eipagent.WithPlugin("hook_summarize", map[string]any{"trigger_messages": 40, "keep_messages": 10}),
 )
 ```
 
-### Your own middleware
+### Your own hooks
 
 A compiled plugin is ordinary Go code. An interpreted plugin is the same code in a `.go` file loaded at runtime (see [Plugins](#plugins)).
 
 ```go
-timing := eipagent.Plugin{Name: "timing", Apply: func(ctx *eipagent.PluginContext) error {
-	ctx.WrapModel(func(c context.Context, req *eipagent.ModelRequest, next eipagent.ModelHandler) (*eipagent.ModelResponse, error) {
-		resp, err := next(c, req) // the model call, plus any inner middleware
+timing := eipagent.Plugin{Name: "timing", Apply: func(p *eipagent.PluginAPI) error {
+	p.WrapModel(func(c context.Context, req *eipagent.ModelRequest, next eipagent.ModelHandler) (*eipagent.ModelResponse, error) {
+		resp, err := next(c, req) // the model call, plus any inner hooks
 		if err == nil {
-			ctx.Logf("%s step %d used %d tokens", req.Model, req.Step, resp.Usage.TotalTokens)
+			p.Logf("%s step %d used %d tokens", req.Model, req.Step, resp.Usage.TotalTokens)
 		}
 		return resp, err
 	})
-	ctx.WrapTool(func(c context.Context, req *eipagent.ToolRequest, next eipagent.ToolHandler) (*eipagent.ToolResult, error) {
+	p.WrapTool(func(c context.Context, req *eipagent.ToolRequest, next eipagent.ToolHandler) (*eipagent.ToolResult, error) {
 		if req.Call.Name == "drop_database" {
 			return &eipagent.ToolResult{Content: "not allowed", IsError: true}, nil
 		}
@@ -214,11 +214,11 @@ agent, _ := eipagent.New(eipagent.WithModel("openai:gpt-4.1"), eipagent.WithComp
 
 ```go
 eng := agent.Engine()
-eng.Load(eipagent.PluginSpec{Use: "memory_store"}) // needs a "store", so it waits: PENDING
-eng.Load(eipagent.PluginSpec{Use: "store_inmem"})  // the store arrives, memory_store becomes ACTIVE
-eng.Load(eipagent.PluginSpec{Use: "mw_pii", Config: map[string]any{"strategy": "hash"}}) // load again = update config
-eng.Reload("mw_pii")                               // recompile from source
-eng.Unload("store_inmem")                          // memory_store goes back to PENDING and its tools disappear
+eng.Load(eipagent.PluginSpec{Use: "tool_memory"}) // needs "memory", so it waits: PENDING
+eng.Load(eipagent.PluginSpec{Use: "memory_inmem"})  // the store arrives, tool_memory becomes ACTIVE
+eng.Load(eipagent.PluginSpec{Use: "hook_pii", Config: map[string]any{"strategy": "hash"}}) // load again = update config
+eng.Reload("hook_pii")                               // recompile from source
+eng.Unload("memory_inmem")                          // tool_memory goes back to PENDING and its tools disappear
 for _, s := range agent.Status() { fmt.Println(s.String()) }
 ```
 
@@ -232,7 +232,7 @@ To see it live with a local model, run `go run ./examples/ollama -demo plugins`.
 agent, _ := eipagent.New(
 	eipagent.WithModel("openai:gpt-4.1"),
 	eipagent.WithPlugins("tool_time"),
-	eipagent.WithPlugin("agents", map[string]any{"agents": []any{
+	eipagent.WithPlugin("tool_subagents", map[string]any{"agents": []any{
 		map[string]any{"name": "researcher", "description": "Finds facts",
 			"instructions": "Research carefully.", "tools": []any{"current_time"}},       // called as a tool
 		map[string]any{"name": "billing", "description": "Invoices and refunds",
@@ -250,7 +250,7 @@ eipagent.WithTools(expertAgent.AsTool("legal_expert", "Answers legal questions")
 agent, _ := eipagent.New(
 	eipagent.WithModel("openai:gpt-4.1"),
 	eipagent.WithPlugins("sandbox_docker"),                                     // or sandbox_local, or your own
-	eipagent.WithPlugin("exec_sandbox", map[string]any{"provider": "docker"}),  // one box per thread, no network
+	eipagent.WithPlugin("workspace_sandbox", map[string]any{"provider": "docker"}),  // one box per thread, no network
 	eipagent.WithPlugins("tool_shell", "tool_fs"),
 )
 res, _ := agent.Generate(ctx, "Write notes.md and count its lines")
@@ -262,19 +262,19 @@ for _, ch := range res.Changes { // review what the agent changed
 ### MCP servers, skills, the web
 
 ```go
-eipagent.WithPlugin("mcp_client", map[string]any{"servers": []any{
+eipagent.WithPlugin("tool_mcp", map[string]any{"servers": []any{
 	map[string]any{"name": "github", "command": "github-mcp-server", "args": []any{"stdio"},
 		"env": map[string]any{"GITHUB_TOKEN": "secret://GITHUB_TOKEN"}},
 	map[string]any{"name": "docs", "url": "https://mcp.internal.example.com/mcp"},
 }}) // tools appear as github__create_issue, docs__search, ...
-eipagent.WithPlugin("skills_dir", map[string]any{"dirs": []any{"./skills"}})       // folders with SKILL.md
-eipagent.WithPlugin("tool_http_fetch", map[string]any{"allow_hosts": []any{"*.wikipedia.org"}})
+eipagent.WithPlugin("tool_skills", map[string]any{"dirs": []any{"./skills"}})       // folders with SKILL.md
+eipagent.WithPlugin("tool_fetch", map[string]any{"allow_hosts": []any{"*.wikipedia.org"}})
 ```
 
 ### Scheduled jobs and webhooks
 
 ```go
-eipagent.WithPlugin("jobs", map[string]any{"jobs": []any{
+eipagent.WithPlugin("trigger_schedule", map[string]any{"jobs": []any{
 	map[string]any{"name": "weekly-report", "schedule": "weekly fri 17:00", "prompt": "Summarize this week's tickets", "user": "ops"},
 }}) // the model also gets schedule_create / schedule_list / schedule_cancel
 eipagent.WithPlugin("trigger_webhook", map[string]any{"routes": []any{
@@ -290,10 +290,10 @@ eipagent.WithPlugin("trigger_webhook", map[string]any{"routes": []any{
   "instructions": "You are the internal engineering assistant.",
   "max_steps": 30,
   "plugins": [
-    { "use": "mw_retry" },
-    { "use": "mw_hitl", "config": { "non_readonly": true } },
-    { "use": "llm_openai", "as": "llm_local", "config": { "name": "local", "base_url": "http://vllm:8000/v1", "api_key": "" } },
-    { "use": "checkpoint_sql" }
+    { "use": "hook_retry" },
+    { "use": "hook_approval", "config": { "non_readonly": true } },
+    { "use": "model_openai", "as": "llm_local", "config": { "name": "local", "base_url": "http://vllm:8000/v1", "api_key": "" } },
+    { "use": "threads_sql" }
   ]
 }
 ```
@@ -329,11 +329,11 @@ stateDiagram-v2
 1. **Resolve the configuration.** The preset (`secure` by default, or `dev`) or an explicit admin policy, the profiles, the code options and `eip.lock` combine into one plugin list.
 2. **Load plugins in a fixed order:**
    1. Plugins the policy requires, such as audit, policy and secrets. They load first so they see everything after them.
-   2. Built-ins: `agent_service`, `loop_default`, `secrets_env` and `checkpoint_inmem`.
+   2. Built-ins: `agent_service`, `loop`, `secrets_env` and `threads_inmem`.
    3. Your plugins.
    4. The provider implied by the model prefix, if no profile row provides it.
 
-   A plugin of the same family replaces a default. For example, `checkpoint_sql` replaces `checkpoint_inmem`.
+   A plugin of the same family replaces a default. For example, `threads_sql` replaces `threads_inmem`.
 3. **Pass each plugin through the trust gate**, then start it (see the plugin lifecycle below).
 4. **Fail fast.** If any plugin is refused or fails, everything already loaded is disposed and `New` returns the error. You never get a half-configured agent.
 5. **Start the file watcher** if the policy allows hot reload.
@@ -405,12 +405,12 @@ Default priorities (higher means outer). Set `priority` on a profile row to over
 
 | Priority | Model middleware (`model/wrap`) | Tool middleware (`tool/wrap`) |
 |---|---|---|
-| reserved band | `audit_jsonl`, `policy` (when locked) | `audit_jsonl`, `policy` (when locked) |
-| 30 | `mw_pii` | `mw_pii` |
-| 20 | `mw_fallback` | |
-| 10 | `mw_retry` | `mw_retry` (`tool_retries`) |
-| 0 | `mw_limits`, `mw_logger`, `trace_file`, your plugins (in load order) | `mw_auto_review`, `mw_limits`, `mw_logger`, `trace_file`, your plugins |
-| −10 | | `mw_hitl` (innermost, so reviewers and policy decide first) |
+| reserved band | `audit_file`, `policy` (when locked) | `audit_file`, `policy` (when locked) |
+| 30 | `hook_pii` | `hook_pii` |
+| 20 | `hook_fallback` | |
+| 10 | `hook_retry` | `hook_retry` (`tool_retries`) |
+| 0 | `hook_limits`, `hook_log`, `trace_file`, your plugins (in load order) | `hook_review`, `hook_limits`, `hook_log`, `trace_file`, your plugins |
+| −10 | | `hook_approval` (innermost, so reviewers and policy decide first) |
 
 Events in order: `step_start`, then the `text`/`reasoning` deltas, `step_end`, `tool_call`, and `tool_result` or `interrupt`, repeated for each step; then `finish` or `error`. `OnEvent` and `Stream.Events()` see the same events.
 
@@ -431,12 +431,12 @@ stateDiagram-v2
 
 Each turn goes through four steps:
 
-1. **Load** the state (messages, pending interrupts, plugin values such as the active handoff agent or the sandbox id) from the `checkpointer`.
+1. **Load** the state (messages, pending interrupts, plugin values such as the active handoff agent or the sandbox id) from the `threads` service.
 2. **Run** the turn.
 3. **Save** with optimistic versioning. If another process saved first, you get `ErrThreadBusy` and nothing is lost.
 4. **Wait on pauses.** A thread with pending interrupts accepts only `Resume`.
 
-Any process that shares the checkpointer can continue any thread.
+Any process that shares the thread storage can continue any thread.
 
 ### Plugin lifecycle
 
@@ -464,7 +464,7 @@ stateDiagram-v2
 - **Safe updates.** If a reload fails to compile or start, the old version keeps running.
 - **Locked plugins** (from the policy) can't be unloaded or replaced at runtime, and only they may use the reserved, outermost priority band.
 
-### Sandbox lifecycle (`exec_sandbox`)
+### Sandbox lifecycle (`workspace_sandbox`)
 
 1. **Created lazily**, the first time a shell or file tool runs in a thread. Each thread gets its own box.
 2. **Reused** for every later turn of that thread.
@@ -487,7 +487,28 @@ With `tool_sandbox`, the model creates and destroys boxes itself, up to `max_box
 
 ## Plugins
 
-A plugin is one Go file, interpreted at runtime by [Yaegi](https://github.com/traefik/yaegi), or a compiled `eipagent.Plugin` with the same shape:
+Everything the agent does comes from a plugin, but **most apps never type a plugin name**. Common setups are options, and plumbing (the loop, a workspace for shell tools, the database connection) loads itself and shows as `auto` in `agent.Status()`:
+
+```go
+agent, _ := eipagent.New(
+	eipagent.WithModel("anthropic:claude-sonnet-5-5"),            // model_anthropic
+	eipagent.WithApprovals("issue_refund"),                       // hook_approval
+	eipagent.WithPersistence("postgres", "secret://DATABASE_URL"), // threads_sql + memory_sql + db_sql
+	eipagent.WithSandbox("docker"),                               // sandbox_docker + workspace_sandbox
+	eipagent.WithAudit("/var/log/eipagent/audit.jsonl"),          // audit_file
+	eipagent.WithTracing("http://otel-collector:4318"),           // trace_otlp
+	eipagent.WithMCP("github", "npx", "-y", "@modelcontextprotocol/server-github"), // tool_mcp
+)
+```
+
+**Writing one takes one function.** A plugin is a Go file with `Apply`, interpreted at runtime by [Yaegi](https://github.com/traefik/yaegi) (or a compiled `eipagent.Plugin` with the same `Apply`). Inside it, call what you need:
+
+| You want… | Call |
+|---|---|
+| the model to be able to do something | `p.AddTool` |
+| something to happen around every model or tool call | `p.WrapModel`, `p.WrapTool`, `p.OnRunStart` … |
+| other plugins to use something you provide | `p.Provide("model/acme", …)` |
+| background work, stopped on unload | `p.Effect`, `p.OnUnload` |
 
 ```go
 //go:build ignore
@@ -500,29 +521,49 @@ import (
 	"eipagent/sdk"
 )
 
-var Inject = []string{"store"}     // required services ("?x" optional, "llm/*" any match)
-var Permissions = []string{"net"}  // net, exec, fs:read, fs:write, env, env:secrets, db
+var Requires = []string{"?secrets"} // services needed first ("?x" optional, "model/*" any one)
+var Permissions = []string{"net"}   // net, exec, fs:read, fs:write, env, env:secrets, db
 
-func Apply(ctx *sdk.Context) error {
-	ctx.AddTool(sdk.Tool{
+func Apply(p *sdk.Plugin) error {
+	p.AddTool(sdk.Tool{
 		Name: "greet", Description: "Greet someone",
 		Schema: sdk.Object(map[string]any{"name": sdk.Str("who")}, "name"),
 		Run: func(c context.Context, args map[string]any) (string, error) {
 			return "Hello, " + sdk.ArgString(args, "name"), nil
 		},
 	})
-	ctx.Effect(func() func() { /* start */ return func() { /* cleanup on unload */ } })
 	return nil
 }
 ```
 
-The full guide, including the Yaegi pitfalls, is in [PLUGINS.md](PLUGINS.md). See also [`examples/custom-plugin`](examples/custom-plugin).
+You never have to decide what kind of plugin you're writing. `eip plugin init NAME` asks what it should do and writes a working one, and `eip plugin validate` says what yours does (`greet: adds 1 tool (greet) · permissions net`).
+
+The [docs' Plugins section](https://eipagent-docs.vercel.app/#plugins) has, for every kind: what it is, when to use it and when not, every built-in with its config, how to write your own (a full working file and a test), and the gotchas. It starts with [what to use when](https://eipagent-docs.vercel.app/#plugins-choose), a goal-first table. [PLUGINS.md](PLUGINS.md) is the short version.
+
+### Standard plugins (embedded in the binary)
+
+Named by what they do. The prefix is a convention for the plugins we ship, not a rule for yours.
+
+| Kind | Plugins |
+|---|---|
+| [Tools](https://eipagent-docs.vercel.app/#kind-tools): the model can call them | `tool_shell`, `tool_fs`, `tool_fetch`, `tool_time`, `tool_memory`, `tool_mcp`, `tool_subagents`, `tool_skills`, `tool_sandbox` |
+| [Hooks](https://eipagent-docs.vercel.app/#kind-hooks): run around calls | `hook_retry`, `hook_fallback`, `hook_limits`, `hook_summarize`, `hook_approval`, `hook_review`, `hook_pii`, `hook_tool_errors`, `hook_log`, `hook_guard`, `hook_stats` |
+| [Model providers](https://eipagent-docs.vercel.app/#kind-models) | `model_openai` (OpenAI, DeepSeek, Ollama, vLLM, OpenRouter, Groq), `model_anthropic`, `model_gemini`, `model_mock` |
+| [Threads and memory](https://eipagent-docs.vercel.app/#kind-threads-memory) | `threads_inmem` / `_file` / `_sql`, `memory_inmem` / `_file` / `_sql`, `db_sql` |
+| [Sandboxes and workspaces](https://eipagent-docs.vercel.app/#kind-sandboxes) | `sandbox_local`, `sandbox_docker`, `workspace_local`, `workspace_sandbox` |
+| [Triggers](https://eipagent-docs.vercel.app/#kind-triggers) | `trigger_schedule`, `trigger_webhook` |
+| [Telemetry and audit](https://eipagent-docs.vercel.app/#kind-telemetry) | `trace_file`, `trace_otlp`, `audit_file`, `audit_http` |
+| [Secrets](https://eipagent-docs.vercel.app/#kind-secrets) | `secrets_env`, `secrets_vault` |
+| [Policy and the loop](https://eipagent-docs.vercel.app/#kind-policy) | `policy`, `loop` |
+
+Renamed in v0.4: `llm_*` → `model_*`, `mw_*` → `hook_*` (`mw_hitl` → `hook_approval`), `checkpoint_*` → `threads_*`, `store_*` → `memory_*`, `exec_*` → `workspace_*`, `jobs` → `trigger_schedule`, `audit_jsonl` → `audit_file`, `agents` → `tool_subagents`, `memory_store` → `tool_memory`. The old names keep working until v1.0 (see [CHANGELOG.md](CHANGELOG.md)).
 
 ### Ship plugins: scaffold, validate, sign, install
 
 ```bash
-eip plugin init -template tool weather           # tool, middleware, provider, store, mcp, sandbox, webhook
-eip plugin validate weather                      # lint: imports vs permissions, services, secrets, manifest, compile
+eip plugin init weather                          # asks what it should do: tool, hook, model, memory, sandbox, trigger, mcp
+eip plugin validate weather                      # lint, and a one-line summary of what it does
+eip plugin fix weather                           # rewrite names renamed in v0.4
 eip plugin build -key signing.key weather        # signed, hashed weather-0.1.0.eip
 eip plugin install weather-0.1.0.eip             # verified and held (VALIDATED)
 eip plugin approve weather 0.1.0                 # APPROVED
@@ -531,27 +572,13 @@ eip plugin enable weather                        # ACTIVE; update / rollback / q
 
 In Go, `eipagent.WithPluginStore(st)` attaches a `pluginpkg.Store` to a running agent, and enable, update and rollback swap plugins live. A version that fails to start never replaces the running one. Examples for every template are in [`examples/plugins`](examples/plugins), and [`examples/plugin-store`](examples/plugin-store) walks the whole lifecycle.
 
-### Standard plugins (embedded in the binary)
-
-| Area | Plugins |
-|---|---|
-| Loop | `loop_default` |
-| Models | `llm_openai` (OpenAI, DeepSeek, Ollama, vLLM, OpenRouter, Groq), `llm_anthropic`, `llm_gemini`, `llm_mock` |
-| Middleware | `mw_retry`, `mw_fallback`, `mw_limits`, `mw_summarize`, `mw_hitl`, `mw_auto_review`, `mw_pii`, `mw_tool_errors`, `mw_logger`, `hook_guard`, `hook_stats` |
-| Memory | `checkpoint_inmem` / `_file` / `_sql`, `store_inmem` / `_file` / `_sql`, `memory_store`, `db_sql` |
-| Tools | `tool_shell`, `tool_fs`, `tool_http_fetch`, `tool_time` |
-| Sandboxes | `sandbox_local`, `sandbox_docker`, `exec_local`, `exec_sandbox`, `tool_sandbox` |
-| Integrations | `mcp_client`, `agents`, `skills_dir` |
-| Ops | `jobs`, `trigger_webhook`, `trace_file`, `trace_otlp` |
-| Security | `policy`, `audit_jsonl`, `audit_http`, `secrets_env`, `secrets_vault` |
-
 A model string `provider:model` loads the matching provider automatically. The prefixes are `openai`, `deepseek`, `anthropic`, `gemini`/`google`, `ollama`, `openrouter`, `groq` and `mock`.
 
 ## Sandboxes
 
 There are two directions:
 
-- **The agent uses sandboxes.** Load `exec_sandbox`, and the shell and file tools run in a per-thread box. Load `tool_sandbox`, and the model can start boxes on demand.
+- **The agent uses sandboxes.** Load `workspace_sandbox`, and the shell and file tools run in a per-thread box. Load `tool_sandbox`, and the model can start boxes on demand.
 - **The agent runs inside a sandbox:**
 
   ```go
@@ -574,7 +601,7 @@ Providers: `sandbox_local` (no isolation, for development) and `sandbox_docker` 
 
 An admin `policy.json` adds:
 
-- locked `policy` and `audit_jsonl` plugins;
+- locked `policy` and `audit_file` plugins;
 - the approval mode: read-only, workspace-write or full-access;
 - tool and model allowlists, token budgets and per-role rules;
 - per-plugin secret grants.
@@ -583,13 +610,12 @@ The threat model, and what isn't guaranteed, is in [SECURITY.md](SECURITY.md). U
 
 ## Scaling and persistence
 
-The core engine is stateless and needs no database. All state lives behind plugin services: `checkpointer`, `store`, `audit` and `jobs`. For multiple replicas:
+The core engine is stateless and needs no database. All state lives behind plugin services: `threads`, `memory`, `audit` and `jobs`. For multiple replicas:
 
 ```go
 import _ "github.com/ganeshdipdumbare/eipagent/drivers/postgres"
 
-eipagent.WithPlugin("db_sql", map[string]any{"dsn": "secret://EIP_DATABASE_URL"})
-eipagent.WithPlugins("checkpoint_sql", "store_sql")
+eipagent.WithPersistence("postgres", "secret://EIP_DATABASE_URL") // db_sql + threads_sql + memory_sql
 ```
 
 With this setup:
@@ -634,11 +660,11 @@ Shows the policy and every plugin's state.
 
 ## Versioning
 
-eipagent follows [semantic versioning](https://semver.org) with git tags (`v0.3.0`). The Go module is `github.com/ganeshdipdumbare/eipagent`. `sdk.Version` holds the version the code reports, and plugin manifests state which versions they work with (`"eipagent": ">=0.3.0, <1.0.0"`).
+eipagent follows [semantic versioning](https://semver.org) with git tags (`v0.4.0`). The Go module is `github.com/ganeshdipdumbare/eipagent`. `sdk.Version` holds the version the code reports, and plugin manifests state which versions they work with (`"eipagent": ">=0.4.0, <1.0.0"`).
 
 While the major version is 0:
 
-- **Patch releases** (`v0.3.x`) fix bugs and security issues without breaking the public API.
+- **Patch releases** (`v0.4.x`) fix bugs and security issues without breaking the public API.
 - **Minor releases** (`v0.x.0`) may break it. Every break is listed under "Breaking changes" in [CHANGELOG.md](CHANGELOG.md), with what to change.
 
 The public API is:

@@ -29,7 +29,7 @@ func mock(steps ...map[string]any) eipagent.Option {
 	for i, s := range steps {
 		script[i] = s
 	}
-	return eipagent.WithPlugin("llm_mock", map[string]any{"script": script})
+	return eipagent.WithPlugin("model_mock", map[string]any{"script": script})
 }
 
 func main() {
@@ -140,7 +140,7 @@ func structured(string) {
 func threads(dir string) {
 	agent, err := eipagent.New(
 		eipagent.WithModel("mock:demo"),
-		eipagent.WithPlugin("checkpoint_file", map[string]any{"dir": dir + "/threads"}), // or checkpoint_sql
+		eipagent.WithPlugin("threads_file", map[string]any{"dir": dir + "/threads"}), // or threads_sql
 	)
 	check(err)
 	defer agent.Close()
@@ -166,7 +166,7 @@ func humanInTheLoop(dir string) {
 	agent, err := eipagent.New(
 		eipagent.WithModel("mock:demo"),
 		eipagent.WithTools(refund),
-		eipagent.WithPlugin("mw_hitl", map[string]any{"interrupt_on": map[string]any{"refund": true}}),
+		eipagent.WithPlugin("hook_approval", map[string]any{"interrupt_on": map[string]any{"refund": true}}),
 		mock(map[string]any{"tool": "refund", "args": map[string]any{"order": "A-17"}},
 			map[string]any{"text": "Refund done."}),
 	)
@@ -190,11 +190,11 @@ func humanInTheLoop(dir string) {
 func middleware(string) {
 	agent, err := eipagent.New(
 		eipagent.WithModel("mock:demo"),
-		eipagent.WithPlugin("mw_retry", map[string]any{"max_retries": 3}),
-		eipagent.WithPlugin("mw_fallback", map[string]any{"models": []any{"mock:backup"}}),
-		eipagent.WithPlugin("mw_limits", map[string]any{"model_calls_run": 20, "tool_calls_run": 50}),
-		eipagent.WithPlugin("mw_pii", map[string]any{"types": []any{"email", "credit_card"}}),
-		eipagent.WithPlugin("mw_summarize", map[string]any{"trigger_messages": 40, "keep_messages": 10}),
+		eipagent.WithPlugin("hook_retry", map[string]any{"max_retries": 3}),
+		eipagent.WithPlugin("hook_fallback", map[string]any{"models": []any{"mock:backup"}}),
+		eipagent.WithPlugin("hook_limits", map[string]any{"model_calls_run": 20, "tool_calls_run": 50}),
+		eipagent.WithPlugin("hook_pii", map[string]any{"types": []any{"email", "credit_card"}}),
+		eipagent.WithPlugin("hook_summarize", map[string]any{"trigger_messages": 40, "keep_messages": 10}),
 	)
 	check(err)
 	defer agent.Close()
@@ -206,15 +206,15 @@ func middleware(string) {
 // ---- 7. Your own middleware (a compiled plugin) ----
 
 func customMiddleware(string) {
-	timing := eipagent.Plugin{Name: "timing", Apply: func(ctx *eipagent.PluginContext) error {
-		ctx.WrapModel(func(c context.Context, req *eipagent.ModelRequest, next eipagent.ModelHandler) (*eipagent.ModelResponse, error) {
+	timing := eipagent.Plugin{Name: "timing", Apply: func(p *eipagent.PluginAPI) error {
+		p.WrapModel(func(c context.Context, req *eipagent.ModelRequest, next eipagent.ModelHandler) (*eipagent.ModelResponse, error) {
 			resp, err := next(c, req) // call the model (and inner middleware)
 			if err == nil {
-				ctx.Logf("%s step %d used %d tokens", req.Model, req.Step, resp.Usage.TotalTokens)
+				p.Logf("%s step %d used %d tokens", req.Model, req.Step, resp.Usage.TotalTokens)
 			}
 			return resp, err
 		})
-		ctx.WrapTool(func(c context.Context, req *eipagent.ToolRequest, next eipagent.ToolHandler) (*eipagent.ToolResult, error) {
+		p.WrapTool(func(c context.Context, req *eipagent.ToolRequest, next eipagent.ToolHandler) (*eipagent.ToolResult, error) {
 			if req.Call.Name == "drop_database" {
 				return &eipagent.ToolResult{Content: "not allowed", IsError: true}, nil
 			}
@@ -238,16 +238,16 @@ func runtimePlugins(string) {
 	defer agent.Close()
 	eng := agent.Engine()
 
-	check(eng.Load(eipagent.PluginSpec{Use: "memory_store"})) // needs a "store": waits
-	fmt.Println(eng.State("memory_store"))                    // PENDING
-	check(eng.Load(eipagent.PluginSpec{Use: "store_inmem"}))
-	fmt.Println(eng.State("memory_store")) // ACTIVE: its dependency arrived
+	check(eng.Load(eipagent.PluginSpec{Use: "tool_memory"})) // needs "memory": waits
+	fmt.Println(eng.State("tool_memory"))                    // PENDING
+	check(eng.Load(eipagent.PluginSpec{Use: "memory_inmem"}))
+	fmt.Println(eng.State("tool_memory")) // ACTIVE: its dependency arrived
 
-	check(eng.Load(eipagent.PluginSpec{Use: "mw_pii", Config: map[string]any{"strategy": "mask"}}))
-	check(eng.Load(eipagent.PluginSpec{Use: "mw_pii", Config: map[string]any{"strategy": "hash"}})) // update config
-	check(eng.Reload("mw_pii"))                                                                     // update code from source
-	check(eng.Unload("store_inmem"))
-	fmt.Println(eng.State("memory_store")) // PENDING again; its tools are gone
+	check(eng.Load(eipagent.PluginSpec{Use: "hook_pii", Config: map[string]any{"strategy": "mask"}}))
+	check(eng.Load(eipagent.PluginSpec{Use: "hook_pii", Config: map[string]any{"strategy": "hash"}})) // update config
+	check(eng.Reload("hook_pii"))                                                                     // update code from source
+	check(eng.Unload("memory_inmem"))
+	fmt.Println(eng.State("tool_memory")) // PENDING again; its tools are gone
 
 	for _, s := range agent.Status() {
 		fmt.Println(s.String())
@@ -260,7 +260,7 @@ func subagents(string) {
 	agent, err := eipagent.New(
 		eipagent.WithModel("mock:demo"),
 		eipagent.WithPlugins("tool_time"),
-		eipagent.WithPlugin("agents", map[string]any{"agents": []any{
+		eipagent.WithPlugin("tool_subagents", map[string]any{"agents": []any{
 			map[string]any{"name": "researcher", "description": "Finds facts",
 				"instructions": "Research carefully.", "tools": []any{"current_time"}},
 			map[string]any{"name": "billing", "description": "Invoices and refunds",
@@ -289,8 +289,8 @@ func subagents(string) {
 func sandboxedTools(dir string) {
 	agent, err := eipagent.New(
 		eipagent.WithModel("mock:demo"),
-		eipagent.WithPlugin("sandbox_local", map[string]any{"root": dir + "/boxes"}), // or sandbox_docker
-		eipagent.WithPlugin("exec_sandbox", map[string]any{"provider": "local"}),     // one box per thread
+		eipagent.WithPlugin("sandbox_local", map[string]any{"root": dir + "/boxes"}),  // or sandbox_docker
+		eipagent.WithPlugin("workspace_sandbox", map[string]any{"provider": "local"}), // one box per thread
 		eipagent.WithPlugins("tool_shell", "tool_fs"),
 		mock(map[string]any{"tool": "write_file", "args": map[string]any{"path": "notes.md", "content": "hello\n"}},
 			map[string]any{"tool": "bash", "args": map[string]any{"command": "wc -l notes.md"}},
@@ -309,31 +309,31 @@ func sandboxedTools(dir string) {
 // ---- 11. Lifecycle hooks ----
 
 func lifecycleHooks(string) {
-	observer := eipagent.Plugin{Name: "observer", Apply: func(ctx *eipagent.PluginContext) error {
-		ctx.OnAgentStart(func(c context.Context, st *sdk.RunState) error {
+	observer := eipagent.Plugin{Name: "observer", Apply: func(p *eipagent.PluginAPI) error {
+		p.OnAgentStart(func(c context.Context, st *sdk.RunState) error {
 			fmt.Println("run start, user:", st.User)
 			return nil // returning an error refuses the run
 		})
-		ctx.OnStepPrepare(func(c context.Context, sc *sdk.StepContext) error {
+		p.OnStepPrepare(func(c context.Context, sc *sdk.StepContext) error {
 			sc.Request.System += "\nToday is a holiday." // rewrite the next model request
 			return nil
 		})
-		ctx.OnModelAfter(func(c context.Context, sc *sdk.StepContext, resp *sdk.ModelResponse) error {
+		p.OnModelAfter(func(c context.Context, sc *sdk.StepContext, resp *sdk.ModelResponse) error {
 			if len(resp.Message.ToolCalls) > 3 {
 				sc.Jump = "end" // stop the run here
 			}
 			return nil
 		})
-		ctx.OnEvent(func(e sdk.Event) {
+		p.OnEvent(func(e sdk.Event) {
 			if e.Type == "error" {
 				fmt.Println("run failed:", e.Text)
 			}
 		})
-		ctx.OnAgentEnd(func(c context.Context, st *sdk.RunState, res *sdk.RunResult) error {
+		p.OnAgentEnd(func(c context.Context, st *sdk.RunState, res *sdk.RunResult) error {
 			fmt.Println("run end:", res.FinishReason) // stop | max_steps | interrupted | tool:x | error
 			return nil
 		})
-		ctx.Effect(func() func() {
+		p.Effect(func() func() {
 			fmt.Println("observer loaded")
 			return func() { fmt.Println("observer unloaded") } // on Unload / Close / reload
 		})

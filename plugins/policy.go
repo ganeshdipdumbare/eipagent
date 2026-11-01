@@ -26,14 +26,14 @@ import (
 //	require_sandbox: true = shell/fs tools must run in an isolated exec world
 //	max_tokens_run:  token budget per run
 //	roles:           {role: {allow_tools: [...], mode: "..."}} overrides by user role
-func Apply(ctx *sdk.Context) error {
-	ctx.SetPriority(sdk.PriorityReserved) // ignored unless the plugin is locked
-	if !ctx.Trusted() {
-		ctx.Logf("warning: policy is not locked; other plugins may run before it")
+func Apply(p *sdk.Plugin) error {
+	p.SetPriority(sdk.PriorityReserved) // ignored unless the plugin is locked
+	if !p.Trusted() {
+		p.Logf("warning: policy is not locked; other plugins may run before it")
 	}
-	rules := ctx.ConfigMap("rules")
+	rules := p.ConfigMap("rules")
 	if rules == nil {
-		rules = ctx.Config
+		rules = p.Config
 	}
 	list := func(m map[string]any, k string) []string {
 		raw, _ := m[k].([]any)
@@ -46,8 +46,8 @@ func Apply(ctx *sdk.Context) error {
 		return out
 	}
 	match := func(pats []string, s string) bool {
-		for _, p := range pats {
-			if ok, _ := path.Match(p, s); ok {
+		for _, pat := range pats {
+			if ok, _ := path.Match(pat, s); ok {
 				return true
 			}
 		}
@@ -77,7 +77,7 @@ func Apply(ctx *sdk.Context) error {
 
 	var mu sync.Mutex
 	used := map[*sdk.RunState]int{}
-	ctx.WrapModel(func(c context.Context, req *sdk.ModelRequest, next sdk.ModelHandler) (*sdk.ModelResponse, error) {
+	p.WrapModel(func(c context.Context, req *sdk.ModelRequest, next sdk.ModelHandler) (*sdk.ModelResponse, error) {
 		if len(allowModels) > 0 && !match(allowModels, req.Model) {
 			return nil, fmt.Errorf("policy: model %s is not allowed", req.Model)
 		}
@@ -95,14 +95,14 @@ func Apply(ctx *sdk.Context) error {
 		}
 		return resp, err
 	})
-	ctx.OnAgentEnd(func(c context.Context, st *sdk.RunState, res *sdk.RunResult) error {
+	p.OnRunEnd(func(c context.Context, st *sdk.RunState, res *sdk.RunResult) error {
 		mu.Lock()
 		delete(used, st)
 		mu.Unlock()
 		return nil
 	})
 
-	ctx.WrapTool(func(c context.Context, req *sdk.ToolRequest, next sdk.ToolHandler) (*sdk.ToolResult, error) {
+	p.WrapTool(func(c context.Context, req *sdk.ToolRequest, next sdk.ToolHandler) (*sdk.ToolResult, error) {
 		name := req.Call.Name
 		var roles []string
 		if req.Run != nil {
@@ -113,7 +113,7 @@ func Apply(ctx *sdk.Context) error {
 			eff = rr
 		}
 		deny := func(why string) (*sdk.ToolResult, error) {
-			ctx.Logf("denied %s for %s: %s", name, req.User, why)
+			p.Logf("denied %s for %s: %s", name, req.User, why)
 			return &sdk.ToolResult{Content: "denied by policy: " + why, IsError: true}, nil
 		}
 		if match(list(rules, "deny_tools"), name) || match(list(eff, "deny_tools"), name) {
@@ -140,7 +140,7 @@ func Apply(ctx *sdk.Context) error {
 			}
 		}
 		if requireSandbox && sandbox != "" && !strings.HasPrefix(sandbox, "sandbox:") {
-			return deny("shell and file tools must run in a sandbox (load exec_sandbox)")
+			return deny("shell and file tools must run in a sandbox (load workspace_sandbox)")
 		}
 		return next(c, req)
 	})

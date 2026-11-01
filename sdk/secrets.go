@@ -18,7 +18,7 @@ import (
 
 // Version is the eipagent SDK version plugins are checked against
 // (the "eipagent" field of a plugin manifest).
-const Version = "0.3.0"
+const Version = "0.4.0"
 
 // Redaction: every secret value resolved through the "secrets" service
 // is remembered here, and audit / trace / log plugins pass what they
@@ -186,7 +186,7 @@ type grantMark struct {
 // auditGrant reports whether a granted read should be recorded now. The
 // marks live on the agent's root registry, so two agents in one process
 // each audit their own reads.
-func (c *Context) auditGrant(caller, name, v string) bool {
+func (c *Plugin) auditGrant(caller, name, v string) bool {
 	r := c.reg
 	for r.parent != nil {
 		r = r.parent
@@ -208,7 +208,7 @@ func (c *Context) auditGrant(caller, name, v string) bool {
 
 // rawService looks a service up without the per-plugin binding (for
 // records the core itself writes).
-func (c *Context) rawService(name string) any {
+func (c *Plugin) rawService(name string) any {
 	v, _ := c.reg.service(name)
 	return v
 }
@@ -217,7 +217,7 @@ func (c *Context) rawService(name string) any {
 // submits is stamped writer="plugin:<name>" (overwriting any writer the
 // plugin set), so a plugin can't pass its own records off as the core's
 // or another plugin's. Records the core writes carry writer="core".
-func (c *Context) boundAudit(a *Audit) *Audit {
+func (c *Plugin) boundAudit(a *Audit) *Audit {
 	writer := "plugin:" + c.PluginName()
 	return &Audit{Record: func(kind string, data map[string]any) {
 		d := make(map[string]any, len(data)+1)
@@ -232,7 +232,7 @@ func (c *Context) boundAudit(a *Audit) *Audit {
 // boundSecrets is what Service("secrets") hands a plugin: the caller is
 // fixed to the plugin's identity (a plugin can't ask as someone else),
 // values are registered for redaction and every access is audited.
-func (c *Context) boundSecrets(s *Secrets) *Secrets {
+func (c *Plugin) boundSecrets(s *Secrets) *Secrets {
 	caller := c.PluginName()
 	return &Secrets{Get: func(ctx context.Context, _ string, name string) (string, error) {
 		v, err := s.Get(ctx, caller, name)

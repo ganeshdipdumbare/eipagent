@@ -80,15 +80,15 @@ func New(cfg Config) (*Server, error) {
 		eipagent.WithPlugin("secrets_env", map[string]any{"allow": []any{"MAIL_RELAY_TOKEN"}, "grants": map[string]any{"mailer": []any{"MAIL_RELAY_TOKEN"}}}),
 		eipagent.WithCompiledPlugin(Mailer(shop)),
 		// Every outgoing email needs a human OK.
-		eipagent.WithPlugin("mw_hitl", map[string]any{"interrupt_on": map[string]any{
+		eipagent.WithPlugin("hook_approval", map[string]any{"interrupt_on": map[string]any{
 			"send_email": map[string]any{"allowed": []any{"approve", "edit", "reject"}, "description": "Send this email to the customer?"},
 		}}),
 		// Card numbers never reach the model.
-		eipagent.WithPlugin("mw_pii", map[string]any{"types": []any{"credit_card"}, "strategy": "mask"}),
-		eipagent.WithPlugin("mw_limits", map[string]any{"tool_calls_run": 12}),
+		eipagent.WithPlugin("hook_pii", map[string]any{"types": []any{"credit_card"}, "strategy": "mask"}),
+		eipagent.WithPlugin("hook_limits", map[string]any{"tool_calls_run": 12}),
 		// Durable threads (pauses survive restarts) and a tamper-evident log.
-		eipagent.WithPlugin("checkpoint_file", map[string]any{"dir": filepath.Join(cfg.DataDir, "threads")}),
-		eipagent.WithPlugin("audit_jsonl", map[string]any{"path": filepath.Join(cfg.DataDir, "audit.jsonl")}),
+		eipagent.WithPlugin("threads_file", map[string]any{"dir": filepath.Join(cfg.DataDir, "threads")}),
+		eipagent.WithPlugin("audit_file", map[string]any{"path": filepath.Join(cfg.DataDir, "audit.jsonl")}),
 		eipagent.WithCompiledPlugin(Inspector()),
 		eipagent.WithLogger(func(scope, msg string) {}),
 	}

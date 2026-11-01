@@ -9,8 +9,8 @@ import (
 	"github.com/ganeshdipdumbare/eipagent/sdk"
 )
 
-// Thread is a persistent conversation stored by the "checkpointer"
-// service. Any process sharing the checkpointer (e.g. Postgres) can
+// Thread is a persistent conversation stored by the "threads" service.
+// Any process sharing that storage (e.g. Postgres via threads_sql) can
 // continue it, so agents stay stateless.
 type Thread struct {
 	a  *Agent
@@ -22,7 +22,7 @@ func (a *Agent) Thread(id string) *Thread { return &Thread{a: a, id: id} }
 func (t *Thread) ID() string { return t.id }
 
 func (t *Thread) cp() (*sdk.Checkpointer, error) {
-	cp, ok := t.a.eng.Root().Snapshot().Services["checkpointer"].(*sdk.Checkpointer)
+	cp, ok := t.a.eng.Root().Snapshot().Services["threads"].(*sdk.Checkpointer)
 	if !ok {
 		return nil, ErrNoCheckpoint
 	}

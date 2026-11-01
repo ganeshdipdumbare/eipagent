@@ -86,7 +86,7 @@ func main() {
 	auditPath := filepath.Join(tmp, "audit.jsonl")
 	a, err := eipagent.New(
 		eipagent.WithModel("mock:demo"),
-		eipagent.WithPlugin("llm_mock", map[string]any{"script": []any{
+		eipagent.WithPlugin("model_mock", map[string]any{"script": []any{
 			map[string]any{"tool": "charge", "args": map[string]any{"amount": 42}},
 			map[string]any{"text": "Charged $42."},
 			map[string]any{"tool": "charge", "args": map[string]any{"amount": 7}},
@@ -96,8 +96,8 @@ func main() {
 			"address": vault.URL, "ttl_seconds": 0, // 0 = re-read every time, to show rotation
 			"grants": map[string]any{"billing": []any{"STRIPE_API_KEY"}},
 		}),
-		eipagent.WithPlugin("audit_jsonl", map[string]any{"path": auditPath, "results": true}),
-		eipagent.WithPlugin("mw_logger", map[string]any{"results": true}),
+		eipagent.WithPlugin("audit_file", map[string]any{"path": auditPath, "results": true}),
+		eipagent.WithPlugin("hook_log", map[string]any{"results": true}),
 		eipagent.WithCompiledPlugin(billing),
 		eipagent.WithCompiledPlugin(analytics),
 		eipagent.WithLogger(func(scope, msg string) { logs = append(logs, "["+scope+"] "+msg) }),

@@ -5,15 +5,15 @@ package plugin
 import "eipagent/sdk"
 
 // Counts tool calls; prints a summary when unloaded (Effect cleanup).
-func Apply(ctx *sdk.Context) error {
+func Apply(p *sdk.Plugin) error {
 	calls := 0
-	ctx.OnEvent(func(e sdk.Event) {
+	p.OnEvent(func(e sdk.Event) {
 		if e.Type == "tool_result" {
 			calls++
 		}
 	})
-	ctx.Effect(func() func() {
-		return func() { ctx.Logf("session summary: %d tool calls", calls) }
+	p.Effect(func() func() {
+		return func() { p.Logf("session summary: %d tool calls", calls) }
 	})
 	return nil
 }

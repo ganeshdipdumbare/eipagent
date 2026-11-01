@@ -23,12 +23,12 @@ import (
 // pids_limit (256), extra_args ([]).
 var Permissions = []string{"exec"}
 
-func Apply(ctx *sdk.Context) error {
-	bin := ctx.ConfigString("binary", "docker")
-	image := ctx.ConfigString("image", "alpine:3")
-	name := ctx.ConfigString("name", "docker")
-	pids := ctx.ConfigInt("pids_limit", 256)
-	extra := ctx.ConfigStrings("extra_args")
+func Apply(p *sdk.Plugin) error {
+	bin := p.ConfigString("binary", "docker")
+	image := p.ConfigString("image", "alpine:3")
+	name := p.ConfigString("name", "docker")
+	pids := p.ConfigInt("pids_limit", 256)
+	extra := p.ConfigStrings("extra_args")
 
 	run := func(c context.Context, stdin []byte, args ...string) (string, string, int, error) {
 		cmd := exec.CommandContext(c, bin, args...)
@@ -64,7 +64,7 @@ func Apply(ctx *sdk.Context) error {
 			},
 			Kill: func() error { return cmd.Process.Kill() }}, nil
 	}
-	return ctx.Provide("sandbox/"+name, &sdk.SandboxProvider{
+	return p.Provide("sandbox/"+name, &sdk.SandboxProvider{
 		Name:      name,
 		Isolation: "container",
 		Create: func(c context.Context, spec sdk.SandboxSpec) (*sdk.Sandbox, error) {
@@ -196,16 +196,16 @@ func container(id, provider, wd string, run runner, start starter) *sdk.Sandbox 
 		Start: func(c context.Context, req sdk.ExecRequest) (*sdk.Process, error) {
 			return start(c, execArgs(req)...)
 		},
-		ReadFile: func(c context.Context, p string) ([]byte, error) {
-			out, err := sh(c, nil, `cat -- "$1"`, p)
+		ReadFile: func(c context.Context, fpath string) ([]byte, error) {
+			out, err := sh(c, nil, `cat -- "$1"`, fpath)
 			return []byte(out), err
 		},
-		WriteFile: func(c context.Context, p string, data []byte) error {
-			_, err := sh(c, data, `mkdir -p "$(dirname -- "$1")" && cat > "$1"`, p)
+		WriteFile: func(c context.Context, fpath string, data []byte) error {
+			_, err := sh(c, data, `mkdir -p "$(dirname -- "$1")" && cat > "$1"`, fpath)
 			return err
 		},
-		ListDir: func(c context.Context, p string) ([]sdk.FileInfo, error) {
-			out, err := sh(c, nil, `ls -1Ap -- "$1"`, p)
+		ListDir: func(c context.Context, fpath string) ([]sdk.FileInfo, error) {
+			out, err := sh(c, nil, `ls -1Ap -- "$1"`, fpath)
 			if err != nil {
 				return nil, err
 			}
@@ -218,8 +218,8 @@ func container(id, provider, wd string, run runner, start starter) *sdk.Sandbox 
 			}
 			return fis, nil
 		},
-		Remove: func(c context.Context, p string) error {
-			_, err := sh(c, nil, `rm -rf -- "$1"`, p)
+		Remove: func(c context.Context, fpath string) error {
+			_, err := sh(c, nil, `rm -rf -- "$1"`, fpath)
 			return err
 		},
 		Upload: func(c context.Context, hostPath, boxPath string) error {

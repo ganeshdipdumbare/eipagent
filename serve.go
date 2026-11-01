@@ -143,13 +143,13 @@ func (r *chunkRouter) send(c wireChunk) {
 
 var callSeq atomic.Int64
 
-// bridgeLLM provides llm/<p> for every provider the host offers; calls
+// bridgeLLM provides model/<p> for every provider the host offers; calls
 // run on the host, through the host's own middleware and policy.
 func bridgeLLM(conn *rpc.Conn, chunks *chunkRouter, providers []string) engine.Plugin {
 	return engine.Plugin{Name: "bridge_llm", Apply: func(ctx *sdk.Context) error {
 		for _, p := range providers {
 			name := p
-			err := ctx.Provide("llm/"+name, &sdk.Provider{Name: "bridge:" + name, Capabilities: map[string]bool{"streaming": true, "tools": true, "structured_output": true},
+			err := ctx.Provide("model/"+name, &sdk.Provider{Name: "bridge:" + name, Capabilities: map[string]bool{"streaming": true, "tools": true, "structured_output": true},
 				Generate: func(c context.Context, req *sdk.ModelRequest) (*sdk.ModelResponse, error) {
 					id := fmt.Sprintf("m%d", callSeq.Add(1))
 					wr := wireModelReq{CallID: id, Model: req.Model, System: req.System, Messages: req.Messages, Tools: toWireTools(req.Tools),

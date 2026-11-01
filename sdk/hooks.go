@@ -57,16 +57,44 @@ type (
 	EventFn       func(Event)
 )
 
-func (c *Context) OnAgentStart(fn AgentStartFn)   { c.hook(HookAgentStart, fn) }
-func (c *Context) OnStepPrepare(fn StepPrepareFn) { c.hook(HookStepPrepare, fn) }
-func (c *Context) WrapModel(fn ModelWrapFn)       { c.hook(HookModelWrap, fn) }
-func (c *Context) OnModelAfter(fn ModelAfterFn)   { c.hook(HookModelAfter, fn) }
-func (c *Context) WrapTool(fn ToolWrapFn)         { c.hook(HookToolWrap, fn) }
-func (c *Context) OnAgentEnd(fn AgentEndFn)       { c.hook(HookAgentEnd, fn) }
-func (c *Context) OnEvent(fn EventFn)             { c.hook(HookObserve, fn) }
+// OnRunStart runs when a run (Generate, Stream, Resume) starts.
+func (c *Plugin) OnRunStart(fn AgentStartFn) { c.hook(HookAgentStart, fn) }
+
+// BeforeStep can rewrite the next model request (model, messages,
+// tools, tool choice) before every step.
+func (c *Plugin) BeforeStep(fn StepPrepareFn) { c.hook(HookStepPrepare, fn) }
+
+// WrapModel wraps every model call: call next to continue, or answer
+// without it. Higher priority wraps further out.
+func (c *Plugin) WrapModel(fn ModelWrapFn) { c.hook(HookModelWrap, fn) }
+
+// AfterModel sees every model reply and may redirect the run (Jump).
+func (c *Plugin) AfterModel(fn ModelAfterFn) { c.hook(HookModelAfter, fn) }
+
+// WrapTool wraps every tool call: call next to run it, or return a
+// result, an error or an Interrupt instead.
+func (c *Plugin) WrapTool(fn ToolWrapFn) { c.hook(HookToolWrap, fn) }
+
+// OnRunEnd runs when a run ends, also when it failed.
+func (c *Plugin) OnRunEnd(fn AgentEndFn) { c.hook(HookAgentEnd, fn) }
+
+// OnEvent observes every event a run emits (text, tool calls ...).
+func (c *Plugin) OnEvent(fn EventFn) { c.hook(HookObserve, fn) }
+
+// Deprecated: use OnRunStart. Kept until v1.0.
+func (c *Plugin) OnAgentStart(fn AgentStartFn) { c.OnRunStart(fn) }
+
+// Deprecated: use BeforeStep. Kept until v1.0.
+func (c *Plugin) OnStepPrepare(fn StepPrepareFn) { c.BeforeStep(fn) }
+
+// Deprecated: use AfterModel. Kept until v1.0.
+func (c *Plugin) OnModelAfter(fn ModelAfterFn) { c.AfterModel(fn) }
+
+// Deprecated: use OnRunEnd. Kept until v1.0.
+func (c *Plugin) OnAgentEnd(fn AgentEndFn) { c.OnRunEnd(fn) }
 
 // On registers a legacy tool hook (HookToolBefore / HookToolAfter).
-func (c *Context) On(kind string, fn func(*HookEvent)) { c.hook(kind, fn) }
+func (c *Plugin) On(kind string, fn func(*HookEvent)) { c.hook(kind, fn) }
 
 // ---- Snapshot: an immutable view taken at the start of each run ----
 
@@ -77,7 +105,7 @@ type Snapshot struct {
 	hooks    map[string][]any
 }
 
-func (c *Context) Snapshot() *Snapshot {
+func (c *Plugin) Snapshot() *Snapshot {
 	s := &Snapshot{Services: map[string]any{}, hooks: map[string][]any{}}
 	// Parent registries first (Isolate), so the child overrides services.
 	var chain []*registry
@@ -90,6 +118,9 @@ func (c *Context) Snapshot() *Snapshot {
 		r.mu.RLock()
 		for k, e := range r.services {
 			s.Services[k] = e.v
+			if old := oldServiceName(k); old != "" {
+				s.Services[old] = e.v // pre-v0.4 name, for loops that read the map
+			}
 		}
 		if own {
 			for _, e := range r.tools {

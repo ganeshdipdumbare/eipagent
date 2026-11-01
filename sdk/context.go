@@ -51,9 +51,13 @@ func newRegistry(parent *registry) *registry {
 	return r
 }
 
-// Context is a scope. Everything registered through it is undone when
-// it is disposed, which is how unload and hot reload stay clean.
-type Context struct {
+// Plugin is what a plugin's Apply receives: everything it can do
+// (AddTool, WrapModel / WrapTool, Provide, Effect ...) goes through it,
+// and everything it registered is undone when it is unloaded, which is
+// how unload and hot reload stay clean.
+//
+//	func Apply(p *sdk.Plugin) error { p.AddTool(...); return nil }
+type Plugin struct {
 	Name   string
 	Config map[string]any // per-plugin config from the profile
 
@@ -63,24 +67,30 @@ type Context struct {
 	order     int
 	trusted   bool
 	mu        sync.Mutex
-	children  []*Context
+	children  []*Plugin
 	disposers []func()
 	disposed  bool // set by Dispose: later registrations are undone at once
 }
 
-func NewRoot() *Context { return &Context{Name: "root", reg: newRegistry(nil)} }
+// Context is the old name of Plugin.
+//
+// Deprecated: use Plugin. Kept until v1.0 so existing plugins
+// (func Apply(ctx *sdk.Context) error) keep compiling.
+type Context = Plugin
+
+func NewRoot() *Plugin { return &Plugin{Name: "root", reg: newRegistry(nil)} }
 
 // SetLogger replaces where Logf output goes (whole registry).
-func (c *Context) SetLogger(fn func(scope, msg string)) { c.reg.log = fn }
+func (c *Plugin) SetLogger(fn func(scope, msg string)) { c.reg.log = fn }
 
 // Fork creates a child scope sharing the registry. Disposing the parent
 // disposes the child.
-func (c *Context) Fork(name string) *Context {
+func (c *Plugin) Fork(name string) *Plugin {
 	id := name
 	if c.id != "" {
 		id = c.id + "/" + name
 	}
-	child := &Context{Name: name, id: id, reg: c.reg, priority: c.priority, order: c.order, trusted: c.trusted}
+	child := &Plugin{Name: name, id: id, reg: c.reg, priority: c.priority, order: c.order, trusted: c.trusted}
 	c.mu.Lock()
 	if c.disposed {
 		child.disposed = true
@@ -94,8 +104,8 @@ func (c *Context) Fork(name string) *Context {
 // Isolate creates a child kernel: it sees the parent's services and its
 // trusted hooks (policy, audit), but has its own tools, skills and hooks.
 // Used for subagents.
-func (c *Context) Isolate(name string) *Context {
-	child := &Context{Name: name, id: c.id + "/" + name, reg: newRegistry(c.reg), trusted: c.trusted}
+func (c *Plugin) Isolate(name string) *Plugin {
+	child := &Plugin{Name: name, id: c.id + "/" + name, reg: newRegistry(c.reg), trusted: c.trusted}
 	c.onDispose(child.Dispose)
 	return child
 }
@@ -118,20 +128,20 @@ func ClaimTrustKey() *TrustKey {
 
 // Trust sets load order and trust on a scope. Without the engine's key
 // it does nothing.
-func (c *Context) Trust(key *TrustKey, order int, trusted bool) {
+func (c *Plugin) Trust(key *TrustKey, order int, trusted bool) {
 	if key == nil || key != engineKey {
 		return
 	}
 	c.order, c.trusted = order, trusted
 }
 
-func (c *Context) Trusted() bool { return c.trusted }
+func (c *Plugin) Trusted() bool { return c.trusted }
 
 // ID is the scope's immutable identity ("plugin" or "plugin/child").
-func (c *Context) ID() string { return c.id }
+func (c *Plugin) ID() string { return c.id }
 
 // PluginName is the top-level plugin instance that owns this scope.
-func (c *Context) PluginName() string {
+func (c *Plugin) PluginName() string {
 	if i := strings.Index(c.id, "/"); i >= 0 {
 		return c.id[:i]
 	}
@@ -141,7 +151,7 @@ func (c *Context) PluginName() string {
 // SetPriority sets the priority of hooks registered after this call.
 // Higher runs earlier / further out. Values >= PriorityReserved are
 // clamped unless the plugin is trusted.
-func (c *Context) SetPriority(p int) {
+func (c *Plugin) SetPriority(p int) {
 	if p >= PriorityReserved && !c.trusted {
 		p = PriorityReserved - 1
 	}
@@ -149,9 +159,9 @@ func (c *Context) SetPriority(p int) {
 }
 
 // Priority is the priority hooks registered now will get.
-func (c *Context) Priority() int { return c.priority }
+func (c *Plugin) Priority() int { return c.priority }
 
-func (c *Context) onDispose(f func()) {
+func (c *Plugin) onDispose(f func()) {
 	c.mu.Lock()
 	if c.disposed {
 		// A goroutine registered something after the plugin was unloaded:
@@ -165,7 +175,7 @@ func (c *Context) onDispose(f func()) {
 }
 
 // Dispose runs all disposers in reverse order (children first).
-func (c *Context) Dispose() {
+func (c *Plugin) Dispose() {
 	c.mu.Lock()
 	kids, ds := c.children, c.disposers
 	c.children, c.disposers = nil, nil
@@ -179,24 +189,59 @@ func (c *Context) Dispose() {
 	}
 }
 
-func (c *Context) nextID() int { c.reg.seq++; return c.reg.seq }
+func (c *Plugin) nextID() int { c.reg.seq++; return c.reg.seq }
 
 // Effect runs fn now; the cleanup it returns runs when the scope is
 // disposed. Use it for timers, goroutines, connections, processes.
-func (c *Context) Effect(fn func() func()) {
+func (c *Plugin) Effect(fn func() func()) {
 	if cleanup := fn(); cleanup != nil {
 		c.onDispose(cleanup)
 	}
 }
 
-// OnDispose registers a cleanup without a setup step.
-func (c *Context) OnDispose(fn func()) { c.onDispose(fn) }
+// OnUnload registers a cleanup that runs when the plugin is unloaded,
+// reloaded or the agent closes.
+func (c *Plugin) OnUnload(fn func()) { c.onDispose(fn) }
+
+// Deprecated: use OnUnload. Kept until v1.0.
+func (c *Plugin) OnDispose(fn func()) { c.onDispose(fn) }
 
 // ---- Services ----
 
 // Provide registers a service. Duplicate names are an error so two
 // plugins can't silently fight over one name; unload one to swap.
-func (c *Context) Provide(name string, svc any) error {
+// Services renamed in v0.4. The old names keep resolving until v1.0:
+// Provide, Service, HasService and Services treat them as the new ones.
+var serviceRenames = map[string]string{"checkpointer": "threads", "store": "memory", "exec": "workspace"}
+
+// CanonicalService maps an old service name to its current one
+// ("llm/openai" -> "model/openai", "checkpointer" -> "threads",
+// "store" -> "memory", "exec" -> "workspace"); other names pass through.
+func CanonicalService(name string) string {
+	if n, ok := serviceRenames[name]; ok {
+		return n
+	}
+	if strings.HasPrefix(name, "llm/") {
+		return "model/" + name[len("llm/"):]
+	}
+	return name
+}
+
+// oldServiceName is the pre-v0.4 name of a service, or "".
+func oldServiceName(name string) string {
+	for old, n := range serviceRenames {
+		if n == name {
+			return old
+		}
+	}
+	if strings.HasPrefix(name, "model/") {
+		return "llm/" + name[len("model/"):]
+	}
+	return ""
+}
+
+func (c *Plugin) Provide(name string, svc any) error {
+	name = CanonicalService(name)
 	r := c.reg
 	r.mu.Lock()
 	if _, taken := r.services[name]; taken {
@@ -217,6 +262,7 @@ func (c *Context) Provide(name string, svc any) error {
 }
 
 func (r *registry) service(name string) (any, bool) {
+	name = CanonicalService(name)
 	for ; r != nil; r = r.parent {
 		r.mu.RLock()
 		e, ok := r.services[name]
@@ -228,7 +274,7 @@ func (r *registry) service(name string) (any, bool) {
 	return nil, false
 }
 
-func (c *Context) Service(name string) any {
+func (c *Plugin) Service(name string) any {
 	v, _ := c.reg.service(name)
 	if s, ok := v.(*Secrets); ok && name == "secrets" && s != nil {
 		return c.boundSecrets(s)
@@ -242,13 +288,14 @@ func (c *Context) Service(name string) any {
 	return v
 }
 
-func (c *Context) HasService(name string) bool {
+func (c *Plugin) HasService(name string) bool {
 	_, ok := c.reg.service(name)
 	return ok
 }
 
 // Services lists service names with the given prefix ("" = all).
-func (c *Context) Services(prefix string) []string {
+func (c *Plugin) Services(prefix string) []string {
+	prefix = CanonicalService(prefix)
 	seen := map[string]bool{}
 	var out []string
 	for r := c.reg; r != nil; r = r.parent {
@@ -271,7 +318,7 @@ func (c *Context) Services(prefix string) []string {
 // is refused (logged, first one wins), so a later plugin can't take over
 // a tool such as issue_refund; a plugin may re-register its own names.
 // Tool.Plugin is always set to the registering plugin.
-func (c *Context) AddTool(t Tool) {
+func (c *Plugin) AddTool(t Tool) {
 	t.Plugin = c.PluginName()
 	r := c.reg
 	r.mu.Lock()
@@ -293,7 +340,7 @@ func (c *Context) AddTool(t Tool) {
 }
 
 // AddSkill registers a skill; like tools, another plugin's name is refused.
-func (c *Context) AddSkill(s Skill) {
+func (c *Plugin) AddSkill(s Skill) {
 	r := c.reg
 	r.mu.Lock()
 	if e, ok := r.skills[s.Name]; ok && e.owner != c.PluginName() {
@@ -315,7 +362,7 @@ func (c *Context) AddSkill(s Skill) {
 
 // ---- Hooks ----
 
-func (c *Context) hook(kind string, fn any) {
+func (c *Plugin) hook(kind string, fn any) {
 	r := c.reg
 	r.mu.Lock()
 	id := c.nextID()
@@ -334,19 +381,19 @@ func (c *Context) hook(kind string, fn any) {
 	})
 }
 
-func (c *Context) Logf(format string, args ...any) {
+func (c *Plugin) Logf(format string, args ...any) {
 	c.reg.log(c.Name, Redact(fmt.Sprintf(format, args...)))
 }
 
 // ConfigString / ConfigInt / ConfigBool read plugin config with defaults.
-func (c *Context) ConfigString(key, def string) string {
+func (c *Plugin) ConfigString(key, def string) string {
 	if v, ok := c.Config[key].(string); ok && v != "" {
 		return v
 	}
 	return def
 }
 
-func (c *Context) ConfigInt(key string, def int) int {
+func (c *Plugin) ConfigInt(key string, def int) int {
 	switch v := c.Config[key].(type) {
 	case float64:
 		return int(v)
@@ -358,7 +405,7 @@ func (c *Context) ConfigInt(key string, def int) int {
 	return def
 }
 
-func (c *Context) ConfigFloat(key string, def float64) float64 {
+func (c *Plugin) ConfigFloat(key string, def float64) float64 {
 	switch v := c.Config[key].(type) {
 	case float64:
 		return v
@@ -368,14 +415,14 @@ func (c *Context) ConfigFloat(key string, def float64) float64 {
 	return def
 }
 
-func (c *Context) ConfigBool(key string, def bool) bool {
+func (c *Plugin) ConfigBool(key string, def bool) bool {
 	if v, ok := c.Config[key].(bool); ok {
 		return v
 	}
 	return def
 }
 
-func (c *Context) ConfigStrings(key string) []string {
+func (c *Plugin) ConfigStrings(key string) []string {
 	switch v := c.Config[key].(type) {
 	case []string:
 		return v
@@ -391,14 +438,14 @@ func (c *Context) ConfigStrings(key string) []string {
 	return nil
 }
 
-func (c *Context) ConfigMap(key string) map[string]any {
+func (c *Plugin) ConfigMap(key string) map[string]any {
 	if v, ok := c.Config[key].(map[string]any); ok {
 		return v
 	}
 	return nil
 }
 
-func (c *Context) ConfigList(key string) []map[string]any {
+func (c *Plugin) ConfigList(key string) []map[string]any {
 	raw, _ := c.Config[key].([]any)
 	var out []map[string]any
 	for _, x := range raw {

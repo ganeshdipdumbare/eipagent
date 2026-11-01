@@ -21,17 +21,17 @@ import (
 // results, default false). Secret values are redacted.
 var Permissions = []string{"fs:read", "fs:write"}
 
-func Apply(ctx *sdk.Context) error {
-	p := ctx.ConfigString("path", ".eipagent/trace.jsonl")
-	content := ctx.ConfigBool("content", false)
-	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+func Apply(p *sdk.Plugin) error {
+	logPath := p.ConfigString("path", ".eipagent/trace.jsonl")
+	content := p.ConfigBool("content", false)
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(p, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
-	ctx.OnDispose(func() { f.Close() })
+	p.OnUnload(func() { f.Close() })
 	var mu sync.Mutex
 	seq := 0
 	runs := map[*sdk.RunState]string{}
@@ -55,7 +55,7 @@ func Apply(ctx *sdk.Context) error {
 		defer mu.Unlock()
 		return runs[st]
 	}
-	ctx.OnAgentStart(func(c context.Context, st *sdk.RunState) error {
+	p.OnRunStart(func(c context.Context, st *sdk.RunState) error {
 		id := newID()
 		mu.Lock()
 		runs[st] = id
@@ -63,7 +63,7 @@ func Apply(ctx *sdk.Context) error {
 		mu.Unlock()
 		return nil
 	})
-	ctx.OnAgentEnd(func(c context.Context, st *sdk.RunState, res *sdk.RunResult) error {
+	p.OnRunEnd(func(c context.Context, st *sdk.RunState, res *sdk.RunResult) error {
 		mu.Lock()
 		id := runs[st]
 		start := starts[id]
@@ -78,7 +78,7 @@ func Apply(ctx *sdk.Context) error {
 		write(id, id, "", "run", "run "+st.Thread, start, attrs)
 		return nil
 	})
-	ctx.WrapModel(func(c context.Context, req *sdk.ModelRequest, next sdk.ModelHandler) (*sdk.ModelResponse, error) {
+	p.WrapModel(func(c context.Context, req *sdk.ModelRequest, next sdk.ModelHandler) (*sdk.ModelResponse, error) {
 		t := time.Now()
 		resp, err := next(c, req)
 		run := runOf(req.Run)
@@ -94,7 +94,7 @@ func Apply(ctx *sdk.Context) error {
 		write(run, newID(), run, "model", req.Model, t, attrs)
 		return resp, err
 	})
-	ctx.WrapTool(func(c context.Context, req *sdk.ToolRequest, next sdk.ToolHandler) (*sdk.ToolResult, error) {
+	p.WrapTool(func(c context.Context, req *sdk.ToolRequest, next sdk.ToolHandler) (*sdk.ToolResult, error) {
 		t := time.Now()
 		r, err := next(c, req)
 		run := runOf(req.Run)

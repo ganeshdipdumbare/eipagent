@@ -13,11 +13,11 @@ import (
 // it registers is undone when it unloads, and it hot-reloads on save in
 // the dev preset. It declares the services it needs (Inject) and the
 // capabilities it needs (Permissions); this one needs neither.
-func Apply(ctx *sdk.Context) error {
-	greeting := ctx.ConfigString("greeting", "Hello")
+func Apply(p *sdk.Plugin) error {
+	greeting := p.ConfigString("greeting", "Hello")
 
 	// A tool.
-	ctx.AddTool(sdk.Tool{
+	p.AddTool(sdk.Tool{
 		Name:        "greet",
 		Description: "Greet someone by name",
 		Schema:      sdk.Object(map[string]any{"name": sdk.Str("who")}, "name"),
@@ -28,12 +28,12 @@ func Apply(ctx *sdk.Context) error {
 	})
 
 	// A skill (system prompt fragment).
-	ctx.AddSkill(sdk.Skill{Name: "manners", Prompt: "Always greet people with the greet tool first."})
+	p.AddSkill(sdk.Skill{Name: "manners", Prompt: "Always greet people with the greet tool first."})
 
 	// Middleware: shout every tool result.
-	ctx.WrapTool(func(c context.Context, req *sdk.ToolRequest, next sdk.ToolHandler) (*sdk.ToolResult, error) {
+	p.WrapTool(func(c context.Context, req *sdk.ToolRequest, next sdk.ToolHandler) (*sdk.ToolResult, error) {
 		r, err := next(c, req)
-		if err == nil && r != nil && ctx.ConfigBool("shout", false) {
+		if err == nil && r != nil && p.ConfigBool("shout", false) {
 			r.Content = strings.ToUpper(r.Content)
 		}
 		return r, err

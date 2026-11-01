@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 
@@ -18,8 +19,9 @@ import (
 const pluginUsage = `usage: eip plugin <command> [flags]
 
 authoring:
-  init [-template tool] [-dir DIR] NAME   scaffold a plugin (templates: %s)
-  validate [-json] PATH...                lint a plugin dir or .go file
+  init [-template T] [-dir DIR] NAME      scaffold a plugin; asks what it should do (templates: %s)
+  validate [-json] PATH...                lint a plugin dir or .go file, and say what it does
+  fix PATH...                             rewrite names renamed in v0.4 (sdk.Context, Inject, old services)
   build [-key FILE] [-out DIR] PATH       lint and pack PATH into NAME-VERSION.eip
   inspect [-json] PATH|PKG                show manifest, facts, files, signature
   keygen -out FILE                        make an ed25519 signing key (FILE, FILE.pub)
@@ -49,6 +51,8 @@ func pluginCmd(args []string) error {
 	switch sub {
 	case "init":
 		return pluginInit(args)
+	case "fix":
+		return pluginFix(args)
 	case "validate":
 		return pluginValidate(args)
 	case "build":
@@ -70,7 +74,7 @@ func pluginCmd(args []string) error {
 
 func pluginInit(args []string) error {
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
-	kind := fs.String("template", "tool", "template: "+strings.Join(pluginpkg.TemplateNames(), ", "))
+	kind := fs.String("template", "", "template: "+strings.Join(pluginpkg.TemplateNames(), ", ")+" (asked when omitted)")
 	dir := fs.String("dir", "", "directory to create (default ./NAME)")
 	fs.Parse(args)
 	if fs.NArg() != 1 {
@@ -79,6 +83,9 @@ func pluginInit(args []string) error {
 	name := fs.Arg(0)
 	if *dir == "" {
 		*dir = name
+	}
+	if *kind == "" {
+		*kind = askGoal(name)
 	}
 	files, err := pluginpkg.Init(*dir, name, *kind)
 	for _, f := range files {
@@ -89,6 +96,70 @@ func pluginInit(args []string) error {
 	}
 	return err
 }
+
+// askGoal asks what the plugin should do (in a terminal); without one
+// it picks a tool plugin, the most common kind.
+func askGoal(name string) string {
+	if st, err := os.Stdin.Stat(); err != nil || st.Mode()&os.ModeCharDevice == 0 {
+		return "tool"
+	}
+	fmt.Printf("What should %s do?\n", name)
+	for i, k := range pluginpkg.GoalOrder {
+		fmt.Printf("  %d. %s\n", i+1, pluginpkg.Templates[k])
+	}
+	fmt.Print("Choose 1-", len(pluginpkg.GoalOrder), " [1]: ")
+	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+	line = strings.TrimSpace(line)
+	if n, err := strconv.Atoi(line); err == nil && n >= 1 && n <= len(pluginpkg.GoalOrder) {
+		return pluginpkg.GoalOrder[n-1]
+	}
+	return "tool"
+}
+
+func pluginFix(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: eip plugin fix PATH... (a .go file or a plugin dir)")
+	}
+	for _, p := range args {
+		files := []string{p}
+		if st, err := os.Stat(p); err == nil && st.IsDir() {
+			files, _ = filepath.Glob(filepath.Join(p, "*.go"))
+			if mp := filepath.Join(p, pluginpkg.ManifestFile); fileExists(mp) {
+				m, err := pluginpkg.ReadManifest(mp)
+				if err != nil {
+					return err
+				}
+				if pluginpkg.FixManifest(m) {
+					if err := os.WriteFile(mp, m.Encode(), 0o644); err != nil {
+						return err
+					}
+					fmt.Printf("%s: inject -> requires, current service names\n", mp)
+				}
+			}
+		}
+		for _, f := range files {
+			src, err := os.ReadFile(f)
+			if err != nil {
+				return err
+			}
+			out, notes, err := pluginpkg.Fix(src)
+			if err != nil {
+				return fmt.Errorf("%s: %v", f, err)
+			}
+			if len(notes) == 0 {
+				fmt.Printf("%s: nothing to change\n", f)
+				continue
+			}
+			if err := os.WriteFile(f, out, 0o644); err != nil {
+				return err
+			}
+			fmt.Printf("%s: %s\n", f, strings.Join(notes, ", "))
+		}
+	}
+	return nil
+}
+
+func fileExists(p string) bool { _, err := os.Stat(p); return err == nil }
 
 func pluginValidate(args []string) error {
 	fs := flag.NewFlagSet("validate", flag.ExitOnError)
@@ -114,6 +185,7 @@ func pluginValidate(args []string) error {
 			for _, i := range r.Issues {
 				fmt.Println("  " + i.String())
 			}
+			fmt.Println("  " + pluginpkg.Summary(r.Name, r.Facts))
 			if src.Manifest == nil && r.Facts != nil {
 				fmt.Printf("  suggested %s:\n%s", pluginpkg.ManifestFile, indent(string(pluginpkg.Infer(r.Name, r.Facts).Encode()), "    "))
 			}
@@ -221,7 +293,7 @@ func pluginInspect(args []string) error {
 	row("description", m.Description)
 	row("state", r.State)
 	row("permissions", list(m.Permissions))
-	row("inject", list(m.Inject))
+	row("requires", list(m.Needs()))
 	row("provides", list(m.Provides))
 	row("tools", list(m.Tools))
 	row("secrets", list(m.Secrets))
@@ -243,6 +315,7 @@ func pluginInspect(args []string) error {
 		row("file "+n, engine.Hash(src.Files[n])[:16]+"…")
 	}
 	w.Flush()
+	fmt.Println(pluginpkg.Summary(src.Name, r.Facts))
 	for _, i := range r.Issues {
 		fmt.Println("  " + i.String())
 	}

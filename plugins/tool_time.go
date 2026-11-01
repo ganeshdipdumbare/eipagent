@@ -10,9 +10,9 @@ import (
 )
 
 // Returns the current time. Config: layout (Go time layout).
-func Apply(ctx *sdk.Context) error {
-	layout := ctx.ConfigString("layout", time.RFC1123)
-	ctx.AddTool(sdk.Tool{
+func Apply(p *sdk.Plugin) error {
+	layout := p.ConfigString("layout", time.RFC1123)
+	p.AddTool(sdk.Tool{
 		Name:        "current_time",
 		Description: "Returns the current date and time",
 		Schema:      map[string]any{"type": "object", "properties": map[string]any{}},

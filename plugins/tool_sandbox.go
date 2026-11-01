@@ -19,21 +19,21 @@ import (
 //
 // Config: provider ("docker"), image, network ("none"), memory_mb, cpus,
 // max_boxes (3 per thread), images (allowed images; [] = any).
-var Inject = []string{"sandbox/*"}
+var Requires = []string{"sandbox/*"}
 
-func Apply(ctx *sdk.Context) error {
-	provName := ctx.ConfigString("provider", "docker")
-	defImage := ctx.ConfigString("image", "")
-	maxBoxes := ctx.ConfigInt("max_boxes", 3)
-	allowedImages := ctx.ConfigStrings("images")
+func Apply(p *sdk.Plugin) error {
+	provName := p.ConfigString("provider", "docker")
+	defImage := p.ConfigString("image", "")
+	maxBoxes := p.ConfigInt("max_boxes", 3)
+	allowedImages := p.ConfigStrings("images")
 	base := sdk.SandboxSpec{
-		MemoryMB: ctx.ConfigInt("memory_mb", 0),
-		CPUs:     ctx.ConfigFloat("cpus", 0),
-		Network:  sdk.NetworkPolicy{Mode: ctx.ConfigString("network", "none")},
+		MemoryMB: p.ConfigInt("memory_mb", 0),
+		CPUs:     p.ConfigFloat("cpus", 0),
+		Network:  sdk.NetworkPolicy{Mode: p.ConfigString("network", "none")},
 	}
 	var mu sync.Mutex
 	boxes := map[string]map[string]*sdk.Sandbox{} // thread -> id -> box
-	ctx.OnDispose(func() {
+	p.OnUnload(func() {
 		mu.Lock()
 		defer mu.Unlock()
 		for _, m := range boxes {
@@ -59,12 +59,12 @@ func Apply(ctx *sdk.Context) error {
 	}
 	idArg := sdk.Str("sandbox id from sandbox_create")
 
-	ctx.AddTool(sdk.Tool{
+	p.AddTool(sdk.Tool{
 		Name: "sandbox_create", Description: "Start a new isolated sandbox (" + provName + ") and return its id",
 		Schema: sdk.Object(map[string]any{"image": sdk.Str("container image (optional)")}),
 		Meta:   map[string]any{"risk": "medium"},
 		Run: func(c context.Context, a map[string]any) (string, error) {
-			p, ok := ctx.Service("sandbox/" + provName).(*sdk.SandboxProvider)
+			sp, ok := p.Service("sandbox/" + provName).(*sdk.SandboxProvider)
 			if !ok {
 				return "", fmt.Errorf("no sandbox/%s provider", provName)
 			}
@@ -92,7 +92,7 @@ func Apply(ctx *sdk.Context) error {
 				return "", fmt.Errorf("limit of %d sandboxes reached; destroy one first", maxBoxes)
 			}
 			spec.Labels = map[string]string{"eipagent.thread": t}
-			b, err := p.Create(c, spec)
+			b, err := sp.Create(c, spec)
 			if err != nil {
 				return "", err
 			}
@@ -105,7 +105,7 @@ func Apply(ctx *sdk.Context) error {
 			return fmt.Sprintf("created sandbox %s (isolation: %s)", b.ID, b.Isolation), nil
 		},
 	})
-	ctx.AddTool(sdk.Tool{
+	p.AddTool(sdk.Tool{
 		Name: "sandbox_exec", Description: "Run a shell command inside a sandbox",
 		Schema: sdk.Object(map[string]any{"id": idArg, "command": sdk.Str("shell command"), "timeout_seconds": sdk.Int("timeout")}, "id", "command"),
 		Run: func(c context.Context, a map[string]any) (string, error) {
@@ -127,7 +127,7 @@ func Apply(ctx *sdk.Context) error {
 			return fmt.Sprintf("%s\n[exit code %d]", strings.TrimSpace(out), res.ExitCode), nil
 		},
 	})
-	ctx.AddTool(sdk.Tool{
+	p.AddTool(sdk.Tool{
 		Name: "sandbox_write_file", Description: "Write a file inside a sandbox",
 		Schema: sdk.Object(map[string]any{"id": idArg, "path": sdk.Str("path"), "content": sdk.Str("content")}, "id", "path", "content"),
 		Run: func(c context.Context, a map[string]any) (string, error) {
@@ -138,7 +138,7 @@ func Apply(ctx *sdk.Context) error {
 			return "written", b.WriteFile(c, sdk.ArgString(a, "path"), []byte(sdk.ArgString(a, "content")))
 		},
 	})
-	ctx.AddTool(sdk.Tool{
+	p.AddTool(sdk.Tool{
 		Name: "sandbox_read_file", Description: "Read a file from a sandbox",
 		Schema: sdk.Object(map[string]any{"id": idArg, "path": sdk.Str("path")}, "id", "path"),
 		Meta:   map[string]any{"readonly": true},
@@ -154,7 +154,7 @@ func Apply(ctx *sdk.Context) error {
 			return string(data), err
 		},
 	})
-	ctx.AddTool(sdk.Tool{
+	p.AddTool(sdk.Tool{
 		Name: "sandbox_list", Description: "List this conversation's sandboxes",
 		Schema: sdk.Object(map[string]any{}), Meta: map[string]any{"readonly": true},
 		Run: func(c context.Context, a map[string]any) (string, error) {
@@ -171,7 +171,7 @@ func Apply(ctx *sdk.Context) error {
 			return strings.Join(ids, "\n"), nil
 		},
 	})
-	ctx.AddTool(sdk.Tool{
+	p.AddTool(sdk.Tool{
 		Name: "sandbox_destroy", Description: "Destroy a sandbox and everything in it",
 		Schema: sdk.Object(map[string]any{"id": idArg}, "id"),
 		Run: func(c context.Context, a map[string]any) (string, error) {

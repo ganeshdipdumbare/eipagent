@@ -51,7 +51,7 @@ func Check(name string, src []byte) error {
 		return err
 	}
 	if !hasApply(src) {
-		return fmt.Errorf("%s: missing func Apply(ctx *sdk.Context) error", name)
+		return fmt.Errorf("%s: missing func Apply(p *sdk.Plugin) error", name)
 	}
 	i := newInterp([]string{})
 	if err := i.Use(buildSymbols(m.permissions, false)); err != nil {
@@ -63,7 +63,8 @@ func Check(name string, src []byte) error {
 	return nil
 }
 
-// hasApply reports whether src declares func Apply(<x> *sdk.Context) error.
+// hasApply reports whether src declares func Apply(<x> *sdk.Plugin) error
+// (or the pre-v0.4 *sdk.Context, the same type).
 func hasApply(src []byte) bool {
 	f, err := parser.ParseFile(token.NewFileSet(), "", src, 0)
 	if err != nil {
@@ -83,7 +84,7 @@ func hasApply(src []byte) bool {
 			return false
 		}
 		sel, ok := star.X.(*ast.SelectorExpr)
-		if !ok || sel.Sel.Name != "Context" {
+		if !ok || (sel.Sel.Name != "Plugin" && sel.Sel.Name != "Context") { // Context: pre-v0.4 name
 			return false
 		}
 		if x, ok := sel.X.(*ast.Ident); !ok || x.Name != "sdk" {

@@ -24,10 +24,10 @@ The goal is secure defaults that stay simple. `eipagent.New()` with no options u
 4. **Secrets.**
    - Config references `secret://NAME`, never raw values. Providers: `secrets_env` (allow-listed env vars) and `secrets_vault` (HashiCorp Vault KV v2, cached with a TTL so rotation is picked up, failing closed when Vault is unreachable; it refuses to start without `grants` or `allow`, and secret names can't contain path segments). Any other store (KMS, a cloud secret manager) is a plugin that provides `sdk.Secrets`.
    - `grants` limits each plugin to its own secrets. The caller identity is bound by the core: a plugin that looks up the `secrets` service gets a copy tied to its own name, so it can't ask as another plugin.
-   - Every resolved value is registered for redaction. `ctx.Logf`, `audit_jsonl`, `audit_http`, `trace_file` and `trace_otlp` replace it with `[REDACTED]` wherever it appears: tool arguments, results, model output, errors.
+   - Every resolved value is registered for redaction. `ctx.Logf`, `audit_file`, `audit_http`, `trace_file` and `trace_otlp` replace it with `[REDACTED]` wherever it appears: tool arguments, results, model output, errors.
    - Every lookup is audited as `secret.access` (plugin, secret name, granted or denied, never the value). Denials are always recorded. Granted reads are recorded once per plugin and secret every 10 minutes, and again right away when the value changes (a rotation), so plugins that resolve secrets per call don't flood the log.
    - In `WithRunIn` mode keys never enter the sandbox, because model calls are bridged to the host.
-5. **Audit and traces.** `audit_jsonl` writes a hash-chained JSONL log covering:
+5. **Audit and traces.** `audit_file` writes a hash-chained JSONL log covering:
    - plugin lifecycle, with the sha256 and permissions of each plugin, and store events (install, approve, enable, failed enable, rollback, quarantine, uninstall, with who did it)
    - secret access
    - every model call
@@ -35,17 +35,17 @@ The goal is secure defaults that stay simple. `eipagent.New()` with no options u
 
    Records carry standard fields so a control plane can join them: `run` (unique per run), `thread`, `user`, `plugin` (the plugin that owns the tool), `tool`, `call_id`, `step`, `provider`, `model`, `decision`, `decided_by`, `outcome`, `ms`, token counts.
 
-   Every record has a `writer`: `core`, `audit_jsonl`, or `plugin:<name>` for records a plugin submits through the `audit` service. The SDK sets it, so a plugin can add records but can't pass them off as the core's.
+   Every record has a `writer`: `core`, `audit_file`, or `plugin:<name>` for records a plugin submits through the `audit` service. The SDK sets it, so a plugin can add records but can't pass them off as the core's.
 
-   Use `audit.Verify` to detect edited or removed lines. With `key: secret://...` on `audit_jsonl`, each line also carries an HMAC of its hash, and `audit.VerifyKeyed` rejects a log rewritten by someone without the key. `audit_http` ships the same chained, redacted records off-host as NDJSON batches, HMAC-signed, with retries (set `path: "-"` on `audit_jsonl` to keep no local file). `trace_otlp` exports runs, model calls and tool calls as OpenTelemetry spans (OTLP/HTTP JSON, GenAI attribute names).
+   Use `audit.Verify` to detect edited or removed lines. With `key: secret://...` on `audit_file`, each line also carries an HMAC of its hash, and `audit.VerifyKeyed` rejects a log rewritten by someone without the key. `audit_http` ships the same chained, redacted records off-host as NDJSON batches, HMAC-signed, with retries (set `path: "-"` on `audit_file` to keep no local file). `trace_otlp` exports runs, model calls and tool calls as OpenTelemetry spans (OTLP/HTTP JSON, GenAI attribute names).
 6. **Containment.**
    - `sandbox_docker`: no network, all capabilities dropped, no-new-privileges, pids limit.
    - `sandbox_local`: confines file paths and symlinks to its workdir and passes only allow-listed env vars. It is *not* isolation.
-   - `tool_http_fetch`: requires a host allowlist and blocks private and loopback addresses at connect time (SSRF).
+   - `tool_fetch`: requires a host allowlist and blocks private and loopback addresses at connect time (SSRF).
    - `trigger_webhook`: requires HMAC signatures, refuses replays (and stale requests with `timestamp_header`), caps concurrent runs per route, and fences the payload off as untrusted data in its default prompt.
-   - `mcp_client`: an MCP server's `readOnlyHint` only counts as read-only for policy when the server is configured with `trust_annotations: true`.
-   - `mw_pii` hash strategy: keyed HMAC (`hash_key`), so tokens can't be reversed by hashing candidate emails or IPs.
-7. **Humans and reviewers.** `mw_hitl` pauses before chosen or risky tools and keeps the pause durable. `mw_auto_review` has a reviewer model approve, deny or escalate.
+   - `tool_mcp`: an MCP server's `readOnlyHint` only counts as read-only for policy when the server is configured with `trust_annotations: true`.
+   - `hook_pii` hash strategy: keyed HMAC (`hash_key`), so tokens can't be reversed by hashing candidate emails or IPs.
+7. **Humans and reviewers.** `hook_approval` pauses before chosen or risky tools and keeps the pause durable. `hook_review` has a reviewer model approve, deny or escalate.
 
 ## Not guaranteed
 

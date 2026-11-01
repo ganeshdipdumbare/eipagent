@@ -10,12 +10,12 @@ import (
 
 // Vetoes tool calls whose arguments contain a blocked word.
 // Config: words (default ["password"]).
-func Apply(ctx *sdk.Context) error {
-	words := ctx.ConfigStrings("words")
+func Apply(p *sdk.Plugin) error {
+	words := p.ConfigStrings("words")
 	if len(words) == 0 {
 		words = []string{"password"}
 	}
-	ctx.On(sdk.HookToolBefore, func(e *sdk.HookEvent) {
+	p.On(sdk.HookToolBefore, func(e *sdk.HookEvent) {
 		for _, v := range e.Args {
 			s, ok := v.(string)
 			if !ok {

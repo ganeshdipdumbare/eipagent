@@ -21,15 +21,15 @@ func main() {
 	})
 	a, err := eipagent.New(
 		eipagent.WithModel("mock:demo"),
-		eipagent.WithPlugin("llm_mock", map[string]any{"script": []any{
+		eipagent.WithPlugin("model_mock", map[string]any{"script": []any{
 			map[string]any{"tool": "refund", "args": map[string]any{"order": "A-17", "amount": 40}},
 			map[string]any{"text": "The refund is done."},
 		}}),
 		eipagent.WithTools(refund),
-		eipagent.WithPlugin("mw_hitl", map[string]any{"interrupt_on": map[string]any{
+		eipagent.WithPlugin("hook_approval", map[string]any{"interrupt_on": map[string]any{
 			"refund": map[string]any{"allowed": []any{"approve", "reject"}, "description": "Approve this refund?"},
 		}}),
-		eipagent.WithPlugin("checkpoint_file", map[string]any{"dir": ".eipagent/threads"}),
+		eipagent.WithPlugin("threads_file", map[string]any{"dir": ".eipagent/threads"}),
 	)
 	if err != nil {
 		log.Fatal(err)

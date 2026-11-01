@@ -8,6 +8,8 @@ import (
 	"os"
 	"regexp"
 	"sort"
+
+	"github.com/ganeshdipdumbare/eipagent/sdk"
 )
 
 // PluginSpec is one row of a profile.
@@ -17,6 +19,9 @@ type PluginSpec struct {
 	Config   map[string]any `json:"config,omitempty"`
 	Disabled bool           `json:"disabled,omitempty"`
 	Priority *int           `json:"priority,omitempty"` // default: profile order
+	// Auto marks a plugin the SDK loaded because something needed it
+	// (shown as "auto" in Status); never set it in a profile.
+	Auto bool `json:"-"`
 }
 
 func (s PluginSpec) Name() string {
@@ -83,38 +88,36 @@ type Policy struct {
 	Rules map[string]any `json:"rules,omitempty"`
 }
 
-func (p *Policy) allowed(src string) bool {
-	for _, d := range p.Deny {
-		if d == src {
-			return false
-		}
-	}
-	if len(p.Allow) == 0 {
-		return true
-	}
-	for _, a := range p.Allow {
-		if a == src {
-			return true
+// named reports whether list contains name under its current or
+// pre-v0.4 name (policies written before the renames keep working).
+func named(list []string, name string) bool {
+	for _, n := range sdk.PluginAliases(name) {
+		for _, l := range list {
+			if l == n {
+				return true
+			}
 		}
 	}
 	return false
 }
 
-func (p *Policy) locked(name string) bool {
-	for _, l := range p.Locked {
-		if l == name {
-			return true
-		}
+func (p *Policy) allowed(src string) bool {
+	if named(p.Deny, src) {
+		return false
 	}
-	return false
+	return len(p.Allow) == 0 || named(p.Allow, src)
 }
+
+func (p *Policy) locked(name string) bool { return named(p.Locked, name) }
 
 func (p *Policy) grant(name string, declared []string) []string {
 	if p.Grants == nil {
 		return declared
 	}
-	if g, ok := p.Grants[name]; ok {
-		return intersect(declared, g)
+	for _, n := range sdk.PluginAliases(name) {
+		if g, ok := p.Grants[n]; ok {
+			return intersect(declared, g)
+		}
 	}
 	return intersect(declared, p.Grants["*"])
 }

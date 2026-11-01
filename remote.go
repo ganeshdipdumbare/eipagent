@@ -61,7 +61,7 @@ func newRemote(cfg *config) (*Agent, error) {
 	// Model providers (and their keys) always stay on the host.
 	var boxSpecs []engine.PluginSpec
 	for _, s := range cfg.specs {
-		if strings.HasPrefix(s.Use, "llm_") {
+		if strings.HasPrefix(sdk.CanonicalPlugin(s.Use), "model_") {
 			hostCfg.specs = append(hostCfg.specs, s)
 		} else {
 			boxSpecs = append(boxSpecs, s)
@@ -188,8 +188,8 @@ func (r *remote) handle(noTools bool, hostTools []sdk.Tool) {
 		snap := r.host.eng.Root().Snapshot()
 		h := wireHello{}
 		for k := range snap.Services {
-			if len(k) > 4 && k[:4] == "llm/" {
-				h.Providers = append(h.Providers, k[4:])
+			if strings.HasPrefix(k, "model/") {
+				h.Providers = append(h.Providers, strings.TrimPrefix(k, "model/"))
 			}
 		}
 		if !noTools {
@@ -214,9 +214,9 @@ func (r *remote) handle(noTools bool, hostTools []sdk.Tool) {
 		}
 		base := func(c context.Context, req *sdk.ModelRequest) (*sdk.ModelResponse, error) {
 			prov, id := sdk.SplitModel(req.Model)
-			p, ok := snap.Services["llm/"+prov].(*sdk.Provider)
+			p, ok := snap.Services["model/"+prov].(*sdk.Provider)
 			if !ok {
-				return nil, fmt.Errorf("host has no provider llm/%s", prov)
+				return nil, fmt.Errorf("host has no provider model/%s", prov)
 			}
 			req.Provider, req.ModelID = prov, id
 			return p.Generate(c, req)

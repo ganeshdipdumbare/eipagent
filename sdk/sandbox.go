@@ -85,7 +85,7 @@ type SandboxProvider struct {
 }
 
 // ExecWorld is where shell and file tools act, provided as "exec":
-// the host workspace (exec_local) or a per-thread sandbox (exec_sandbox).
+// the host workspace (workspace_local) or a per-thread sandbox (workspace_sandbox).
 type ExecWorld struct {
 	Name string
 	For  func(ctx context.Context) (*Sandbox, error)

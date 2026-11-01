@@ -124,7 +124,7 @@ type ModelResponse struct {
 
 type ModelHandler func(ctx context.Context, req *ModelRequest) (*ModelResponse, error)
 
-// Provider is an LLM adapter, provided as the service "llm/<name>".
+// Provider is a model adapter, provided as the service "model/<name>".
 type Provider struct {
 	Name     string
 	Generate ModelHandler
@@ -224,7 +224,7 @@ type ThreadState struct {
 	Updated  int64 // unix millis
 }
 
-// Checkpointer persists thread state, provided as "checkpointer".
+// Checkpointer persists thread state, provided as "threads".
 // Save must fail with ErrVersionConflict unless the stored version equals
 // expected (0 = must not exist); on success st.Version is expected+1.
 type Checkpointer struct {
@@ -241,7 +241,7 @@ type StoreItem struct {
 	Updated   int64
 }
 
-// Store is long-term key/value memory, provided as "store".
+// Store is long-term key/value memory, provided as "memory".
 type Store struct {
 	Put    func(ctx context.Context, ns []string, key string, val map[string]any) error
 	Get    func(ctx context.Context, ns []string, key string) (*StoreItem, error) // nil, nil when absent

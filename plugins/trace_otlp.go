@@ -33,7 +33,7 @@ import (
 // max_queue (5000).
 var Permissions = []string{"net"}
 
-var Inject = []string{"?secrets"}
+var Requires = []string{"?secrets"}
 
 type span struct {
 	TraceID      string           `json:"traceId"`
@@ -72,13 +72,13 @@ func attr(k string, v any) map[string]any {
 	return map[string]any{"key": k, "value": map[string]any{"stringValue": sdk.Redact(fmt.Sprint(v))}}
 }
 
-func Apply(ctx *sdk.Context) error {
-	endpoint := strings.TrimRight(ctx.ConfigString("endpoint", "http://localhost:4318"), "/")
-	headers := ctx.ConfigMap("headers")
-	service := ctx.ConfigString("service_name", "eipagent")
-	content := ctx.ConfigBool("content", false)
-	flushEvery := time.Duration(ctx.ConfigInt("flush_seconds", 2)) * time.Second
-	maxQueue := ctx.ConfigInt("max_queue", 5000)
+func Apply(p *sdk.Plugin) error {
+	endpoint := strings.TrimRight(p.ConfigString("endpoint", "http://localhost:4318"), "/")
+	headers := p.ConfigMap("headers")
+	service := p.ConfigString("service_name", "eipagent")
+	content := p.ConfigBool("content", false)
+	flushEvery := time.Duration(p.ConfigInt("flush_seconds", 2)) * time.Second
+	maxQueue := p.ConfigInt("max_queue", 5000)
 	if maxQueue < 1 || flushEvery <= 0 {
 		return fmt.Errorf("trace_otlp: max_queue and flush_seconds must be positive")
 	}
@@ -119,7 +119,7 @@ func Apply(ctx *sdk.Context) error {
 		mu.Unlock()
 		if msg := why.Error(); msg != lastErr || lost > 0 {
 			lastErr = msg
-			ctx.Logf("trace_otlp: export failed, %d spans kept for retry, %d dropped (queue full): %v", len(batch)-lost, lost, why)
+			p.Logf("trace_otlp: export failed, %d spans kept for retry, %d dropped (queue full): %v", len(batch)-lost, lost, why)
 		}
 	}
 	flush := func() {
@@ -145,7 +145,7 @@ func Apply(ctx *sdk.Context) error {
 		req.Header.Set("Content-Type", "application/json")
 		for k, v := range headers {
 			s, _ := v.(string)
-			val, err := ctx.Secret(s)
+			val, err := p.Secret(s)
 			if err != nil {
 				requeue(batch, fmt.Errorf("header %s: %v", k, err))
 				return
@@ -165,7 +165,7 @@ func Apply(ctx *sdk.Context) error {
 		}
 		lastErr = ""
 	}
-	ctx.Effect(func() func() {
+	p.Effect(func() func() {
 		stop := make(chan struct{})
 		done := make(chan struct{})
 		go func() {
@@ -188,13 +188,13 @@ func Apply(ctx *sdk.Context) error {
 		}
 	})
 
-	ctx.OnAgentStart(func(c context.Context, st *sdk.RunState) error {
+	p.OnRunStart(func(c context.Context, st *sdk.RunState) error {
 		mu.Lock()
 		runs[st] = runSpan{trace: randHex(16), id: randHex(8), start: time.Now()}
 		mu.Unlock()
 		return nil
 	})
-	ctx.OnAgentEnd(func(c context.Context, st *sdk.RunState, res *sdk.RunResult) error {
+	p.OnRunEnd(func(c context.Context, st *sdk.RunState, res *sdk.RunResult) error {
 		mu.Lock()
 		r := runs[st]
 		delete(runs, st)
@@ -213,7 +213,7 @@ func Apply(ctx *sdk.Context) error {
 		push(span{TraceID: r.trace, SpanID: r.id, Name: "agent.run", Kind: 1, Start: nanos(r.start), End: nanos(time.Now()), Attributes: attrs})
 		return nil
 	})
-	ctx.WrapModel(func(c context.Context, req *sdk.ModelRequest, next sdk.ModelHandler) (*sdk.ModelResponse, error) {
+	p.WrapModel(func(c context.Context, req *sdk.ModelRequest, next sdk.ModelHandler) (*sdk.ModelResponse, error) {
 		t := time.Now()
 		resp, err := next(c, req)
 		r := runOf(req.Run)
@@ -236,7 +236,7 @@ func Apply(ctx *sdk.Context) error {
 		push(s)
 		return resp, err
 	})
-	ctx.WrapTool(func(c context.Context, req *sdk.ToolRequest, next sdk.ToolHandler) (*sdk.ToolResult, error) {
+	p.WrapTool(func(c context.Context, req *sdk.ToolRequest, next sdk.ToolHandler) (*sdk.ToolResult, error) {
 		t := time.Now()
 		res, err := next(c, req)
 		r := runOf(req.Run)

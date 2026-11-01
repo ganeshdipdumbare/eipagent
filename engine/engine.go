@@ -40,9 +40,10 @@ var trustKey = sdk.ClaimTrustKey()
 // lifecycle as interpreted ones.
 type Plugin struct {
 	Name        string
-	Inject      []string
+	Requires    []string // services needed first ("?x" optional, "x/*" any)
+	Inject      []string // Deprecated: the pre-v0.4 name of Requires (both are read)
 	Permissions []string // informational for compiled plugins
-	Apply       func(*sdk.Context) error
+	Apply       func(*sdk.Plugin) error
 }
 
 type record struct {
@@ -80,6 +81,7 @@ type Engine struct {
 	compiled map[string]Plugin
 	recs     map[string]*record
 	nextOrd  int
+	warned   map[string]bool // old plugin names already logged
 }
 
 func New(opts Options) *Engine {
@@ -94,7 +96,7 @@ func New(opts Options) *Engine {
 	if opts.Logger != nil {
 		root.SetLogger(opts.Logger)
 	}
-	return &Engine{opts: opts, pol: pol, root: root, compiled: map[string]Plugin{}, recs: map[string]*record{}}
+	return &Engine{opts: opts, pol: pol, root: root, compiled: map[string]Plugin{}, recs: map[string]*record{}, warned: map[string]bool{}}
 }
 
 func (e *Engine) Root() *sdk.Context { return e.root }
@@ -159,8 +161,16 @@ func (e *Engine) find(use string) (*source, error) {
 		}
 	}
 	if e.opts.Embedded != nil {
-		if b, err := fs.ReadFile(e.opts.Embedded, use+".go"); err == nil {
-			return &source{kind: "embedded", path: "embedded:" + use, src: b}, nil
+		name := use
+		if n := sdk.CanonicalPlugin(use); n != use {
+			name = n // a built-in renamed in v0.4
+			if !e.warned[use] {
+				e.warned[use] = true
+				e.logf("plugin %s is now called %s; the old name works until v1.0", use, n)
+			}
+		}
+		if b, err := fs.ReadFile(e.opts.Embedded, name+".go"); err == nil {
+			return &source{kind: "embedded", path: "embedded:" + name, src: b}, nil
 		}
 	}
 	return nil, fmt.Errorf("plugin %q not found", use)
@@ -194,7 +204,7 @@ func parseMeta(name string, src []byte) (*meta, error) {
 		for _, sp := range gd.Specs {
 			vs := sp.(*ast.ValueSpec)
 			for i, id := range vs.Names {
-				if i >= len(vs.Values) || (id.Name != "Inject" && id.Name != "Permissions") {
+				if i >= len(vs.Values) || (id.Name != "Requires" && id.Name != "Inject" && id.Name != "Permissions") {
 					continue
 				}
 				lit, ok := vs.Values[i].(*ast.CompositeLit)
@@ -210,8 +220,8 @@ func parseMeta(name string, src []byte) (*meta, error) {
 					s, _ := strconv.Unquote(bl.Value)
 					vals = append(vals, s)
 				}
-				if id.Name == "Inject" {
-					m.inject = vals
+				if id.Name == "Requires" || id.Name == "Inject" { // Inject: the pre-v0.4 name
+					m.inject = append(m.inject, vals...)
 				} else {
 					m.permissions = vals
 				}
@@ -240,7 +250,7 @@ func (e *Engine) compile(spec PluginSpec) (*record, error) {
 	}
 	rec := &record{spec: spec, name: name, config: cfg, state: Pending, locked: e.pol.locked(name)}
 	if p, ok := e.compiled[use]; ok {
-		rec.kind, rec.path, rec.inject, rec.perms, rec.apply = "compiled", "compiled:"+use, p.Inject, p.Permissions, p.Apply
+		rec.kind, rec.path, rec.inject, rec.perms, rec.apply = "compiled", "compiled:"+use, append(append([]string(nil), p.Requires...), p.Inject...), p.Permissions, p.Apply
 		return rec, nil
 	}
 	src, err := e.find(use)
@@ -534,6 +544,7 @@ func (e *Engine) LoadProfile(p *Profile) []error {
 
 type PluginStatus struct {
 	Name, Source, Kind, Hash string
+	Auto                     bool // loaded because something needed it
 	State                    State
 	Missing                  []string
 	Perms                    []string
@@ -546,7 +557,7 @@ func (e *Engine) Status() []PluginStatus {
 	defer e.mu.Unlock()
 	var out []PluginStatus
 	for _, r := range e.sortedLocked() {
-		st := PluginStatus{Name: r.name, Source: r.spec.Use, Kind: r.kind, Hash: r.hash, State: r.state, Perms: r.perms, Locked: r.locked, Err: r.err}
+		st := PluginStatus{Name: r.name, Source: r.spec.Use, Kind: r.kind, Hash: r.hash, State: r.state, Perms: r.perms, Locked: r.locked, Err: r.err, Auto: r.spec.Auto}
 		if r.state == Pending {
 			st.Missing = e.missing(r)
 		}
@@ -557,6 +568,9 @@ func (e *Engine) Status() []PluginStatus {
 
 func (s PluginStatus) String() string {
 	row := fmt.Sprintf("%-18s %-8s %-8s", s.Name, s.State, s.Kind)
+	if s.Auto {
+		row += " auto"
+	}
 	if s.Locked {
 		row += " locked"
 	}

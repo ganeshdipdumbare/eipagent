@@ -64,10 +64,10 @@ type EmailIn struct {
 // every read lands in the audit log as secret.access, and the value is
 // redacted from logs, traces and audit records.
 func Mailer(shop *Shop) eipagent.Plugin {
-	return eipagent.Plugin{Name: "mailer", Inject: []string{"secrets"}, Apply: func(ctx *eipagent.PluginContext) error {
-		ctx.AddTool(eipagent.Tool("send_email", "Email the customer",
+	return eipagent.Plugin{Name: "mailer", Requires: []string{"secrets"}, Apply: func(p *eipagent.PluginAPI) error {
+		p.AddTool(eipagent.Tool("send_email", "Email the customer",
 			func(c context.Context, in EmailIn) (string, error) {
-				if _, err := ctx.Secret("secret://MAIL_RELAY_TOKEN"); err != nil {
+				if _, err := p.Secret("secret://MAIL_RELAY_TOKEN"); err != nil {
 					return "", fmt.Errorf("mail relay: %w", err)
 				}
 				shop.Send(Email{To: in.To, Subject: in.Subject, Body: in.Body})

@@ -37,12 +37,12 @@ import (
 )
 
 // Looks up exchange rates.
-func Apply(ctx *sdk.Context) error {
-	store := ctx.Service("store")                  // not declared in Inject
-	key, _ := ctx.Secret("secret://RATES API KEY") // not a valid secret name
+func Apply(p *sdk.Plugin) error {
+	store := p.Service("memory")                 // not declared in Requires
+	key, _ := p.Secret("secret://RATES API KEY") // not a valid secret name
 	debug := os.Getenv("DEBUG")                    // needs the env permission
 	_, _, _ = store, key, debug
-	ctx.AddTool(sdk.Tool{Name: "fx_rate", Run: func(c context.Context, a map[string]any) (string, error) {
+	p.AddTool(sdk.Tool{Name: "fx_rate", Run: func(c context.Context, a map[string]any) (string, error) {
 		resp, err := http.Get("https://rates.example.com/latest") // needs net
 		if err != nil {
 			return "", err
@@ -69,11 +69,11 @@ import (
 // Looks up exchange rates.
 var Permissions = []string{"net"}
 
-var Inject = []string{"?secrets"}
+var Requires = []string{"?secrets"}
 
-func Apply(ctx *sdk.Context) error {
-	ctx.AddTool(sdk.Tool{Name: "fx_rate", Run: func(c context.Context, a map[string]any) (string, error) {
-		key, err := ctx.Secret("secret://RATES_API_KEY")
+func Apply(p *sdk.Plugin) error {
+	p.AddTool(sdk.Tool{Name: "fx_rate", Run: func(c context.Context, a map[string]any) (string, error) {
+		key, err := p.Secret("secret://RATES_API_KEY")
 		if err != nil {
 			return "", err
 		}
@@ -93,7 +93,7 @@ func Apply(ctx *sdk.Context) error {
 
 func main() {
 	manifest := &pluginpkg.Manifest{Schema: 1, Name: "fx_rates", Version: "1.0.0", Description: "Exchange rates",
-		Permissions: []string{"net"}, Inject: []string{"?secrets"}, Secrets: []string{"RATES_API_KEY"},
+		Permissions: []string{"net"}, Requires: []string{"?secrets"}, Secrets: []string{"RATES_API_KEY"},
 		Tools: []string{"fx_rate"}, EIPAgent: ">=0.2.0"}
 
 	fmt.Println("1. The linter on a plugin with mistakes")

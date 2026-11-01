@@ -1,0 +1,7 @@
+{
+  "schema": 1,
+  "name": "hello_hook",
+  "version": "0.1.0",
+  "description": "hello_hook wraps every model and tool call: it times them and blocks tools listed in config.",
+  "eipagent": ">=0.3.0"
+}

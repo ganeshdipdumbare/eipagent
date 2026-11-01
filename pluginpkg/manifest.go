@@ -30,8 +30,8 @@ import (
 // ManifestFile is the manifest's file name in a source dir or package.
 const ManifestFile = "plugin.json"
 
-// Manifest describes a plugin package. Permissions and Inject must match
-// the `var Permissions` / `var Inject` in the source; the linter checks
+// Manifest describes a plugin package. Permissions and Requires must match
+// the `var Permissions` / `var Requires` in the source; the linter checks
 // that the rest matches what the code does.
 type Manifest struct {
 	Schema      int      `json:"schema"`                // manifest format, 1
@@ -39,7 +39,8 @@ type Manifest struct {
 	Version     string   `json:"version"`               // semver, e.g. 0.1.0
 	Description string   `json:"description"`           //
 	Permissions []string `json:"permissions,omitempty"` // net, exec, fs:read, fs:write, env, db
-	Inject      []string `json:"inject,omitempty"`      // required services ("?x" optional, "x/*" any)
+	Requires    []string `json:"requires,omitempty"`    // services needed first ("?x" optional, "x/*" any)
+	Inject      []string `json:"inject,omitempty"`      // Deprecated: pre-v0.4 name of requires (still read)
 	Provides    []string `json:"provides,omitempty"`    // services it registers
 	Secrets     []string `json:"secrets,omitempty"`     // secret names it resolves (secret://NAME)
 	Tools       []string `json:"tools,omitempty"`       // tools it exports
@@ -75,6 +76,11 @@ func ParseManifest(b []byte) (*Manifest, error) {
 		return nil, fmt.Errorf("plugin.json: %w", err)
 	}
 	return &m, nil
+}
+
+// Needs is what the plugin requires (requires, plus the pre-v0.4 inject).
+func (m *Manifest) Needs() []string {
+	return append(append([]string(nil), m.Requires...), m.Inject...)
 }
 
 // Encode returns the canonical manifest bytes (what gets signed).

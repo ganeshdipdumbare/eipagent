@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ganeshdipdumbare/eipagent/engine"
 )
 
 func TestTemplatesLintClean(t *testing.T) {
@@ -100,7 +102,7 @@ func TestLintRules(t *testing.T) {
 		{"bad version", goodSrc, func(m *Manifest) { m.Version = "v1" }, "manifest"},
 		{"incompatible", goodSrc, func(m *Manifest) { m.EIPAgent = ">=99.0.0" }, "compat"},
 		{"tool not in manifest", goodSrc, func(m *Manifest) { m.Tools = nil }, "tools"},
-		{"inject mismatch", goodSrc, func(m *Manifest) { m.Inject = nil }, "inject-mismatch"},
+		{"requires mismatch", goodSrc, func(m *Manifest) { m.Inject = nil }, "requires-mismatch"},
 		{"no Apply", strings.Replace(goodSrc, "func Apply", "func apply", 1), nil, "source"},
 	}
 	for _, c := range cases {
@@ -425,5 +427,48 @@ func TestGetReturnsACopy(t *testing.T) {
 	p.Versions["1.0.0"].State = StateApproved // try to skip approval
 	if err := st.Enable("greet", "1.0.0"); !errors.Is(err, ErrNotApproved) {
 		t.Fatalf("state changed through a returned copy: %v", err)
+	}
+}
+
+func TestFixRewritesOldNames(t *testing.T) {
+	old := `//go:build ignore
+
+package plugin
+
+import (
+	"context"
+
+	"eipagent/sdk"
+)
+
+// Uses "store" in a comment, which stays.
+var Inject = []string{"?store", "llm/*"}
+
+func Apply(ctx *sdk.Context) error {
+	ctx.OnAgentStart(func(c context.Context, st *sdk.RunState) error { return nil })
+	ctx.OnDispose(func() {})
+	_ = ctx.Service("store")
+	label := "store" // not a service name: stays
+	_ = label
+	return nil
+}
+`
+	out, notes, err := Fix([]byte(old))
+	must(t, err)
+	s := string(out)
+	for _, want := range []string{`var Requires = []string{"?memory", "model/*"}`, `func Apply(ctx *sdk.Plugin) error`, `ctx.OnRunStart(`, `ctx.OnUnload(`, `ctx.Service("memory")`, `label := "store"`, `Uses "store" in a comment`} {
+		if !strings.Contains(s, want) {
+			t.Errorf("missing %q in:\n%s", want, s)
+		}
+	}
+	if len(notes) < 5 {
+		t.Fatalf("notes: %v", notes)
+	}
+	if err := engine.Check("p", out); err != nil {
+		t.Fatalf("fixed source doesn't compile: %v", err)
+	}
+	fa, _ := Analyze("p.go", out)
+	if got := Summary("p", fa); !strings.Contains(got, "runs at run start") || !strings.Contains(got, "requires ?memory, model/*") {
+		t.Fatalf("summary: %s", got)
 	}
 }

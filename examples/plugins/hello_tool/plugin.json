@@ -2,9 +2,9 @@
   "schema": 1,
   "name": "hello_tool",
   "version": "0.1.0",
-  "description": "hello_tool: a tool the model can call",
+  "description": "hello_tool adds a tool the model can call.",
   "tools": [
     "hello_tool"
   ],
-  "eipagent": ">=0.2.0"
+  "eipagent": ">=0.3.0"
 }

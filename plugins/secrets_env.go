@@ -22,17 +22,23 @@ import (
 //	        the names granted to it (the caller is set by the core).
 var Permissions = []string{"env", "env:secrets"}
 
-func Apply(ctx *sdk.Context) error {
-	allow := ctx.ConfigStrings("allow")
+func Apply(p *sdk.Plugin) error {
+	allow := p.ConfigStrings("allow")
 	if len(allow) == 0 {
 		allow = []string{"*_API_KEY", "*_TOKEN"}
 	}
-	grants := ctx.ConfigMap("grants")
-	return ctx.Provide("secrets", &sdk.Secrets{
+	grants := p.ConfigMap("grants")
+	return p.Provide("secrets", &sdk.Secrets{
 		Get: func(c context.Context, caller, name string) (string, error) {
 			if grants != nil {
 				granted := false
-				list, _ := grants[caller].([]any)
+				var list []any
+				for _, n := range sdk.PluginAliases(caller) { // grants may use pre-v0.4 plugin names
+					if l, ok := grants[n].([]any); ok {
+						list = l
+						break
+					}
+				}
 				for _, g := range list {
 					if g == name {
 						granted = true

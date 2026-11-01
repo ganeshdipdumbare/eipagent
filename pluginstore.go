@@ -26,9 +26,13 @@ import (
 //	st.Enable("weather", "")        // ACTIVE in the running agent
 func WithPluginStore(st *pluginpkg.Store) Option { return func(c *config) { c.store = st } }
 
-// builtinNames lists the embedded plugins (a store can't shadow them).
+// builtinNames lists the embedded plugins, under their current and
+// pre-v0.4 names (a store can't shadow either).
 func builtinNames() []string {
 	var out []string
+	for old := range sdk.PluginRenames {
+		out = append(out, old)
+	}
 	ents, _ := fs.ReadDir(plugins.FS, ".")
 	for _, e := range ents {
 		if n, ok := strings.CutSuffix(e.Name(), ".go"); ok {

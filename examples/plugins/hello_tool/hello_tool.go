@@ -13,9 +13,9 @@ import (
 // hello_tool adds a tool the model can call.
 //
 // Config: greeting ("Hello").
-func Apply(ctx *sdk.Context) error {
-	greeting := ctx.ConfigString("greeting", "Hello")
-	ctx.AddTool(sdk.Tool{
+func Apply(p *sdk.Plugin) error {
+	greeting := p.ConfigString("greeting", "Hello")
+	p.AddTool(sdk.Tool{
 		Name:        "hello_tool",
 		Description: "Greets someone by name.",
 		Schema:      sdk.Object(map[string]any{"name": sdk.Str("who to greet")}, "name"),

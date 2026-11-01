@@ -1,6 +1,14 @@
 # Writing plugins
 
-A plugin is a single Go file, interpreted by [Yaegi](https://github.com/traefik/yaegi):
+The short version. The [docs' Plugins section](https://eipagent-docs.vercel.app/#plugins) has a page per kind, each covering what it is, when to use it, every built-in with its config, how to write your own and the gotchas.
+
+## Start from an option, write a plugin when you need one
+
+Most setups are options (`WithModel`, `WithApprovals`, `WithPersistence`, `WithSandbox`, `WithAudit`, `WithTracing`, `WithMCP`), and plumbing loads itself. The goal-first table [What to use when](https://eipagent-docs.vercel.app/#plugins-choose) maps every goal to its option and plugins.
+
+## A plugin is one function
+
+A plugin is a single Go file, interpreted by [Yaegi](https://github.com/traefik/yaegi), with `func Apply(p *sdk.Plugin) error`. Inside it, call what you need. A plugin is not one "kind": the same plugin can add tools, wrap calls and provide a service.
 
 ```go
 //go:build ignore
@@ -13,34 +21,40 @@ import (
 	"eipagent/sdk"
 )
 
-var Inject = []string{"store"}       // services required before Apply runs ("?x" optional, "llm/*" any)
-var Permissions = []string{"net"}    // capabilities: net, exec, fs:read, fs:write, env, env:secrets, db
+var Requires = []string{"memory"}  // services needed before Apply runs ("?x" optional, "model/*" any one)
+var Permissions = []string{"net"}  // capabilities: net, exec, fs:read, fs:write, env, env:secrets, db
 
-func Apply(ctx *sdk.Context) error {
-	store := ctx.Service("store").(*sdk.Store)
-	ctx.AddTool(sdk.Tool{Name: "...", Schema: sdk.Object(...), Run: func(c context.Context, args map[string]any) (string, error) { ... }})
-	ctx.WrapTool(func(c context.Context, req *sdk.ToolRequest, next sdk.ToolHandler) (*sdk.ToolResult, error) { return next(c, req) })
-	ctx.Effect(func() func() { /* start */ return func() { /* cleanup on unload */ } })
-	return ctx.Provide("my_service", &MyService{...})
+func Apply(p *sdk.Plugin) error {
+	mem := p.Service("memory").(*sdk.Store)
+	p.AddTool(sdk.Tool{Name: "...", Schema: sdk.Object(...), Run: func(c context.Context, args map[string]any) (string, error) { ... }})
+	p.WrapTool(func(c context.Context, req *sdk.ToolRequest, next sdk.ToolHandler) (*sdk.ToolResult, error) { return next(c, req) })
+	p.Effect(func() func() { /* start */ return func() { /* stop on unload */ } })
+	return p.Provide("my_service", &MyService{...})
 }
 ```
 
-Lifecycle: `PENDING` (waiting on `Inject`) → `LOADING` → `ACTIVE`, or `FAILED` (anything it registered is rolled back). When a dependency disappears, its dependents go back to `PENDING`. When it returns, they start again.
+Lifecycle: `PENDING` (waiting on `Requires`) → `LOADING` → `ACTIVE`, or `FAILED` (anything it registered is rolled back). When a dependency disappears, its dependents go back to `PENDING`, and they start again when it returns.
 
-## What you can register
+`eip plugin init NAME` asks what the plugin should do and writes a working one. `eip plugin validate` lints it and says what it does, e.g. `weather: adds 1 tool (weather) · requires ?secrets · permissions net`.
 
-| API | Purpose |
-|---|---|
-| `Provide(name, svc)` / `Service(name)` | Services. Names are unique, so unload a plugin to swap it |
-| `AddTool`, `AddSkill` | Tools for the model, and system-prompt fragments |
-| `WrapModel`, `WrapTool` | Onion middleware (`wrap_model_call` / `wrap_tool_call`) |
-| `OnStepPrepare`, `OnModelAfter` | Rewrite the next request; inspect the reply or `Jump` |
-| `OnAgentStart`, `OnAgentEnd`, `OnEvent` | Run lifecycle, and observing streamed events |
-| `Effect`, `OnDispose` | Goroutines, connections, processes, all cleaned up on unload |
-| `Secret("secret://NAME")` | Secrets through the `secrets` service (grants are per plugin) |
-| `SetPriority(n)` | Higher runs outer/first. The reserved band is only for locked plugins |
+## By goal
 
-Well-known services: `loop`, `llm/<name>`, `checkpointer`, `store`, `secrets`, `audit`, `approver`, `agent`, `exec`, `sandbox/<name>`, `db`.
+| You want… | Call | Kind page |
+|---|---|---|
+| the model to be able to do something | `AddTool` | [Tools](https://eipagent-docs.vercel.app/#kind-tools) |
+| something to happen around every model or tool call | `WrapModel`, `WrapTool`, `BeforeStep`, `AfterModel`, `OnRunStart`, `OnRunEnd`, `OnEvent` | [Hooks](https://eipagent-docs.vercel.app/#kind-hooks) |
+| connect a model API | `Provide("model/<name>", &sdk.Provider{...})` | [Model providers](https://eipagent-docs.vercel.app/#kind-models) |
+| save conversations / long-term memory | `Provide("threads", &sdk.Checkpointer{...})` / `Provide("memory", &sdk.Store{...})` | [Threads and memory](https://eipagent-docs.vercel.app/#kind-threads-memory) |
+| run code somewhere isolated | `Provide("sandbox/<name>", &sdk.SandboxProvider{...})` | [Sandboxes and workspaces](https://eipagent-docs.vercel.app/#kind-sandboxes) |
+| start runs from outside (schedule, webhook, queue) | `Effect` + `Service("agent")` | [Triggers](https://eipagent-docs.vercel.app/#kind-triggers) |
+| export audit records or traces | `Provide("audit/sink/<name>", &sdk.AuditSink{...})`, or hooks | [Telemetry and audit](https://eipagent-docs.vercel.app/#kind-telemetry) |
+| resolve `secret://NAME` from another store | `Provide("secrets", &sdk.Secrets{...})` | [Secrets](https://eipagent-docs.vercel.app/#kind-secrets) |
+
+Other calls: `Secret("secret://NAME")` (a granted secret), `Config*` (the plugin's config, with defaults), `SetPriority(n)` (higher wraps further out; the reserved band is for locked plugins), `Logf` (redacted logging), `AddSkill` (a system-prompt fragment), `OnUnload` (cleanup).
+
+Services: `loop`, `model/<name>`, `threads`, `memory`, `secrets`, `audit`, `approver`, `agent`, `workspace`, `sandbox/<name>`, `db`.
+
+Renamed in v0.4, still accepted until v1.0: `sdk.Context` → `sdk.Plugin`, `var Inject` → `var Requires`, `OnAgentStart`/`OnAgentEnd`/`OnStepPrepare`/`OnModelAfter`/`OnDispose` → `OnRunStart`/`OnRunEnd`/`BeforeStep`/`AfterModel`/`OnUnload`, services `llm/*` → `model/*`, `checkpointer` → `threads`, `store` → `memory`, `exec` → `workspace`. `eip plugin fix` rewrites a plugin for you.
 
 ## Permissions
 
@@ -63,7 +77,7 @@ For plugins that travel (from a team, a vendor, or a registry), the SDK has a pa
 ### 1. Scaffold
 
 ```bash
-eip plugin init -template tool weather     # also: middleware, provider, store, mcp, sandbox, webhook
+eip plugin init weather                    # asks what it should do; -template tool|hook|model|memory|sandbox|trigger|mcp skips the question
 ```
 
 This writes `weather/weather.go`, `weather/plugin.json` and a README. The same templates, already generated, are in [`examples/plugins`](examples/plugins). A plugin dir holds exactly one plugin, and its `.go` file is named after it.
@@ -77,7 +91,7 @@ This writes `weather/weather.go`, `weather/plugin.json` and a README. The same t
   "version": "0.1.0",
   "description": "Current weather for a city",
   "permissions": ["net"],
-  "inject": ["?secrets"],
+  "requires": ["?secrets"],
   "provides": [],
   "secrets": ["WEATHER_API_KEY"],
   "tools": ["weather"],
@@ -85,7 +99,7 @@ This writes `weather/weather.go`, `weather/plugin.json` and a README. The same t
 }
 ```
 
-`permissions` and `inject` must equal the source's `var Permissions` / `var Inject`. `secrets` lists secret names, never values. `eipagent` is a version constraint checked against `sdk.Version` (`>=`, `<`, `^`, `~`, comma-separated). `build` adds `files`, the sha256 of every file.
+`permissions` and `requires` must equal the source's `var Permissions` / `var Requires`. `secrets` lists secret names, never values. `eipagent` is a version constraint checked against `sdk.Version` (`>=`, `<`, `^`, `~`, comma-separated). `build` adds `files`, the sha256 of every file.
 
 ### 3. Validate
 
@@ -95,11 +109,12 @@ eip plugin validate weather        # DRAFT -> VALIDATED when there are no errors
 
 | Rule | Error when |
 |---|---|
-| `source` | the package isn't `plugin`, there's no `func Apply(*sdk.Context) error`, or there are extra `.go` files |
+| `source` | the package isn't `plugin`, there's no `func Apply(*sdk.Plugin) error`, or there are extra `.go` files |
 | `forbidden-import` | an import or `os.X` symbol is never available to plugins (`unsafe`, `syscall`, `os.Exit` ...) |
 | `permission-missing` | an import or `os.X` needs a permission the plugin doesn't declare (warning when a declared one is unused) |
-| `permission-mismatch`, `inject-mismatch` | the manifest and the source disagree |
-| `undeclared-service` | `Service("x")` is used but `x` isn't in `Inject` or provided by the plugin |
+| `permission-mismatch`, `requires-mismatch` | the manifest and the source disagree |
+| `old-name` (warning) | the code uses a name renamed in v0.4; `eip plugin fix` rewrites it |
+| `undeclared-service` | `Service("x")` is used but `x` isn't in `Requires` or provided by the plugin |
 | `secret-ref` | a `secret://` literal is malformed or isn't listed in `secrets` |
 | `tools`, `provides` | a literal tool or service isn't listed in the manifest |
 | `manifest`, `compat` | the manifest is invalid, or the SDK version doesn't satisfy `eipagent` |
@@ -170,4 +185,4 @@ Resolve secrets when you use them (`ctx.Secret("secret://NAME")` inside the requ
 
 ## Compiled plugins
 
-The same lifecycle applies to native Go: `eipagent.WithCompiledPlugin(eipagent.Plugin{Name, Inject, Apply})`. Use compiled plugins for code that needs third-party packages, or for hot paths.
+The same lifecycle applies to native Go: `eipagent.WithCompiledPlugin(eipagent.Plugin{Name, Requires, Apply})`, where `Apply` is `func(p *eipagent.PluginAPI) error`. Use compiled plugins for code that needs third-party packages, or for hot paths.

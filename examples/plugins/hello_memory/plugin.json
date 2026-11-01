@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "name": "hello_memory",
+  "version": "0.1.0",
+  "description": "hello_memory is long-term memory, provided as \"memory\". This one keeps items in memory; replace the map with your database.",
+  "provides": [
+    "memory"
+  ],
+  "eipagent": ">=0.3.0"
+}

@@ -10,22 +10,22 @@ import (
 	"eipagent/sdk"
 )
 
-// A bash tool that runs in the "exec" world (host workspace or sandbox).
+// A bash tool that runs in the "workspace" world (host workspace or sandbox).
 //
 // Config: timeout_seconds (120), max_output (30000 chars).
-var Inject = []string{"exec"}
+var Requires = []string{"workspace"}
 
-func Apply(ctx *sdk.Context) error {
-	world := ctx.Service("exec").(*sdk.ExecWorld)
-	timeout := ctx.ConfigInt("timeout_seconds", 120)
-	max := ctx.ConfigInt("max_output", 30000)
+func Apply(p *sdk.Plugin) error {
+	world := p.Service("workspace").(*sdk.ExecWorld)
+	timeout := p.ConfigInt("timeout_seconds", 120)
+	max := p.ConfigInt("max_output", 30000)
 	clip := func(s string) string {
 		if len(s) > max {
 			return s[:max/2] + fmt.Sprintf("\n... [%d chars omitted] ...\n", len(s)-max) + s[len(s)-max/2:]
 		}
 		return s
 	}
-	ctx.AddTool(sdk.Tool{
+	p.AddTool(sdk.Tool{
 		Name:        "bash",
 		Description: "Run a shell command in the workspace (" + world.Name + "). Returns stdout, stderr and the exit code.",
 		Schema: sdk.Object(map[string]any{

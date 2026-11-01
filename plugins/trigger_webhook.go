@@ -47,18 +47,18 @@ import (
 //
 // {body} is the raw JSON; {a.b} is a field of it. Substituted values are
 // inserted as they are and never expanded again.
-var Inject = []string{"agent"}
+var Requires = []string{"agent"}
 
 var Permissions = []string{"net"}
 
-func Apply(ctx *sdk.Context) error {
-	agent := ctx.Service("agent").(*sdk.AgentService)
-	addr := ctx.ConfigString("addr", "127.0.0.1:8787")
+func Apply(p *sdk.Plugin) error {
+	agent := p.Service("agent").(*sdk.AgentService)
+	addr := p.ConfigString("addr", "127.0.0.1:8787")
 	mux := http.NewServeMux()
 	runCtx, cancelRuns := context.WithCancel(context.Background())
 	g := &gate{}
-	for _, r := range ctx.ConfigList("routes") {
-		if err := route(ctx, mux, agent, r, runCtx, g); err != nil {
+	for _, r := range p.ConfigList("routes") {
+		if err := route(p, mux, agent, r, runCtx, g); err != nil {
 			cancelRuns()
 			return err
 		}
@@ -69,8 +69,8 @@ func Apply(ctx *sdk.Context) error {
 	}
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second}
 	go srv.Serve(ln)
-	ctx.Logf("listening on %s", ln.Addr())
-	ctx.OnDispose(func() {
+	p.Logf("listening on %s", ln.Addr())
+	p.OnUnload(func() {
 		c, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		g.close() // no new runs from here on
@@ -105,7 +105,7 @@ func (g *gate) close() {
 	g.mu.Unlock()
 }
 
-func route(ctx *sdk.Context, mux *http.ServeMux, agent *sdk.AgentService, r map[string]any, runCtx context.Context, g *gate) error {
+func route(p *sdk.Plugin, mux *http.ServeMux, agent *sdk.AgentService, r map[string]any, runCtx context.Context, g *gate) error {
 	s := func(k string) string { v, _ := r[k].(string); return v }
 	n := func(k string, def int) int { // no type switch on any (Yaegi)
 		if v, ok := r[k].(float64); ok {
@@ -117,7 +117,7 @@ func route(ctx *sdk.Context, mux *http.ServeMux, agent *sdk.AgentService, r map[
 		return def
 	}
 	path := s("path")
-	secret, err := ctx.Secret(s("secret"))
+	secret, err := p.Secret(s("secret"))
 	if err != nil || secret == "" {
 		return fmt.Errorf("trigger_webhook %s: a secret is required: %v", path, err)
 	}
@@ -182,12 +182,12 @@ func route(ctx *sdk.Context, mux *http.ServeMux, agent *sdk.AgentService, r map[
 		want := "sha256=" + hex.EncodeToString(mac.Sum(nil))
 		got := req.Header.Get("X-Signature-256")
 		if !hmac.Equal([]byte(want), []byte(got)) {
-			ctx.Logf("rejected unsigned request to %s from %s", path, req.RemoteAddr)
+			p.Logf("rejected unsigned request to %s from %s", path, req.RemoteAddr)
 			http.Error(w, "bad signature", 401)
 			return
 		}
 		if replayed(got) {
-			ctx.Logf("rejected replayed request to %s from %s", path, req.RemoteAddr)
+			p.Logf("rejected replayed request to %s from %s", path, req.RemoteAddr)
 			http.Error(w, "replayed request", 409)
 			return
 		}
@@ -213,10 +213,10 @@ func route(ctx *sdk.Context, mux *http.ServeMux, agent *sdk.AgentService, r map[
 			defer func() { <-slots }()
 			res, err := agent.Run(runCtx, thread, user, prompt)
 			if err != nil {
-				ctx.Logf("webhook %s run failed: %v", path, err)
+				p.Logf("webhook %s run failed: %v", path, err)
 				return
 			}
-			ctx.Logf("webhook %s -> thread %s: %.80s", path, thread, res.Text)
+			p.Logf("webhook %s -> thread %s: %.80s", path, thread, res.Text)
 		}()
 	})
 	return nil

@@ -5,18 +5,18 @@
   "deny": ["creator", "sandbox_local"],
   "grants": {
     "*": [],
-    "llm_anthropic": ["net"], "llm_openai": ["net"], "tool_http_fetch": ["net"],
-    "audit_jsonl": ["fs:read", "fs:write"],
+    "model_anthropic": ["net"], "model_openai": ["net"], "tool_fetch": ["net"],
+    "audit_file": ["fs:read", "fs:write"],
     "secrets_env": ["env", "env:secrets"],
     "sandbox_docker": ["exec"],
-    "db_sql": ["db"], "checkpoint_sql": ["db"], "store_sql": ["db"]
+    "db_sql": ["db"], "threads_sql": ["db"], "memory_sql": ["db"]
   },
-  "locked": ["policy", "audit_jsonl", "secrets_env"],
+  "locked": ["policy", "audit_file", "secrets_env"],
   "require": [
-    { "use": "audit_jsonl", "config": { "path": "/var/log/eipagent/audit.jsonl" } },
+    { "use": "audit_file", "config": { "path": "/var/log/eipagent/audit.jsonl" } },
     { "use": "secrets_env", "config": {
         "allow": ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "EIP_DATABASE_URL"],
-        "grants": { "llm_openai": ["OPENAI_API_KEY"], "llm_anthropic": ["ANTHROPIC_API_KEY"], "db_sql": ["EIP_DATABASE_URL"] } } },
+        "grants": { "model_openai": ["OPENAI_API_KEY"], "model_anthropic": ["ANTHROPIC_API_KEY"], "db_sql": ["EIP_DATABASE_URL"] } } },
     { "use": "policy" }
   ],
   "rules": {

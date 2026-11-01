@@ -73,13 +73,13 @@ func newAgent(opts ...eipagent.Option) *eipagent.Agent {
 		}),
 	}
 	if *verbose {
-		base = append(base, eipagent.WithPlugins("mw_logger"))
+		base = append(base, eipagent.WithPlugins("hook_log"))
 	}
 	if host := os.Getenv("OLLAMA_HOST"); host != "" {
 		if !strings.HasPrefix(host, "http") {
 			host = "http://" + host
 		}
-		base = append(base, eipagent.WithPluginSpec(eipagent.PluginSpec{Use: "llm_openai", As: "llm_ollama",
+		base = append(base, eipagent.WithPluginSpec(eipagent.PluginSpec{Use: "model_openai", As: "llm_ollama",
 			Config: map[string]any{"name": "ollama", "base_url": strings.TrimRight(host, "/") + "/v1", "api_key": ""}}))
 	}
 	a, err := eipagent.New(append(base, opts...)...)
@@ -169,8 +169,8 @@ import (
 	"eipagent/sdk"
 )
 
-func Apply(ctx *sdk.Context) error {
-	ctx.AddTool(sdk.Tool{
+func Apply(p *sdk.Plugin) error {
+	p.AddTool(sdk.Tool{
 		Name:        "office_hours",
 		Description: "Returns the office opening hours. Always use this for questions about office hours.",
 		Schema:      sdk.Object(map[string]any{}),
@@ -267,7 +267,7 @@ func object() {
 
 func thread() {
 	dir := filepath.Join(os.TempDir(), "eipagent-ollama-threads")
-	a := newAgent(eipagent.WithPlugin("checkpoint_file", map[string]any{"dir": dir}))
+	a := newAgent(eipagent.WithPlugin("threads_file", map[string]any{"dir": dir}))
 	defer a.Close()
 	th := a.Thread(fmt.Sprintf("demo-%d", time.Now().Unix()))
 	for _, q := range []string{"Hi! My name is Ganesh and I live in Pune.", "Where do I live, and what's my name?"} {
@@ -292,7 +292,7 @@ func approve() {
 	in := bufio.NewReader(os.Stdin)
 	a := newAgent(
 		eipagent.WithTools(sendEmail),
-		eipagent.WithPlugin("mw_hitl", map[string]any{"interrupt_on": map[string]any{"send_email": true}}),
+		eipagent.WithPlugin("hook_approval", map[string]any{"interrupt_on": map[string]any{"send_email": true}}),
 		eipagent.WithApprover(func(ctx context.Context, it eipagent.Interrupt) (*eipagent.Decision, error) {
 			fmt.Printf("  ⚠ the agent wants to call %s %v\n  approve? [y/N] ", it.ToolCall.Name, it.ToolCall.Args)
 			ans, _ := in.ReadString('\n')
@@ -316,7 +316,7 @@ func shell() {
 	root := filepath.Join(os.TempDir(), "eipagent-ollama-boxes")
 	a := newAgent(
 		eipagent.WithPlugin("sandbox_local", map[string]any{"root": root}), // swap for sandbox_docker to isolate
-		eipagent.WithPlugin("exec_sandbox", map[string]any{"provider": "local"}),
+		eipagent.WithPlugin("workspace_sandbox", map[string]any{"provider": "local"}),
 		eipagent.WithPlugins("tool_shell", "tool_fs"),
 	)
 	defer a.Close() // deletes the workspace

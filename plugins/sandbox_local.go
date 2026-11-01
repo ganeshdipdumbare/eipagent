@@ -31,13 +31,13 @@ import (
 // names are never passed without the env:secrets permission).
 var Permissions = []string{"exec", "fs:read", "fs:write", "env"}
 
-func Apply(ctx *sdk.Context) error {
-	root := ctx.ConfigString("root", ".eipagent/sandboxes")
-	fixed := ctx.ConfigString("workdir", "")
+func Apply(p *sdk.Plugin) error {
+	root := p.ConfigString("root", ".eipagent/sandboxes")
+	fixed := p.ConfigString("workdir", "")
 	if fixed != "" {
-		ctx.Logf("sandbox_local: every sandbox shares %s (fixed workdir); threads can see each other's files", fixed)
+		p.Logf("sandbox_local: every sandbox shares %s (fixed workdir); threads can see each other's files", fixed)
 	}
-	allow := ctx.ConfigStrings("env_allow")
+	allow := p.ConfigStrings("env_allow")
 	if len(allow) == 0 {
 		allow = []string{"PATH", "HOME", "LANG", "TMPDIR"}
 	}
@@ -48,12 +48,12 @@ func Apply(ctx *sdk.Context) error {
 		}
 	}
 	open := func(id, dir string) *sdk.Sandbox { return box(id, dir, baseEnv) }
-	return ctx.Provide("sandbox/local", &sdk.SandboxProvider{
+	return p.Provide("sandbox/local", &sdk.SandboxProvider{
 		Name:      "local",
 		Isolation: "none",
 		Create: func(c context.Context, spec sdk.SandboxSpec) (*sdk.Sandbox, error) {
 			if spec.Network.Mode == "none" || spec.Network.Mode == "allowlist" {
-				ctx.Logf("warning: sandbox/local cannot restrict network (requested %q)", spec.Network.Mode)
+				p.Logf("warning: sandbox/local cannot restrict network (requested %q)", spec.Network.Mode)
 			}
 			dir := fixed
 			id := "local"
@@ -100,13 +100,13 @@ func validBoxID(id string) bool {
 
 func box(id, dir string, baseEnv []string) *sdk.Sandbox {
 	abs, _ := filepath.Abs(dir)
-	resolve := func(p string) (string, error) {
-		if !filepath.IsAbs(p) {
-			p = filepath.Join(abs, p)
+	resolve := func(fpath string) (string, error) {
+		if !filepath.IsAbs(fpath) {
+			fpath = filepath.Join(abs, fpath)
 		}
-		p = filepath.Clean(p)
-		if p != abs && !strings.HasPrefix(p, abs+string(filepath.Separator)) {
-			return "", fmt.Errorf("path %s is outside the sandbox", p)
+		fpath = filepath.Clean(fpath)
+		if fpath != abs && !strings.HasPrefix(fpath, abs+string(filepath.Separator)) {
+			return "", fmt.Errorf("path %s is outside the sandbox", fpath)
 		}
 		// Refuse symlinks that point outside. A path that doesn't exist yet
 		// (a file about to be written) is checked through its deepest
@@ -116,7 +116,7 @@ func box(id, dir string, baseEnv []string) *sdk.Sandbox {
 		if err != nil {
 			return "", err
 		}
-		existing, rest := p, ""
+		existing, rest := fpath, ""
 		for {
 			if _, err := os.Lstat(existing); err == nil {
 				break
@@ -130,13 +130,13 @@ func box(id, dir string, baseEnv []string) *sdk.Sandbox {
 		}
 		real, err := filepath.EvalSymlinks(existing)
 		if err != nil {
-			return "", fmt.Errorf("path %s: %v", p, err)
+			return "", fmt.Errorf("path %s: %v", fpath, err)
 		}
 		real = filepath.Join(real, rest)
 		if real != ra && !strings.HasPrefix(real, ra+string(filepath.Separator)) {
-			return "", fmt.Errorf("path %s escapes the sandbox via a symlink", p)
+			return "", fmt.Errorf("path %s escapes the sandbox via a symlink", fpath)
 		}
-		return p, nil
+		return fpath, nil
 	}
 	command := func(c context.Context, req sdk.ExecRequest) (*exec.Cmd, error) {
 		var cmd *exec.Cmd
@@ -220,15 +220,15 @@ func box(id, dir string, baseEnv []string) *sdk.Sandbox {
 				},
 				Kill: func() error { return cmd.Process.Kill() }}, nil
 		},
-		ReadFile: func(c context.Context, p string) ([]byte, error) {
-			r, err := resolve(p)
+		ReadFile: func(c context.Context, fpath string) ([]byte, error) {
+			r, err := resolve(fpath)
 			if err != nil {
 				return nil, err
 			}
 			return os.ReadFile(r)
 		},
-		WriteFile: func(c context.Context, p string, data []byte) error {
-			r, err := resolve(p)
+		WriteFile: func(c context.Context, fpath string, data []byte) error {
+			r, err := resolve(fpath)
 			if err != nil {
 				return err
 			}
@@ -237,8 +237,8 @@ func box(id, dir string, baseEnv []string) *sdk.Sandbox {
 			}
 			return os.WriteFile(r, data, 0o644)
 		},
-		ListDir: func(c context.Context, p string) ([]sdk.FileInfo, error) {
-			r, err := resolve(p)
+		ListDir: func(c context.Context, fpath string) ([]sdk.FileInfo, error) {
+			r, err := resolve(fpath)
 			if err != nil {
 				return nil, err
 			}
@@ -256,8 +256,8 @@ func box(id, dir string, baseEnv []string) *sdk.Sandbox {
 			}
 			return out, nil
 		},
-		Remove: func(c context.Context, p string) error {
-			r, err := resolve(p)
+		Remove: func(c context.Context, fpath string) error {
+			r, err := resolve(fpath)
 			if err != nil {
 				return err
 			}

@@ -34,7 +34,7 @@ func main() {
 	check(err)
 	a, err := eipagent.New(
 		eipagent.WithModel("mock:demo"),
-		eipagent.WithPlugin("llm_mock", map[string]any{"script": []any{
+		eipagent.WithPlugin("model_mock", map[string]any{"script": []any{
 			map[string]any{"tool": "hello_tool", "args": map[string]any{"name": "Ada"}},
 			map[string]any{"text": "done"},
 		}}),

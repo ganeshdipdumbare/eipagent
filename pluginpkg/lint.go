@@ -12,21 +12,26 @@ import (
 	"strings"
 
 	"github.com/ganeshdipdumbare/eipagent/engine"
+	"github.com/ganeshdipdumbare/eipagent/sdk"
 )
 
 // Facts is what static analysis learns from a plugin source.
 type Facts struct {
-	Package     string
-	HasApply    bool     // func Apply(ctx *sdk.Context) error
-	Doc         string   // first comment paragraph, used as a default description
-	Imports     []string //
-	Inject      []string // var Inject
-	Permissions []string // var Permissions
-	OSSymbols   []string // os.X used
-	Services    []string // literal names passed to Service / HasService
-	Provides    []string // literal names passed to Provide
-	Tools       []string // literal Name of tools passed to AddTool
-	SecretRefs  []string // "secret://NAME" literals
+	Package      string
+	HasApply     bool     // func Apply(ctx *sdk.Context) error
+	Doc          string   // first comment paragraph, used as a default description
+	Imports      []string //
+	Inject       []string // var Requires (or the pre-v0.4 var Inject)
+	Permissions  []string // var Permissions
+	OSSymbols    []string // os.X used
+	Services     []string // literal names passed to Service / HasService
+	Provides     []string // literal names passed to Provide
+	Tools        []string // literal Name of tools passed to AddTool
+	SecretRefs   []string // "secret://NAME" literals
+	Hooks        []string // hook methods called (WrapModel, WrapTool, OnRunStart ...)
+	Background   bool     // calls Effect (timers, listeners, connections)
+	RuntimeTools bool     // calls AddTool with names only known at runtime
+	OldNames     []string // pre-v0.4 names used (see eip plugin fix)
 }
 
 // Analyze parses a plugin source.
@@ -52,6 +57,11 @@ func Analyze(filename string, src []byte) (*Facts, error) {
 		case *ast.FuncDecl:
 			if d.Recv == nil && d.Name.Name == "Apply" && isApplySig(d.Type) {
 				fa.HasApply = true
+				if star, ok := d.Type.Params.List[0].Type.(*ast.StarExpr); ok {
+					if sel, ok := star.X.(*ast.SelectorExpr); ok && sel.Sel.Name == "Context" {
+						fa.OldNames = append(fa.OldNames, "*sdk.Context (now *sdk.Plugin)")
+					}
+				}
 			}
 		case *ast.GenDecl:
 			if d.Tok != token.VAR {
@@ -64,8 +74,11 @@ func Analyze(filename string, src []byte) (*Facts, error) {
 						continue
 					}
 					switch id.Name {
-					case "Inject":
-						fa.Inject = stringList(vs.Values[i])
+					case "Requires", "Inject": // Inject: the pre-v0.4 name
+						fa.Inject = append(fa.Inject, stringList(vs.Values[i])...)
+						if id.Name == "Inject" {
+							fa.OldNames = append(fa.OldNames, "var Inject (now var Requires)")
+						}
 					case "Permissions":
 						fa.Permissions = stringList(vs.Values[i])
 					}
@@ -111,7 +124,18 @@ func Analyze(filename string, src []byte) (*Facts, error) {
 			case "AddTool":
 				if name := toolName(n.Args[0]); name != "" {
 					add(&fa.Tools, name)
+				} else {
+					fa.RuntimeTools = true
 				}
+			case "Effect":
+				fa.Background = true
+			case "WrapModel", "WrapTool", "OnRunStart", "OnRunEnd", "BeforeStep", "AfterModel", "OnEvent":
+				add(&fa.Hooks, sel.Sel.Name)
+			case "OnAgentStart", "OnAgentEnd", "OnStepPrepare", "OnModelAfter":
+				add(&fa.Hooks, newHookName[sel.Sel.Name])
+				add(&fa.OldNames, sel.Sel.Name+" (now "+newHookName[sel.Sel.Name]+")")
+			case "OnDispose":
+				add(&fa.OldNames, "OnDispose (now OnUnload)")
 			}
 		}
 		return true
@@ -122,6 +146,9 @@ func Analyze(filename string, src []byte) (*Facts, error) {
 	return fa, nil
 }
 
+// newHookName maps pre-v0.4 hook methods to their names now.
+var newHookName = map[string]string{"OnAgentStart": "OnRunStart", "OnAgentEnd": "OnRunEnd", "OnStepPrepare": "BeforeStep", "OnModelAfter": "AfterModel"}
+
 func isApplySig(t *ast.FuncType) bool {
 	if t.Params == nil || len(t.Params.List) != 1 || t.Results == nil || len(t.Results.List) != 1 {
 		return false
@@ -131,7 +158,7 @@ func isApplySig(t *ast.FuncType) bool {
 		return false
 	}
 	sel, ok := star.X.(*ast.SelectorExpr)
-	if !ok || sel.Sel.Name != "Context" {
+	if !ok || (sel.Sel.Name != "Plugin" && sel.Sel.Name != "Context") {
 		return false
 	}
 	res, ok := t.Results.List[0].Type.(*ast.Ident)
@@ -338,7 +365,19 @@ func Lint(src *Source) *Report {
 		add(Error, "source", "package must be \"plugin\", got %q", fa.Package)
 	}
 	if !fa.HasApply {
-		add(Error, "source", "missing func Apply(ctx *sdk.Context) error")
+		add(Error, "source", "missing func Apply(p *sdk.Plugin) error")
+	}
+	old := append([]string(nil), fa.OldNames...)
+	for _, s := range append(append(append([]string(nil), fa.Inject...), fa.Services...), fa.Provides...) {
+		s = strings.TrimPrefix(s, "?")
+		if c := sdk.CanonicalService(s); c != s {
+			if n := fmt.Sprintf("service %q (now %q)", s, c); !contains(old, n) {
+				old = append(old, n)
+			}
+		}
+	}
+	if len(old) > 0 {
+		add(Warning, "old-name", "uses names renamed in v0.4: %s; they work until v1.0 (eip plugin fix rewrites them)", strings.Join(old, ", "))
 	}
 
 	// Imports and permissions.
@@ -388,10 +427,10 @@ func Lint(src *Source) *Report {
 			continue
 		}
 		if s == "secrets" || s == "audit" {
-			add(Warning, "undeclared-service", "uses service %q without listing it in Inject (add \"?%s\" so the plugin restarts when it appears)", s, s)
+			add(Warning, "undeclared-service", "uses service %q without listing it in Requires (add \"?%s\" so the plugin restarts when it appears)", s, s)
 			continue
 		}
-		add(Error, "undeclared-service", "uses service %q but Inject doesn't list it (add %q, or \"?%s\" if optional)", s, s, s)
+		add(Error, "undeclared-service", "uses service %q but Requires doesn't list it (add %q, or \"?%s\" if optional)", s, s, s)
 	}
 	for _, ref := range fa.SecretRefs {
 		if !secretRe.MatchString(ref) {
@@ -423,11 +462,11 @@ func Lint(src *Source) *Report {
 	if !sameSet(m.Permissions, fa.Permissions) {
 		add(Error, "permission-mismatch", "manifest permissions %v != source var Permissions %v", m.Permissions, fa.Permissions)
 	}
-	if !sameSet(m.Inject, fa.Inject) {
-		add(Error, "inject-mismatch", "manifest inject %v != source var Inject %v", m.Inject, fa.Inject)
+	if !sameSet(canonical(m.Needs()), canonical(fa.Inject)) {
+		add(Error, "requires-mismatch", "manifest requires %v != source var Requires %v", m.Needs(), fa.Inject)
 	}
 	for _, s := range fa.Provides {
-		if !contains(m.Provides, s) {
+		if !contains(canonical(m.Provides), sdk.CanonicalService(s)) {
 			add(Error, "provides", "source provides %q but the manifest doesn't list it", s)
 		}
 	}
@@ -447,7 +486,7 @@ func Lint(src *Source) *Report {
 		}
 	}
 	if len(m.Secrets) > 0 && !covered(fa.Inject, "secrets") {
-		add(Warning, "secret-ref", "declares secrets but Inject has no \"secrets\" or \"?secrets\"")
+		add(Warning, "secret-ref", "declares secrets but Requires has no \"secrets\" or \"?secrets\"")
 	}
 	for name, sum := range m.Files {
 		b, ok := src.Files[name]
@@ -463,15 +502,30 @@ func Lint(src *Source) *Report {
 	return r
 }
 
-// covered reports whether an Inject list declares service s.
+// covered reports whether a Requires list declares service s (old and
+// new service names count as the same).
 func covered(inject []string, s string) bool {
+	s = sdk.CanonicalService(s)
 	for _, d := range inject {
-		d = strings.TrimPrefix(d, "?")
+		d = sdk.CanonicalService(strings.TrimPrefix(d, "?"))
 		if d == s || (strings.HasSuffix(d, "*") && strings.HasPrefix(s, strings.TrimSuffix(d, "*"))) {
 			return true
 		}
 	}
 	return false
+}
+
+// canonical maps service names (keeping a "?" prefix) to current names.
+func canonical(list []string) []string {
+	out := make([]string, len(list))
+	for i, s := range list {
+		if strings.HasPrefix(s, "?") {
+			out[i] = "?" + sdk.CanonicalService(s[1:])
+		} else {
+			out[i] = sdk.CanonicalService(s)
+		}
+	}
+	return out
 }
 
 func sameSet(a, b []string) bool {
@@ -494,7 +548,7 @@ func Infer(name string, fa *Facts) *Manifest {
 		desc = name + " plugin"
 	}
 	return &Manifest{Schema: 1, Name: name, Version: "0.1.0", Description: desc,
-		Permissions: fa.Permissions, Inject: fa.Inject, Provides: fa.Provides, Tools: fa.Tools,
+		Permissions: fa.Permissions, Requires: canonical(fa.Inject), Provides: fa.Provides, Tools: fa.Tools,
 		Secrets: validSecrets(fa.SecretRefs), EIPAgent: ">=" + sdkVersion()}
 }
 

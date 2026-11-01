@@ -584,7 +584,7 @@ tr:last-child td { border-bottom: 0; }
   function refreshAudit() {
     load("audit").then(function (j) {
       var pane = $("#pane-activity"), list = (j.entries || []).filter(function (e) { return e.type !== "plugin.disposed"; });
-      pane.innerHTML = '<div class="chain">' + (j.verified ? '<span class="tag ok">Chain verified</span>' : '<span class="tag bad">Chain broken</span>') + "<span>" + (j.count || list.length) + " entries · each line is hash-linked to the one before (audit_jsonl)</span></div>";
+      pane.innerHTML = '<div class="chain">' + (j.verified ? '<span class="tag ok">Chain verified</span>' : '<span class="tag bad">Chain broken</span>') + "<span>" + (j.count || list.length) + " entries · each line is hash-linked to the one before (audit_file)</span></div>";
       if (!list.length) { pane.insertAdjacentHTML("beforeend", '<div class="none">No activity yet.</div>'); return; }
       pane.insertAdjacentHTML("beforeend", '<ul class="feed">' + list.map(auditRow).join("") + "</ul>");
     });
@@ -603,7 +603,7 @@ tr:last-child td { border-bottom: 0; }
   }
   function hood(e) {
     var pane = $("#pane-hood");
-    if (!pane.dataset.init) { pane.dataset.init = "1"; pane.innerHTML = '<p class="intro">Events from the current run. “Model saw” is the last customer message after every middleware ran — card numbers are masked by mw_pii before the model gets them.</p><div id="hoodlist"></div>'; }
+    if (!pane.dataset.init) { pane.dataset.init = "1"; pane.innerHTML = '<p class="intro">Events from the current run. “Model saw” is the last customer message after every middleware ran — card numbers are masked by hook_pii before the model gets them.</p><div id="hoodlist"></div>'; }
     var list = $("#hoodlist"), line = "";
     if (e.Type === "model_call") {
       var t = esc(e.Text).replace(/(\*{4,}[\d ]*\d{4})/g, "<mark>$1</mark>");

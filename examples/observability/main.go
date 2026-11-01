@@ -86,7 +86,7 @@ func main() {
 	}
 	a, err := eipagent.New(
 		eipagent.WithModel("mock:demo"),
-		eipagent.WithPlugin("llm_mock", map[string]any{"script": []any{
+		eipagent.WithPlugin("model_mock", map[string]any{"script": []any{
 			map[string]any{"tool": "weather", "args": map[string]any{"city": "Oslo"}},
 			map[string]any{"text": "It is 4°C and windy in Oslo."},
 		}}),
@@ -94,7 +94,7 @@ func main() {
 			return "4°C, wind 9 m/s", nil
 		})),
 		eipagent.WithPlugin("secrets_env", nil),
-		eipagent.WithPlugin("audit_jsonl", map[string]any{"path": "-"}), // records only go to sinks
+		eipagent.WithPlugin("audit_file", map[string]any{"path": "-"}), // records only go to sinks
 		eipagent.WithPlugin("audit_http", map[string]any{"url": siem.URL, "hmac_key": "secret://SIEM_HMAC_TOKEN"}),
 		eipagent.WithPlugin("trace_otlp", map[string]any{"endpoint": otel.URL, "service_name": "support-bot"}),
 		eipagent.WithUser("u-1001"),

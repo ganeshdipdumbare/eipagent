@@ -17,8 +17,8 @@ import (
 // real model would for the demo's flows, so the app and the website replay
 // work offline. Swap in a real model with -model ollama:qwen3.5:4b.
 func DemoModel() eipagent.Plugin {
-	return eipagent.Plugin{Name: "llm_demo", Apply: func(ctx *eipagent.PluginContext) error {
-		return ctx.Provide("llm/demo", &sdk.Provider{
+	return eipagent.Plugin{Name: "llm_demo", Apply: func(p *eipagent.PluginAPI) error {
+		return p.Provide("llm/demo", &sdk.Provider{
 			Name:         "demo",
 			Capabilities: map[string]bool{"tools": true, "streaming": true},
 			Generate: func(c context.Context, req *sdk.ModelRequest) (*sdk.ModelResponse, error) {

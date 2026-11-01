@@ -106,7 +106,7 @@ func WithUser(id string, roles ...string) Option {
 }
 
 // WithoutDefaults loads only what you ask for: no default loop,
-// secrets, checkpointer or provider.
+// secrets, thread storage or provider.
 func WithoutDefaults() Option { return func(c *config) { c.noDefaults = true } }
 
 // ---- Per-run options ----

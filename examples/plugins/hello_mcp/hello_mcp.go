@@ -24,7 +24,7 @@ import (
 // Config: url (required), token ("secret://hello_mcp_TOKEN").
 var Permissions = []string{"net"}
 
-var Inject = []string{"?secrets"}
+var Requires = []string{"?secrets"}
 
 type remoteTool struct {
 	Name        string         `json:"name"`
@@ -32,13 +32,13 @@ type remoteTool struct {
 	Schema      map[string]any `json:"schema"`
 }
 
-func call(ctx *sdk.Context, c context.Context, client *http.Client, method, url, tokenRef string, body []byte) ([]byte, error) {
+func call(p *sdk.Plugin, c context.Context, client *http.Client, method, url, tokenRef string, body []byte) ([]byte, error) {
 	req, err := http.NewRequestWithContext(c, method, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if tok, err := ctx.Secret(tokenRef); err == nil && tok != "" {
+	if tok, err := p.Secret(tokenRef); err == nil && tok != "" {
 		req.Header.Set("Authorization", "Bearer "+tok)
 	}
 	resp, err := client.Do(req)
@@ -53,27 +53,27 @@ func call(ctx *sdk.Context, c context.Context, client *http.Client, method, url,
 	return b, nil
 }
 
-func addTool(ctx *sdk.Context, client *http.Client, base, tokenRef string, t remoteTool) {
-	ctx.AddTool(sdk.Tool{
+func addTool(p *sdk.Plugin, client *http.Client, base, tokenRef string, t remoteTool) {
+	p.AddTool(sdk.Tool{
 		Name:        "hello_mcp__" + t.Name,
 		Description: t.Description,
 		Schema:      t.Schema,
 		Run: func(c context.Context, args map[string]any) (string, error) {
 			body, _ := json.Marshal(args)
-			b, err := call(ctx, c, client, "POST", base+"/tools/"+t.Name, tokenRef, body)
+			b, err := call(p, c, client, "POST", base+"/tools/"+t.Name, tokenRef, body)
 			return string(b), err
 		},
 	})
 }
 
-func Apply(ctx *sdk.Context) error {
-	base := strings.TrimRight(ctx.ConfigString("url", ""), "/")
+func Apply(p *sdk.Plugin) error {
+	base := strings.TrimRight(p.ConfigString("url", ""), "/")
 	if base == "" {
 		return fmt.Errorf("hello_mcp: config url is required")
 	}
-	tokenRef := ctx.ConfigString("token", "secret://hello_mcp_TOKEN")
+	tokenRef := p.ConfigString("token", "secret://hello_mcp_TOKEN")
 	client := &http.Client{Timeout: 30 * time.Second}
-	b, err := call(ctx, context.Background(), client, "GET", base+"/tools", tokenRef, nil)
+	b, err := call(p, context.Background(), client, "GET", base+"/tools", tokenRef, nil)
 	if err != nil {
 		return err
 	}
@@ -82,7 +82,7 @@ func Apply(ctx *sdk.Context) error {
 		return fmt.Errorf("hello_mcp: bad tool list: %v", err)
 	}
 	for _, t := range tools {
-		addTool(ctx, client, base, tokenRef, t)
+		addTool(p, client, base, tokenRef, t)
 	}
 	return nil
 }

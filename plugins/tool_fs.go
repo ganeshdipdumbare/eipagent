@@ -10,17 +10,17 @@ import (
 	"eipagent/sdk"
 )
 
-// File tools in the "exec" world: read_file, write_file, edit_file,
+// File tools in the "workspace" world: read_file, write_file, edit_file,
 // list_dir, find_files, grep. Writes are recorded per run (Result.Changes)
 // so hosts can show a review diff.
 //
 // Config: max_read (200000 bytes), readonly (true = only read tools).
-var Inject = []string{"exec"}
+var Requires = []string{"workspace"}
 
-func Apply(ctx *sdk.Context) error {
-	world := ctx.Service("exec").(*sdk.ExecWorld)
-	maxRead := ctx.ConfigInt("max_read", 200000)
-	readonly := ctx.ConfigBool("readonly", false)
+func Apply(p *sdk.Plugin) error {
+	world := p.Service("workspace").(*sdk.ExecWorld)
+	maxRead := p.ConfigInt("max_read", 200000)
+	readonly := p.ConfigBool("readonly", false)
 	ro := map[string]any{"readonly": true, "sandbox": world.Name}
 	rw := map[string]any{"risk": "medium", "sandbox": world.Name}
 
@@ -40,7 +40,7 @@ func Apply(ctx *sdk.Context) error {
 		return res.Stdout, nil
 	}
 
-	ctx.AddTool(sdk.Tool{
+	p.AddTool(sdk.Tool{
 		Name: "read_file", Description: "Read a text file. Optional offset/limit are line numbers.", Meta: ro,
 		Schema: sdk.Object(map[string]any{"path": sdk.Str("file path"), "offset": sdk.Int("first line (1-based)"), "limit": sdk.Int("max lines")}, "path"),
 		Run: func(c context.Context, a map[string]any) (string, error) {
@@ -68,7 +68,7 @@ func Apply(ctx *sdk.Context) error {
 			return out.String(), nil
 		},
 	})
-	ctx.AddTool(sdk.Tool{
+	p.AddTool(sdk.Tool{
 		Name: "list_dir", Description: "List a directory", Meta: ro,
 		Schema: sdk.Object(map[string]any{"path": sdk.Str("directory (default .)")}),
 		Run: func(c context.Context, a map[string]any) (string, error) {
@@ -76,11 +76,11 @@ func Apply(ctx *sdk.Context) error {
 			if err != nil {
 				return "", err
 			}
-			p := sdk.ArgString(a, "path")
-			if p == "" {
-				p = "."
+			fpath := sdk.ArgString(a, "path")
+			if fpath == "" {
+				fpath = "."
 			}
-			fis, err := b.ListDir(c, p)
+			fis, err := b.ListDir(c, fpath)
 			if err != nil {
 				return "", err
 			}
@@ -95,26 +95,26 @@ func Apply(ctx *sdk.Context) error {
 			return strings.Join(out, "\n"), nil
 		},
 	})
-	ctx.AddTool(sdk.Tool{
+	p.AddTool(sdk.Tool{
 		Name: "find_files", Description: "Find files by name pattern (shell glob, e.g. *.go)", Meta: ro,
 		Schema: sdk.Object(map[string]any{"pattern": sdk.Str("name glob"), "path": sdk.Str("where to look (default .)")}, "pattern"),
 		Run: func(c context.Context, a map[string]any) (string, error) {
-			p := sdk.ArgString(a, "path")
-			if p == "" {
-				p = "."
+			fpath := sdk.ArgString(a, "path")
+			if fpath == "" {
+				fpath = "."
 			}
-			return sh(c, `find "$2" -type f -name "$1" -not -path "*/.git/*" | head -n 200`, sdk.ArgString(a, "pattern"), p)
+			return sh(c, `find "$2" -type f -name "$1" -not -path "*/.git/*" | head -n 200`, sdk.ArgString(a, "pattern"), fpath)
 		},
 	})
-	ctx.AddTool(sdk.Tool{
+	p.AddTool(sdk.Tool{
 		Name: "grep", Description: "Search file contents with a regular expression", Meta: ro,
 		Schema: sdk.Object(map[string]any{"pattern": sdk.Str("regex"), "path": sdk.Str("file or directory (default .)")}, "pattern"),
 		Run: func(c context.Context, a map[string]any) (string, error) {
-			p := sdk.ArgString(a, "path")
-			if p == "" {
-				p = "."
+			fpath := sdk.ArgString(a, "path")
+			if fpath == "" {
+				fpath = "."
 			}
-			out, err := sh(c, `grep -rnIE --exclude-dir=.git -e "$1" -- "$2" | head -n 200`, sdk.ArgString(a, "pattern"), p)
+			out, err := sh(c, `grep -rnIE --exclude-dir=.git -e "$1" -- "$2" | head -n 200`, sdk.ArgString(a, "pattern"), fpath)
 			if err == nil && out == "" {
 				out = "no matches"
 			}
@@ -124,7 +124,7 @@ func Apply(ctx *sdk.Context) error {
 	if readonly {
 		return nil
 	}
-	ctx.AddTool(sdk.Tool{
+	p.AddTool(sdk.Tool{
 		Name: "write_file", Description: "Create or overwrite a file", Meta: rw,
 		Schema: sdk.Object(map[string]any{"path": sdk.Str("file path"), "content": sdk.Str("full new content")}, "path", "content"),
 		Run: func(c context.Context, a map[string]any) (string, error) {
@@ -139,7 +139,7 @@ func Apply(ctx *sdk.Context) error {
 			return fmt.Sprintf("wrote %d bytes to %s", len(content), sdk.ArgString(a, "path")), nil
 		},
 	})
-	ctx.AddTool(sdk.Tool{
+	p.AddTool(sdk.Tool{
 		Name: "edit_file", Description: "Replace exact text in a file. old_text must match exactly once unless replace_all.", Meta: rw,
 		Schema: sdk.Object(map[string]any{"path": sdk.Str("file path"), "old_text": sdk.Str("text to find"), "new_text": sdk.Str("replacement"), "replace_all": sdk.Bool("replace every match")}, "path", "old_text", "new_text"),
 		Run: func(c context.Context, a map[string]any) (string, error) {
@@ -170,13 +170,13 @@ func Apply(ctx *sdk.Context) error {
 	})
 
 	// Record before/after of writes for review.
-	ctx.OnAgentStart(func(c context.Context, st *sdk.RunState) error {
+	p.OnRunStart(func(c context.Context, st *sdk.RunState) error {
 		if st.Values != nil {
 			delete(st.Values, "fs.changes")
 		}
 		return nil
 	})
-	ctx.WrapTool(func(c context.Context, req *sdk.ToolRequest, next sdk.ToolHandler) (*sdk.ToolResult, error) {
+	p.WrapTool(func(c context.Context, req *sdk.ToolRequest, next sdk.ToolHandler) (*sdk.ToolResult, error) {
 		if (req.Call.Name != "write_file" && req.Call.Name != "edit_file") || req.Run == nil {
 			return next(c, req)
 		}

@@ -17,7 +17,7 @@ import (
 
 // Ships the audit stream to an HTTP endpoint (a SIEM, a log pipeline or a
 // control plane), provided as "audit/sink/http". It receives every record
-// audit_jsonl writes (already redacted and hash-chained, so the receiver
+// audit_file writes (already redacted and hash-chained, so the receiver
 // can verify the chain) and POSTs them in batches as NDJSON.
 //
 // Requests carry X-EIP-Signature: sha256=<hex HMAC of the body> when
@@ -30,26 +30,26 @@ import (
 // max_queue (10000), retries (3), timeout_seconds (10).
 var Permissions = []string{"net"}
 
-var Inject = []string{"audit", "?secrets"}
+var Requires = []string{"audit", "?secrets"}
 
-func Apply(ctx *sdk.Context) error {
-	url := ctx.ConfigString("url", "")
+func Apply(p *sdk.Plugin) error {
+	url := p.ConfigString("url", "")
 	if url == "" {
 		return fmt.Errorf("audit_http: config url is required")
 	}
-	headers := ctx.ConfigMap("headers")
-	hmacRef := ctx.ConfigString("hmac_key", "")
-	batchSize := ctx.ConfigInt("batch_size", 100)
-	flushEvery := time.Duration(ctx.ConfigInt("flush_seconds", 2)) * time.Second
-	maxQueue := ctx.ConfigInt("max_queue", 10000)
-	retries := ctx.ConfigInt("retries", 3)
+	headers := p.ConfigMap("headers")
+	hmacRef := p.ConfigString("hmac_key", "")
+	batchSize := p.ConfigInt("batch_size", 100)
+	flushEvery := time.Duration(p.ConfigInt("flush_seconds", 2)) * time.Second
+	maxQueue := p.ConfigInt("max_queue", 10000)
+	retries := p.ConfigInt("retries", 3)
 	if batchSize < 1 || maxQueue < 1 || retries < 0 || flushEvery <= 0 {
 		return fmt.Errorf("audit_http: batch_size, max_queue and flush_seconds must be positive, retries not negative")
 	}
 	if maxQueue < batchSize {
 		return fmt.Errorf("audit_http: max_queue (%d) must be at least batch_size (%d)", maxQueue, batchSize)
 	}
-	client := &http.Client{Timeout: time.Duration(ctx.ConfigInt("timeout_seconds", 10)) * time.Second}
+	client := &http.Client{Timeout: time.Duration(p.ConfigInt("timeout_seconds", 10)) * time.Second}
 
 	var mu sync.Mutex
 	var queue [][]byte
@@ -62,14 +62,14 @@ func Apply(ctx *sdk.Context) error {
 		req.Header.Set("Content-Type", "application/x-ndjson")
 		for k, v := range headers {
 			s, _ := v.(string)
-			val, err := ctx.Secret(s)
+			val, err := p.Secret(s)
 			if err != nil {
 				return err
 			}
 			req.Header.Set(k, val)
 		}
 		if hmacRef != "" {
-			key, err := ctx.Secret(hmacRef)
+			key, err := p.Secret(hmacRef)
 			if err != nil {
 				return err
 			}
@@ -126,12 +126,12 @@ func Apply(ctx *sdk.Context) error {
 					queue = queue[len(queue)-maxQueue:]
 				}
 				mu.Unlock()
-				ctx.Logf("audit_http: %d records not delivered yet: %v", n, err)
+				p.Logf("audit_http: %d records not delivered yet: %v", n, err)
 				return
 			}
 		}
 	}
-	ctx.Effect(func() func() {
+	p.Effect(func() func() {
 		stop := make(chan struct{})
 		done := make(chan struct{})
 		go func() {
@@ -155,11 +155,11 @@ func Apply(ctx *sdk.Context) error {
 			n := dropped
 			mu.Unlock()
 			if n > 0 {
-				ctx.Logf("audit_http: dropped %d records (queue full)", n)
+				p.Logf("audit_http: dropped %d records (queue full)", n)
 			}
 		}
 	})
-	return ctx.Provide("audit/sink/http", &sdk.AuditSink{Send: func(line []byte) {
+	return p.Provide("audit/sink/http", &sdk.AuditSink{Send: func(line []byte) {
 		cp := append([]byte(nil), line...)
 		mu.Lock()
 		queue = append(queue, cp)
