@@ -42,10 +42,11 @@ import (
 
 `
 
-// Samples: one tool plugin in three versions (the last one fails to
-// start, to show that a broken update keeps the running version).
+// Samples: one tool plugin and two updates (the second fails to start,
+// to show that a broken update keeps the running version). Each submit
+// gets the next version number, whichever sample it is.
 var Samples = []Sample{
-	{ID: "shipping-v1", Name: "shipping_estimate", Title: "Shipping estimate v1: standard delivery",
+	{ID: "shipping-v1", Name: "shipping_estimate", Title: "Shipping estimate: standard delivery",
 		Ask: "What's the shipping estimate to Berlin?",
 		Code: shippingHead + `// Estimates delivery time to a city.
 func Apply(p *sdk.Plugin) error {
@@ -62,7 +63,7 @@ func Apply(p *sdk.Plugin) error {
 	return nil
 }
 `},
-	{ID: "shipping-v2", Name: "shipping_estimate", Title: "Shipping estimate v2: adds express",
+	{ID: "shipping-v2", Name: "shipping_estimate", Title: "Shipping estimate, update: adds express",
 		Ask: "What's the shipping estimate to Berlin?",
 		Code: shippingHead + `// Estimates delivery time to a city, with an express option.
 func Apply(p *sdk.Plugin) error {
@@ -79,7 +80,7 @@ func Apply(p *sdk.Plugin) error {
 	return nil
 }
 `},
-	{ID: "shipping-v3", Name: "shipping_estimate", Title: "Shipping estimate v3: broken (fails to start)",
+	{ID: "shipping-v3", Name: "shipping_estimate", Title: "Shipping estimate, broken update (fails to start)",
 		Ask: "What's the shipping estimate to Berlin?",
 		Code: strings.Replace(shippingHead, "\"context\"\n", "\"context\"\n\t\"errors\"\n", 1) + `// Estimates delivery time from the carrier's API. This version fails to
 // start (the carrier isn't configured), so the running version stays.
