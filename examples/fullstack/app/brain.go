@@ -80,11 +80,18 @@ var demoTools = map[string]bool{"lookup_order": true, "search_help_center": true
 
 var cityRe = regexp.MustCompile(`\b(?:to|in|for)\s+([A-Z][a-zA-Z]+(?:\s[A-Z][a-zA-Z]+)?)`)
 
-// pluginTool finds a tool from a runtime plugin that the message names
-// ("shipping estimate" or "shipping_estimate"), the way a real model
-// would pick a newly available tool.
+// pluginTool finds a tool from a runtime plugin that fits the message,
+// the way a real model would pick a newly available tool: the message
+// names it ("shipping estimate" or "shipping_estimate"), or, when it
+// isn't about an order, uses a word from the tool's name or description
+// ("How long does shipping to Paris take?").
 func pluginTool(text string, tools []sdk.Tool) *sdk.Tool {
 	t := strings.ToLower(text)
+	words := map[string]bool{}
+	for _, w := range strings.FieldsFunc(t, func(r rune) bool { return !(r >= 'a' && r <= 'z') }) {
+		words[w] = true
+	}
+	var loose *sdk.Tool
 	for i := range tools {
 		n := tools[i].Name
 		if demoTools[n] {
@@ -93,6 +100,14 @@ func pluginTool(text string, tools []sdk.Tool) *sdk.Tool {
 		if strings.Contains(t, n) || strings.Contains(t, strings.ReplaceAll(n, "_", " ")) {
 			return &tools[i]
 		}
+		for _, w := range strings.FieldsFunc(strings.ToLower(n+" "+tools[i].Description), func(r rune) bool { return !(r >= 'a' && r <= 'z') }) {
+			if len(w) >= 6 && words[w] && loose == nil {
+				loose = &tools[i]
+			}
+		}
+	}
+	if loose != nil && !orderRe.MatchString(t) {
+		return loose
 	}
 	return nil
 }

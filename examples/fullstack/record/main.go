@@ -89,6 +89,21 @@ func (e *env) post(path string, body any) [][2]any {
 	return out
 }
 
+func (e *env) postJSON(path string, body any) map[string]any {
+	b, _ := json.Marshal(body)
+	r, err := http.Post(e.ts.URL+path, "application/json", bytes.NewReader(b))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer r.Body.Close()
+	var out map[string]any
+	json.NewDecoder(r.Body).Decode(&out)
+	if r.StatusCode != 200 {
+		log.Fatalf("%s: %d %v", path, r.StatusCode, out)
+	}
+	return out
+}
+
 func (e *env) snapshot(threads ...string) map[string]any {
 	full := map[string]any{}
 	for _, id := range threads {
@@ -154,9 +169,35 @@ func main() {
 		fmt.Printf("recorded %-14s %d events, %d branches\n", sc.thread, len(s.Events), len(s.Branches))
 	}
 	rec["scenes"] = out
+	rec["plugin"] = recordPlugin()
 	js, _ := json.Marshal(rec)
 	if err := os.WriteFile(os.Args[1], []byte("window.EIP_RECORDING = "+string(js)+";\n"), 0o644); err != nil {
 		log.Fatal(err)
 	}
 	fmt.Println("wrote", os.Args[1])
+}
+
+// recordPlugin records the Plugins tab: Sam submits the first sample,
+// Ada approves it, then a customer asks the question it answers. The
+// replay steps through the same states.
+func recordPlugin() map[string]any {
+	e := start()
+	defer e.close()
+	sample := app.Samples[0]
+	pl := map[string]any{"sample": sample.ID, "name": sample.Name, "ask": sample.Ask, "states": map[string]any{"empty": e.get("/api/plugins")}}
+	states := pl["states"].(map[string]any)
+	pl["submit"] = e.postJSON("/api/plugins", map[string]any{"user": "sam", "sample": sample.ID})
+	states["submitted"] = e.get("/api/plugins")
+	pl["submitted_snap"] = e.snapshot()
+	version := pl["submit"].(map[string]any)["version"]
+	e.postJSON("/api/plugins/"+sample.Name, map[string]any{"user": "ada", "action": "approve", "version": version})
+	states["running"] = e.get("/api/plugins")
+	pl["running_snap"] = e.snapshot()
+	thread := "t-plugin"
+	s := &scene{Thread: thread, Text: sample.Ask}
+	s.Events = e.post("/api/threads/"+thread+"/messages", map[string]any{"text": sample.Ask, "user": "sam"})
+	s.After = e.snapshot(thread)
+	pl["scene"] = s
+	fmt.Printf("recorded %-14s %d events\n", "plugin", len(s.Events))
+	return pl
 }

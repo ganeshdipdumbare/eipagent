@@ -319,6 +319,16 @@ func TestPluginsAddUpdateRollbackRemove(t *testing.T) {
 	if got := ask("t-p2"); !strings.Contains(got, "3 to 5 business days") || strings.Contains(got, "express") {
 		t.Fatalf("v1 answer: %q", got)
 	}
+	// A question that doesn't name the tool still uses it, as a real model would.
+	evs, _ := c.stream("/api/threads/t-p2b/messages", map[string]any{"text": "How long does shipping to Paris take?", "user": "sam"})
+	if got := text(evs); !strings.Contains(got, "Standard delivery to Paris") {
+		t.Fatalf("a plugin tool should be picked from its description: %q", got)
+	}
+	// Order questions still go to the order tools.
+	evs, _ = c.stream("/api/threads/t-p2c/messages", map[string]any{"text": "Where is my order #1077?", "user": "sam"})
+	if got := text(evs); strings.Contains(got, "business days") {
+		t.Fatalf("an order question went to the plugin: %q", got)
+	}
 
 	submit("shipping-v2")
 	approve("0.1.1")

@@ -111,6 +111,7 @@ article { max-width: 720px; margin: 0 auto; }
 /* pages */
 .page[hidden] { display: none; }
 .page h1 { font: 600 36px/1.15 var(--f-sans); letter-spacing: -0.035em; text-wrap: balance; }
+.page h2 { font: 600 26px/1.25 var(--f-sans); letter-spacing: -0.025em; margin: 48px 0 14px; text-wrap: balance; scroll-margin-top: calc(var(--top) + 24px); }
 .page h3 { font: 600 22px/1.3 var(--f-sans); letter-spacing: -0.02em; margin: 44px 0 12px; text-wrap: balance; scroll-margin-top: calc(var(--top) + 24px); }
 .page h4 { font: 600 16px/1.4 var(--f-sans); margin: 28px 0 8px; }
 .page p, .page li { color: var(--fg-2); max-width: 70ch; }
@@ -264,15 +265,42 @@ td code { white-space: nowrap; }
   .toplinks { display: none; }
   .searchbtn { width: auto; }
   .searchbtn span, .searchbtn kbd { display: none; }
-  .side { position: fixed; z-index: 35; top: calc(var(--top) + env(safe-area-inset-top, 0px)); left: 0; bottom: 0; height: auto; width: min(320px, 86vw);
-    background: var(--bg); transform: translateX(-102%); transition: transform .2s ease; box-shadow: var(--shadow); }
-  body.nav-open .side { transform: none; }
+  /* Drawer: a fixed height (a grid item with top+bottom would shrink to its content and never scroll), hidden when closed, a scrim behind it. */
+  .side { position: fixed; z-index: 35; top: calc(var(--top) + env(safe-area-inset-top, 0px)); left: 0; align-self: auto; width: min(320px, 86vw);
+    height: calc(100vh - var(--top) - env(safe-area-inset-top, 0px)); height: calc(100dvh - var(--top) - env(safe-area-inset-top, 0px));
+    overscroll-behavior: contain; padding-bottom: calc(40px + env(safe-area-inset-bottom, 0px));
+    background: var(--bg); transform: translateX(-102%); visibility: hidden; transition: transform .2s ease, visibility 0s linear .2s; box-shadow: var(--shadow); }
+  body.nav-open .side { transform: none; visibility: visible; transition: transform .2s ease; }
+  .scrim { display: block; position: fixed; z-index: 34; inset: calc(var(--top) + env(safe-area-inset-top, 0px)) 0 0 0; background: rgba(0, 0, 0, .45);
+    opacity: 0; pointer-events: none; transition: opacity .2s ease; }
+  body.nav-open .scrim { opacity: 1; pointer-events: auto; }
+  body.nav-open { overflow: hidden; }
   main { padding: 28px max(16px, env(safe-area-inset-right, 0px)) 72px max(16px, env(safe-area-inset-left, 0px)); }
   .topbar .in { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); gap: 12px; }
   .cards { grid-template-columns: minmax(0, 1fr); }
   .timeline li { grid-template-columns: 28px minmax(0, 1fr); }
   .timeline .d { grid-column: 2; }
   .page h1 { font-size: 30px; }
+}
+.scrim { display: none; }
+/* Phones: table rows become stacked cards, each value under its column name, so nothing is squeezed or clipped. */
+@media (max-width: 640px) {
+  .table { overflow: visible; }
+  .table table, .table tbody, .table tr, .table td { display: block; width: 100%; }
+  .table thead { display: none; }
+  .table tr { padding: 12px 14px; border-bottom: 1px solid var(--line); }
+  .table tr:last-child { border-bottom: 0; }
+  .table td { padding: 0; border: 0; }
+  .table td + td { margin-top: 8px; }
+  .table td[data-label]::before { content: attr(data-label); display: block; margin-bottom: 2px; font-size: 12px; font-weight: 500; color: var(--fg-3); }
+  .table td:first-child::before { display: none; }
+  .table td:first-child { color: var(--fg); font-weight: 500; }
+  .table td code { white-space: normal; overflow-wrap: anywhere; }
+  .page h1 { font-size: 28px; }
+  .page h2 { font-size: 22px; margin-top: 40px; }
+  .page h3 { font-size: 19px; margin-top: 36px; }
+  .lede { font-size: 16px; }
+  .code pre, .code .nums { font-size: 12.5px; }
 }
 @media (max-width: 520px) { .copypage span { display: none; } .mark .pill, .mark .sep { display: none; } .pager { grid-template-columns: 1fr; } .pager .next { grid-column: 1; } }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
@@ -318,6 +346,7 @@ td code { white-space: nowrap; }
   </div>
 </header>
 
+<div class="scrim" id="scrim" aria-hidden="true"></div>
 <div class="shell">
 <aside class="side" id="side" aria-label="Documentation">
   <div class="version">
@@ -757,8 +786,8 @@ for (;;) {
   <p>Approve an email and open the Activity tab: you'll see <code>Secret MAIL_RELAY_TOKEN · granted to mailer</code>, and the <code>send_email</code> row names <code>mailer</code> as the plugin that ran it. Every row carries the run id, so you can group a run's model calls, tool calls and secret reads. The token's value is never written. If it ever showed up in a tool result, a model reply or an error, the audit log, traces and logs would show <code>[REDACTED]</code> instead.</p>
 
   <h3>Add, update and remove plugins while it runs</h3>
-  <p>The <b>Plugins</b> tab adds code to the running agent through the same lifecycle a platform team would use. The public demo offers a sample <code>shipping_estimate</code> plugin and two updates to it; the second update is broken on purpose. Each submission gets the next version number. Locally, <code>go run ./examples/fullstack -allow-plugin-code</code> lets you write your own (without permissions: the code runs in the server).</p>
-  <ol class="timeline" aria-label="Plugin flow"><li class=""><span class="n">01</span><span class="h">submit</span><span class="d">Sam submits v0.1.0. The server lints it without running it, says what it does (“adds 1 tool (shipping_estimate)”), signs it with its own key and installs it as VALIDATED. Nothing runs yet.</span></li><li class=""><span class="n">02</span><span class="h">approve</span><span class="d">Ada approves it. <code>Enable</code> loads it into the running agent. Ask in the chat “What's the shipping estimate to Berlin?” and the model calls the new tool.</span></li><li class=""><span class="n">03</span><span class="h">update</span><span class="d">v0.1.1 adds express shipping. Approving it swaps it in; the next run uses it, and v0.1.0 becomes the rollback target.</span></li><li class="loop"><span class="n">04</span><span class="h">broken update</span><span class="d">v0.1.2 fails to start. It's marked FAILED, and v0.1.1 keeps answering: a bad version never replaces a running one.</span></li><li class="end"><span class="n">05</span><span class="h">roll back, remove</span><span class="d">One click goes back to the previous version, or removes the plugin and every version. Every step is in the audit trail.</span></li></ol>
+  <p>The <b>Plugins</b> tab adds code to the running agent through the same lifecycle a platform team would use. The public demo offers a sample <code>shipping_estimate</code> plugin and two updates to it; the second update is broken on purpose. Each submission gets the next version number. Locally, <code>go run ./examples/fullstack -allow-plugin-code</code> lets you write your own (without permissions: the code runs in the server). The replay on this site records the first two steps, so you can add the plugin, approve it and ask its question without a backend.</p>
+  <ol class="timeline" aria-label="Plugin flow"><li class=""><span class="n">01</span><span class="h">submit</span><span class="d">Sam submits v0.1.0. The server lints it without running it, says what it does (“adds 1 tool (shipping_estimate)”), signs it with its own key and installs it as VALIDATED. Nothing runs yet.</span></li><li class=""><span class="n">02</span><span class="h">approve</span><span class="d">Ada approves it. <code>Enable</code> loads it into the running agent, and the chat suggests a new question: “What's the shipping estimate to Berlin?” The model calls the new tool, also for questions that don't name it, like “How long does shipping to Paris take?”</span></li><li class=""><span class="n">03</span><span class="h">update</span><span class="d">v0.1.1 adds express shipping. Approving it swaps it in; the next run uses it, and v0.1.0 becomes the rollback target.</span></li><li class="loop"><span class="n">04</span><span class="h">broken update</span><span class="d">v0.1.2 fails to start. It's marked FAILED, and v0.1.1 keeps answering: a bad version never replaces a running one.</span></li><li class="end"><span class="n">05</span><span class="h">roll back, remove</span><span class="d">One click goes back to the previous version, or removes the plugin and every version. Every step is in the audit trail.</span></li></ol>
   <div class="code" data-title="go"><pre><code class="language-go">// The store the agent was built with (eipagent.WithPluginStore(pstore)).
 v, report, err := pstore.InstallSource(name, code, signingKey, user) // lint, sign, hold as VALIDATED
 // later, a supervisor:
@@ -1685,7 +1714,7 @@ func Apply(p *sdk.Plugin) error {
   <ul>
     <li><b>Resolve the key per call</b> (<code>p.Secret</code> inside <code>Generate</code>), so rotated keys are picked up.</li>
     <li><b>Return <code>sdk.NewProviderError(name, status, body)</code></b> for HTTP failures. <code>hook_retry</code> and <code>hook_fallback</code> use it to tell transient errors (429, 5xx) apart.</li>
-    <li><b>Keys stay on the host.</b> With <code>WithRunIn</code>, providers always run on the host and the sandbox calls them back.</li>
+    <li><b>Keys stay on the host.</b> With <code>WithRunIn</code>, providers always run on the host and the sandbox calls them back. Other secrets reach the sandbox only as placeholders (<a href="#runin-secrets">how</a>).</li>
   </ul>
 </section>
 
@@ -1820,13 +1849,30 @@ func Apply(p *sdk.Plugin) error {
     <li><b>Tools on your machine</b> (development): just load <code>tool_shell</code> / <code>tool_fs</code>; a host workspace loads itself (<code>workspace_local</code>).</li>
     <li><b>Tools in a container per conversation:</b> <code>WithSandbox("docker")</code>.</li>
     <li><b>The model creates its own sandboxes:</b> add <code>tool_sandbox</code>.</li>
-    <li><b>The whole agent inside a sandbox</b>, keys kept on the host:</li>
+    <li><b>The whole agent inside a sandbox</b>, secrets kept on the host:</li>
   </ul>
   <div class="code" data-title="go"><pre><code class="language-go">agent, _ := eipagent.New(
 	eipagent.WithModel("openai:gpt-4.1"),
-	eipagent.WithPlugins("tool_shell", "tool_fs"),
-	eipagent.WithRunIn(eipagent.RunIn{Provider: "docker", Binary: "./eip-linux"}), // GOOS=linux go build -o eip-linux ./cmd/eip
+	eipagent.WithPlugins("tool_shell", "tool_fs", "github_issues"),
+	eipagent.WithRunIn(eipagent.RunIn{
+		Provider: "docker",
+		Binary:   "./eip-linux", // GOOS=linux go build -o eip-linux ./cmd/eip
+		// The placeholder for GH_TOKEN becomes the real token only on requests to these hosts.
+		SecretHosts: map[string][]string{"GH_TOKEN": {"api.github.com"}},
+		// Hosts the box may reach without a secret. Empty: none.
+		Egress: []string{"pkg.go.dev"},
+	}),
 )</code></pre></div>
+  <h2 id="runin-secrets">Secrets in a sandboxed agent</h2>
+  <p>With <code>WithRunIn</code>, no secret value enters the sandbox: not through env vars, not through plugins, and not through sandboxes the agent starts from inside it.</p>
+  <ol class="timeline" aria-label="How a secret is used from the sandbox"><li><span class="n">01</span><span class="h">stays on the host</span><span class="d">Model providers and every <code>secrets_*</code> provider run on the host. Model calls are relayed from the box.</span></li><li><span class="n">02</span><span class="h">fake token</span><span class="d">A plugin in the box asks for <code>secret://GH_TOKEN</code>. The host checks its grants and returns a placeholder (<code>eipsec_</code> + 32 hex), never the value. The read is audited as <code>secret.access</code>.</span></li><li><span class="n">03</span><span class="h">request via host</span><span class="d">The plugin puts the placeholder in a header and sends the request. The box's HTTP goes to the host, not the network.</span></li><li><span class="n">04</span><span class="h">swap on allowed hosts</span><span class="d">If the destination matches <code>SecretHosts["GH_TOKEN"]</code>, the host swaps in the real token and makes the call. Otherwise it refuses and records <code>secret.egress_denied</code>. Requests without a placeholder may reach only <code>Egress</code>.</span></li><li class="end"><span class="n">05</span><span class="h">redacted reply</span><span class="d">Secret values are replaced with <code>[REDACTED]</code> in the response before it goes back, so a reflected token never reaches the box. Redirects come back to the box, so every hop is checked again.</span></li></ol>
+  <ul>
+    <li><b>Env is checked.</b> <code>RunIn.Spec</code> and every sandbox a plugin creates or runs a command in are refused if an env value holds a resolved secret, or a credential-looking name (<code>*_TOKEN</code>, <code>*_API_KEY</code>, <code>*PASSWORD*</code> …) has a value that isn't a placeholder.</li>
+    <li><b>No way out to the host.</b> Mounts of <code>/</code> or a docker, podman or containerd socket are refused, so a box can't start containers outside these rules.</li>
+    <li><b>Fails closed.</b> <code>eip serve --stdio</code> refuses to start if its environment holds a credential.</li>
+    <li><b>Nested sandboxes</b> created inside the box get placeholders too; only the host turns them back into values.</li>
+  </ul>
+  <div class="note warn"><b>What it doesn't cover</b><div><p>Placeholders are swapped only in HTTP sent through Go's default transport. A plugin that needs the raw value in its own process (a database DSN, env for a stdio MCP server), or dials with its own transport like <code>tool_fetch</code>, can't use a secret inside the box: load it on the host with <code>RunIn.HostPlugins</code>. The host trusts the box to say which plugin is asking, so grants inside the box are only as strong as the box; a placeholder is still useless outside its <code>SecretHosts</code>. On the host without a sandbox, the agent already has the host's access, so none of this applies.</p></div></div>
   <h2>Built-in plugins</h2>
   <!-- gen:builtins sandboxes -->
 <div class="builtins">
@@ -2316,7 +2362,7 @@ eipagent.WithPlugin("model_openai", map[string]any{"api_key": "secret://OPENAI_A
     <li><b>Identity from the core.</b> The core passes the real calling plugin to the provider. A plugin can't ask as someone else.</li>
     <li><b>Redacted everywhere.</b> Every value that is handed out is remembered, with its JSON-escaped, URL-encoded and base64 forms. Logs, traces and audit records show <code>[REDACTED]</code> wherever it would have appeared: tool arguments, results, model replies, errors. Values shorter than 4 bytes can't be redacted; their <code>secret.access</code> record says so. Only the core registers values, and only built-in plugins can call <code>sdk.Redact</code>: any redaction function also answers "is this a secret?", so third-party plugins don't get one.</li>
     <li><b>Every read is audited</b> as <code>secret.access</code>, with the plugin, the secret name and whether it was granted. The value is never recorded. Denials are always recorded; granted reads once per plugin and secret every 10 minutes, and again when the value changes.</li>
-    <li><b>Kept on the host.</b> With <code>WithRunIn</code>, model calls go back to the host, so keys never enter the sandbox.</li>
+    <li><b>Kept on the host.</b> With <code>WithRunIn</code>, secret providers stay on the host and the sandbox only gets placeholders, which the host swaps for values on requests to allowed hosts. See <a href="#runin-secrets">Secrets in a sandboxed agent</a>.</li>
   </ul>
   <div class="note warn"><b>What redaction covers</b><div><p>Redaction protects the sinks: logs, traces and audit records. It doesn't hide a secret from the model. If a tool puts a key in its result, the model sees it, so don't return secrets from tools.</p></div></div>
   <div class="code" data-title="terminal"><pre><code class="language-bash">go run ./examples/secrets   # Vault, grants, rotation and redaction, offline</code></pre></div>
@@ -2603,7 +2649,7 @@ st.Quarantine("weather", "0.1.0", "security advisory")</code></pre></div>
     <li><b>Signed, approved plugins.</b> Packages are signed, checked by a linter, held until approved, and pinned when enabled. A version that fails to start never replaces the running one. See <a href="#plugin-packages">Shipping plugins</a>.</li>
     <li><b>Locked policy.</b> An admin policy loads last, and nothing can override it. Locked plugins always run first and can't be removed.</li>
     <li><b>Secrets by grant.</b> Config refers to <code>secret://NAME</code>. Each plugin can read only the secrets granted to it, every read is audited, and values are redacted from logs, traces and audit. See <a href="#kind-secrets">Secrets</a>.</li>
-    <li><b>Containment.</b> Sandboxes have no network by default, web fetching is allowlisted, and webhooks must be signed.</li>
+    <li><b>Containment.</b> Sandboxes have no network by default, web fetching is allowlisted, and webhooks must be signed. A sandboxed agent never holds a secret: it gets placeholders that only the host turns into values, on allowed hosts (<a href="#runin-secrets">details</a>).</li>
     <li><b>People in control.</b> Approvals, reviewer models, limits and token budgets.</li>
     <li><b>Evidence.</b> A tamper-evident audit log, shipped off the machine with <code>audit_http</code>, plus OpenTelemetry traces.</li>
   </ul>
@@ -2637,7 +2683,7 @@ st.Quarantine("weather", "0.1.0", "security advisory")</code></pre></div>
       <tr><td><code>WithHotReload(on)</code></td><td>Reload plugin files on save</td></tr>
       <tr><td><code>WithUser(id, roles...)</code></td><td>Default identity for runs</td></tr>
       <tr><td><code>WithApprover(fn)</code></td><td>Decide approvals synchronously</td></tr>
-      <tr><td><code>WithRunIn(RunIn{...})</code></td><td>Run the agent inside a sandbox</td></tr>
+      <tr><td><code>WithRunIn(RunIn{...})</code></td><td>Run the agent inside a sandbox; secrets stay on the host (<a href="#runin-secrets">placeholders</a>)</td></tr>
       <tr><td><code>WithLogger(fn)</code></td><td>Receive plugin log lines</td></tr>
       <tr><td><code>WithoutDefaults()</code></td><td>Load only what you list</td></tr>
     </tbody>
@@ -2886,7 +2932,7 @@ eip plugin list</code></pre></div>
       var i = order.indexOf(id), prev = order[i - 1], next = order[i + 1];
       pager.innerHTML = (prev ? '<a href="#' + prev + '"><small>Previous</small><b>' + title(prev) + "</b></a>" : "<span></span>") +
                         (next ? '<a class="next" href="#' + next + '"><small>Next</small><b>' + title(next) + "</b></a>" : "");
-      var hs = pages[id].querySelectorAll("h3");
+      var hs = pages[id].querySelectorAll("h2, h3");
       toc.innerHTML = "";
       hs.forEach(function (h, k) {
         if (!h.id) h.id = id + "-" + (k + 1);
@@ -2897,6 +2943,7 @@ eip plugin list</code></pre></div>
       document.querySelectorAll(".toplinks a").forEach(function (a) { if (a.dataset.top === top) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current"); });
       try { document.title = title(id) + " · eipagent Docs"; } catch (e) {}
       document.body.classList.remove("nav-open");
+      document.getElementById("menubtn").setAttribute("aria-expanded", "false");
     }
     if (t.anchor) t.anchor.scrollIntoView(); else window.scrollTo(0, 0);
     spy();
@@ -2926,9 +2973,29 @@ eip plugin list</code></pre></div>
   window.addEventListener("scroll", spy, { passive: true });
   document.getElementById("totop").addEventListener("click", function () { window.scrollTo({ top: 0, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" }); });
 
-  // ---- mobile nav ----
-  var mb = document.getElementById("menubtn");
-  mb.addEventListener("click", function () { var o = document.body.classList.toggle("nav-open"); mb.setAttribute("aria-expanded", String(o)); });
+  // ---- mobile nav: a drawer that closes on a tap outside it, a link, or Escape ----
+  var mb = document.getElementById("menubtn"), side = document.getElementById("side");
+  function setNav(open) {
+    document.body.classList.toggle("nav-open", open);
+    mb.setAttribute("aria-expanded", String(open));
+    mb.setAttribute("aria-label", open ? "Close navigation" : "Open navigation");
+  }
+  mb.addEventListener("click", function (e) { e.stopPropagation(); setNav(!document.body.classList.contains("nav-open")); });
+  document.getElementById("scrim").addEventListener("click", function () { setNav(false); });
+  document.addEventListener("click", function (e) {
+    if (!document.body.classList.contains("nav-open")) return;
+    if (!side.contains(e.target) || (e.target.closest && e.target.closest("a.item"))) setNav(false);
+  });
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape" && document.body.classList.contains("nav-open")) { setNav(false); mb.focus(); } });
+  window.addEventListener("resize", function () { if (window.innerWidth > 900 && document.body.classList.contains("nav-open")) setNav(false); });
+
+  // ---- tables: label each cell with its column, for the stacked layout on phones ----
+  document.querySelectorAll(".table table").forEach(function (t) {
+    var heads = Array.prototype.map.call(t.querySelectorAll("thead th"), function (th) { return th.textContent.trim(); });
+    t.querySelectorAll("tbody tr").forEach(function (tr) {
+      Array.prototype.forEach.call(tr.children, function (td, i) { if (heads[i]) td.setAttribute("data-label", heads[i]); });
+    });
+  });
 
   // ---- theme toggle ----
   var root = document.documentElement;
@@ -2944,7 +3011,7 @@ eip plugin list</code></pre></div>
   var index = [];
   order.forEach(function (id) {
     index.push({ href: id, label: title(id), where: groupOf[id] || "Docs", text: pages[id].textContent.toLowerCase() });
-    pages[id].querySelectorAll("h3").forEach(function (h, k) {
+    pages[id].querySelectorAll("h2, h3").forEach(function (h, k) {
       if (!h.id) h.id = id + "-" + (k + 1);
       index.push({ href: h.id, label: h.textContent, where: title(id), text: h.textContent.toLowerCase() });
     });
