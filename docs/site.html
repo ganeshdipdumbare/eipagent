@@ -1551,7 +1551,7 @@ agent.Generate(ctx, "hi", eipagent.Model("vllm:qwen3-32b"))</code></pre></div>
   <h2>Built-in model plugins</h2>
   <!-- gen:builtins models -->
 <div class="builtins">
-<div class="builtin" id="plugin-model_anthropic"><div class="bhead"><code>model_anthropic</code><span class="bsum">registers nothing found by static analysis · permissions net</span></div><p>Anthropic Messages API adapter, provided as &#34;model/&lt;name&gt;&#34;.</p><details><summary>Config and details</summary><pre>Anthropic Messages API adapter, provided as &#34;model/&lt;name&gt;&#34;.
+<div class="builtin" id="plugin-model_anthropic"><div class="bhead"><code>model_anthropic</code><span class="bsum">provides model/&lt;name&gt; · permissions net</span></div><p>Anthropic Messages API adapter, provided as &#34;model/&lt;name&gt;&#34;.</p><details><summary>Config and details</summary><pre>Anthropic Messages API adapter, provided as &#34;model/&lt;name&gt;&#34;.
 
 Config:
 
@@ -1563,7 +1563,7 @@ Config:
 
 Structured output uses a tool named after the schema; when the model
 calls it, its input becomes the reply text.</pre></details></div>
-<div class="builtin" id="plugin-model_gemini"><div class="bhead"><code>model_gemini</code><span class="bsum">registers nothing found by static analysis · permissions net</span></div><p>Google Gemini adapter (generateContent / streamGenerateContent), provided as &#34;model/&lt;name&gt;&#34;.</p><details><summary>Config and details</summary><pre>Google Gemini adapter (generateContent / streamGenerateContent),
+<div class="builtin" id="plugin-model_gemini"><div class="bhead"><code>model_gemini</code><span class="bsum">provides model/&lt;name&gt; · permissions net</span></div><p>Google Gemini adapter (generateContent / streamGenerateContent), provided as &#34;model/&lt;name&gt;&#34;.</p><details><summary>Config and details</summary><pre>Google Gemini adapter (generateContent / streamGenerateContent),
 provided as &#34;model/&lt;name&gt;&#34;.
 
 Config:
@@ -1571,7 +1571,7 @@ Config:
 	name:     default &#34;gemini&#34;
 	base_url: default https://generativelanguage.googleapis.com/v1beta
 	api_key:  literal or secret://NAME (default secret://GEMINI_API_KEY)</pre></details></div>
-<div class="builtin" id="plugin-model_mock"><div class="bhead"><code>model_mock</code><span class="bsum">registers nothing found by static analysis · no permissions</span></div><p>A deterministic fake LLM for tests and offline demos, provided as &#34;model/mock&#34; (model string &#34;mock:anything&#34;).</p><details><summary>Config and details</summary><pre>A deterministic fake LLM for tests and offline demos, provided as
+<div class="builtin" id="plugin-model_mock"><div class="bhead"><code>model_mock</code><span class="bsum">provides model/&lt;name&gt; · no permissions</span></div><p>A deterministic fake LLM for tests and offline demos, provided as &#34;model/mock&#34; (model string &#34;mock:anything&#34;).</p><details><summary>Config and details</summary><pre>A deterministic fake LLM for tests and offline demos, provided as
 &#34;model/mock&#34; (model string &#34;mock:anything&#34;).
 
 Config:
@@ -1583,7 +1583,7 @@ Config:
 
 Heuristics: replies to a tool result by echoing it; &#34;time&#34; calls
 current_time; &#34;remember X&#34; calls remember; &#34;recall&#34; calls recall.</pre></details></div>
-<div class="builtin" id="plugin-model_openai"><div class="bhead"><code>model_openai</code><span class="bsum">registers nothing found by static analysis · permissions net</span></div><p>OpenAI-compatible chat completions adapter: OpenAI, DeepSeek, Ollama, vLLM, OpenRouter, Groq... Provided as &#34;model/&lt;name&gt;&#34;.</p><details><summary>Config and details</summary><pre>OpenAI-compatible chat completions adapter: OpenAI, DeepSeek, Ollama,
+<div class="builtin" id="plugin-model_openai"><div class="bhead"><code>model_openai</code><span class="bsum">provides model/&lt;name&gt; · permissions net</span></div><p>OpenAI-compatible chat completions adapter: OpenAI, DeepSeek, Ollama, vLLM, OpenRouter, Groq... Provided as &#34;model/&lt;name&gt;&#34;.</p><details><summary>Config and details</summary><pre>OpenAI-compatible chat completions adapter: OpenAI, DeepSeek, Ollama,
 vLLM, OpenRouter, Groq... Provided as &#34;model/&lt;name&gt;&#34;.
 
 Config:
@@ -1710,7 +1710,7 @@ func Apply(p *sdk.Plugin) error {
   <h2>Built-in plugins</h2>
   <!-- gen:builtins threads-memory -->
 <div class="builtins">
-<div class="builtin" id="plugin-db_sql"><div class="bhead"><code>db_sql</code><span class="bsum">registers nothing found by static analysis · permissions db</span></div><p>A shared database/sql pool, provided as &#34;db&#34; (or &#34;db/&lt;name&gt;&#34;). The driver must be linked into the host binary, e.g.</p><details><summary>Config and details</summary><pre>A shared database/sql pool, provided as &#34;db&#34; (or &#34;db/&lt;name&gt;&#34;). The
+<div class="builtin" id="plugin-db_sql"><div class="bhead"><code>db_sql</code><span class="bsum">provides services named at runtime · permissions db</span></div><p>A shared database/sql pool, provided as &#34;db&#34; (or &#34;db/&lt;name&gt;&#34;). The driver must be linked into the host binary, e.g.</p><details><summary>Config and details</summary><pre>A shared database/sql pool, provided as &#34;db&#34; (or &#34;db/&lt;name&gt;&#34;). The
 driver must be linked into the host binary, e.g.
 
 	import _ &#34;eipagent/drivers/postgres&#34; // registers &#34;pgx&#34;
@@ -1830,7 +1830,7 @@ func Apply(p *sdk.Plugin) error {
   <h2>Built-in plugins</h2>
   <!-- gen:builtins sandboxes -->
 <div class="builtins">
-<div class="builtin" id="plugin-sandbox_docker"><div class="bhead"><code>sandbox_docker</code><span class="bsum">registers nothing found by static analysis · permissions exec</span></div><p>Container sandboxes through the docker (or podman) CLI, provided as &#34;sandbox/docker&#34;. Containers run with no network by default, a read-only root filesystem off, dropped capabilities and no new privileges.</p><details><summary>Config and details</summary><pre>Container sandboxes through the docker (or podman) CLI, provided as
+<div class="builtin" id="plugin-sandbox_docker"><div class="bhead"><code>sandbox_docker</code><span class="bsum">provides sandbox/&lt;name&gt; · permissions exec</span></div><p>Container sandboxes through the docker (or podman) CLI, provided as &#34;sandbox/docker&#34;. Containers run with no network by default, a read-only root filesystem off, dropped capabilities and no new privileges.</p><details><summary>Config and details</summary><pre>Container sandboxes through the docker (or podman) CLI, provided as
 &#34;sandbox/docker&#34;. Containers run with no network by default, a
 read-only root filesystem off, dropped capabilities and no new
 privileges.

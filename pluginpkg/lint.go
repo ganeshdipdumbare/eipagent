@@ -17,21 +17,22 @@ import (
 
 // Facts is what static analysis learns from a plugin source.
 type Facts struct {
-	Package      string
-	HasApply     bool     // func Apply(ctx *sdk.Context) error
-	Doc          string   // first comment paragraph, used as a default description
-	Imports      []string //
-	Inject       []string // var Requires (or the pre-v0.4 var Inject)
-	Permissions  []string // var Permissions
-	OSSymbols    []string // os.X used
-	Services     []string // literal names passed to Service / HasService
-	Provides     []string // literal names passed to Provide
-	Tools        []string // literal Name of tools passed to AddTool
-	SecretRefs   []string // "secret://NAME" literals
-	Hooks        []string // hook methods called (WrapModel, WrapTool, OnRunStart ...)
-	Background   bool     // calls Effect (timers, listeners, connections)
-	RuntimeTools bool     // calls AddTool with names only known at runtime
-	OldNames     []string // pre-v0.4 names used (see eip plugin fix)
+	Package         string
+	HasApply        bool     // func Apply(ctx *sdk.Context) error
+	Doc             string   // first comment paragraph, used as a default description
+	Imports         []string //
+	Inject          []string // var Requires (or the pre-v0.4 var Inject)
+	Permissions     []string // var Permissions
+	OSSymbols       []string // os.X used
+	Services        []string // literal names passed to Service / HasService
+	Provides        []string // literal names passed to Provide
+	Tools           []string // literal Name of tools passed to AddTool
+	SecretRefs      []string // "secret://NAME" literals
+	Hooks           []string // hook methods called (WrapModel, WrapTool, OnRunStart ...)
+	Background      bool     // calls Effect (timers, listeners, connections)
+	RuntimeTools    bool     // calls AddTool with names only known at runtime
+	RuntimeProvides bool     // calls Provide with a name only known at runtime
+	OldNames        []string // pre-v0.4 names used (see eip plugin fix)
 }
 
 // Analyze parses a plugin source.
@@ -120,6 +121,10 @@ func Analyze(filename string, src []byte) (*Facts, error) {
 			case "Provide":
 				if s, ok := strLit(n.Args[0]); ok {
 					add(&fa.Provides, s)
+				} else if pre := literalPrefix(n.Args[0]); pre != "" {
+					add(&fa.Provides, pre+"<name>") // "model/"+name
+				} else {
+					fa.RuntimeProvides = true
 				}
 			case "AddTool":
 				if name := toolName(n.Args[0]); name != "" {
@@ -150,6 +155,17 @@ func Analyze(filename string, src []byte) (*Facts, error) {
 
 // newHookName maps pre-v0.4 hook methods to their names now.
 var newHookName = map[string]string{"OnAgentStart": "OnRunStart", "OnAgentEnd": "OnRunEnd", "OnStepPrepare": "BeforeStep", "OnModelAfter": "AfterModel"}
+
+// literalPrefix returns "model/" for "model/"+name (a string literal
+// followed by something computed), else "".
+func literalPrefix(e ast.Expr) string {
+	if b, ok := e.(*ast.BinaryExpr); ok && b.Op == token.ADD {
+		if s, ok := strLit(b.X); ok {
+			return s
+		}
+	}
+	return ""
+}
 
 func isApplySig(t *ast.FuncType) bool {
 	if t.Params == nil || len(t.Params.List) != 1 || t.Results == nil || len(t.Results.List) != 1 {
@@ -468,6 +484,9 @@ func Lint(src *Source) *Report {
 		add(Error, "requires-mismatch", "manifest requires %v != source var Requires %v", m.Needs(), fa.Inject)
 	}
 	for _, s := range fa.Provides {
+		if strings.HasSuffix(s, "<name>") {
+			continue // computed at runtime ("model/"+name): nothing to list
+		}
 		if !contains(canonical(m.Provides), sdk.CanonicalService(s)) {
 			add(Error, "provides", "source provides %q but the manifest doesn't list it", s)
 		}
@@ -550,8 +569,19 @@ func Infer(name string, fa *Facts) *Manifest {
 		desc = name + " plugin"
 	}
 	return &Manifest{Schema: 1, Name: name, Version: "0.1.0", Description: desc,
-		Permissions: fa.Permissions, Requires: canonical(fa.Inject), Provides: fa.Provides, Tools: fa.Tools,
+		Permissions: fa.Permissions, Requires: canonical(fa.Inject), Provides: literalOnly(fa.Provides), Tools: fa.Tools,
 		Secrets: validSecrets(fa.SecretRefs), EIPAgent: ">=" + sdkVersion()}
+}
+
+// literalOnly drops names computed at runtime ("model/<name>").
+func literalOnly(names []string) []string {
+	var out []string
+	for _, n := range names {
+		if !strings.HasSuffix(n, "<name>") {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 func validSecrets(refs []string) []string {

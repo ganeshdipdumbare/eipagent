@@ -32,6 +32,9 @@ func Summary(name string, fa *Facts) string {
 	if len(fa.Provides) > 0 {
 		parts = append(parts, "provides "+strings.Join(canonical(fa.Provides), ", "))
 	}
+	if fa.RuntimeProvides {
+		parts = append(parts, "provides services named at runtime")
+	}
 	if fa.Background {
 		parts = append(parts, "runs background work")
 	}
