@@ -11,6 +11,7 @@ import (
 	"github.com/traefik/yaegi/stdlib"
 
 	"github.com/ganeshdipdumbare/eipagent/engine/symbols"
+	"github.com/ganeshdipdumbare/eipagent/sdk"
 )
 
 // Permissions a plugin can declare with `var Permissions = []string{...}`.
@@ -277,20 +278,7 @@ func pluginEnv(perms []string) []string {
 
 // SecretLike reports whether an environment variable name looks like a
 // credential, which plugins with only the env permission don't see.
-func SecretLike(name string) bool {
-	n := strings.ToUpper(name)
-	for _, s := range []string{"_KEY", "_TOKEN", "_SECRET", "_PASSWORD", "_PASS", "_PASSWD", "_DSN", "_CREDENTIALS", "_CREDENTIAL", "_PAT"} {
-		if strings.HasSuffix(n, s) {
-			return true
-		}
-	}
-	for _, s := range []string{"PASSWORD", "SECRET", "TOKEN", "APIKEY", "API_KEY", "PRIVATE_KEY", "DATABASE_URL"} {
-		if strings.Contains(n, s) {
-			return true
-		}
-	}
-	return false
-}
+func SecretLike(name string) bool { return sdk.SecretLike(name) }
 
 func intersect(a, b []string) []string {
 	in := map[string]bool{}

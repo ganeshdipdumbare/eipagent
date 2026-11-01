@@ -26,7 +26,12 @@ The goal is secure defaults that stay simple. `eipagent.New()` with no options u
    - `grants` limits each plugin to its own secrets. The caller identity is bound by the core: a plugin that looks up the `secrets` service gets a copy tied to its own name, so it can't ask as another plugin.
    - Every resolved value is registered for redaction. `ctx.Logf`, `audit_file`, `audit_http`, `trace_file` and `trace_otlp` replace it with `[REDACTED]` wherever it appears: tool arguments, results, model output, errors.
    - Every lookup is audited as `secret.access` (plugin, secret name, granted or denied, never the value). Denials are always recorded. Granted reads are recorded once per plugin and secret every 10 minutes, and again right away when the value changes (a rotation), so plugins that resolve secrets per call don't flood the log.
-   - In `WithRunIn` mode keys never enter the sandbox, because model calls are bridged to the host.
+   - In `WithRunIn` mode no secret enters the sandbox:
+     - Model providers and `secrets_*` providers always stay on the host; model calls are bridged.
+     - The box's `secrets` service returns placeholders (`eipsec_` + 32 hex), never values. Grants are checked on the host, and the placeholder is audited as `secret.access`.
+     - The box's HTTP (`http.DefaultTransport`) is made by the host. The host swaps a placeholder for its value only when the destination matches that secret's `RunIn.SecretHosts` globs; otherwise it refuses and records `secret.egress_denied`. Requests without placeholders may reach only `RunIn.Egress` (none by default). Responses come back redacted, and redirects are not followed on the host, so every hop is checked again.
+     - Sandbox env and mounts are checked by the core, for `RunIn.Spec` and for every sandbox a plugin creates or runs a command in: a value holding a resolved secret, or a credential-looking name whose value isn't a placeholder, is refused, and so are mounts of `/` or a docker/podman/containerd socket.
+     - `eip serve --stdio` refuses to start when its environment holds a credential-looking variable that isn't a placeholder.
 5. **Audit and traces.** `audit_file` writes a hash-chained JSONL log covering:
    - plugin lifecycle, with the sha256 and permissions of each plugin, and store events (install, approve, enable, failed enable, rollback, quarantine, uninstall, with who did it)
    - secret access
@@ -53,6 +58,9 @@ The goal is secure defaults that stay simple. `eipagent.New()` with no options u
 - `sandbox_local` has no isolation.
 - Docker can't filter egress per host. Use `network: none`, or a provider that supports allowlists.
 - The audit chain detects tampering but doesn't prevent deleting the whole file. Ship it off-host with `audit_http`.
+- `WithRunIn` placeholders are swapped only for HTTP made through `http.DefaultTransport` (clients without their own `Transport`). A plugin that needs the raw value in-process (a database DSN, env for a stdio MCP server) or dials with its own transport (`tool_fetch`) can't use a secret in the box; load it on the host (`RunIn.HostPlugins`). Responses are buffered (32 MB cap), so streaming endpoints don't stream through the host.
+- The host trusts the box to name the plugin that asks for a secret, so grants inside the box are only as strong as the box. A placeholder is still useless outside its `SecretHosts`.
+- Sandboxes a plugin creates inside a `WithRunIn` box are nested in it and get the same placeholders; they are not started on the host.
 - Redaction applies to logs, traces and audit records (the sinks). It does not hide a secret from the model or from your app: if a tool returns a key in its result, the model sees it.
 - Redaction matches the values resolved through the `secrets` service and their JSON, URL, base64 and hex encodings. Values shorter than 4 bytes can't be redacted; their `secret.access` record says so. Other transformations (splitting, custom encodings) aren't caught.
 - The audit chain without a key detects edits but not a full rewrite by someone with write access; use `key` or `audit_http`.

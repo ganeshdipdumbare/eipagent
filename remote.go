@@ -18,9 +18,15 @@ import (
 )
 
 // RunIn runs the whole agent inside a sandbox. The host keeps the model
-// provider (and its API keys), host-only Go tools and the sandbox
+// provider, the secrets provider, host-only Go tools and the sandbox
 // provider; everything else — loop, plugins, middleware, file and shell
 // tools, threads — runs in the box.
+//
+// No secret enters the box. Its "secrets" service returns placeholders
+// (eipsec_...); its HTTP requests are made by the host, which swaps a
+// placeholder for the real value only when the request goes to a host
+// listed for that secret in SecretHosts, and redacts secret values out
+// of responses. Requests without placeholders may reach only Egress.
 type RunIn struct {
 	Provider       string              // sandbox plugin suffix: "docker", "local", or your own sandbox_<name>
 	ProviderConfig map[string]any      // config for sandbox_<Provider>
@@ -29,6 +35,8 @@ type RunIn struct {
 	PluginDirs     []string            // uploaded to the box (plugins travel as source)
 	HostPlugins    []engine.PluginSpec // extra plugins that stay on the host (e.g. mw_retry for model calls)
 	NoBridgeTools  bool                // don't expose host Go tools to the box
+	SecretHosts    map[string][]string // secret name -> host globs its placeholder may be sent to
+	Egress         []string            // host globs the box may reach without secrets (none by default)
 }
 
 // WithRunIn starts the agent inside a sandbox; the API is unchanged.
@@ -37,13 +45,14 @@ func WithRunIn(r RunIn) Option { return func(c *config) { c.runIn = &r } }
 func withoutProviderAutoload() Option { return func(c *config) { c.noProviderAuto = true } }
 
 type remote struct {
-	host *Agent
-	box  *sdk.Sandbox
-	proc *sdk.Process
-	conn *rpc.Conn
-	mu   sync.Mutex
-	subs map[string]func(sdk.Event)
-	seq  int
+	host   *Agent
+	box    *sdk.Sandbox
+	proc   *sdk.Process
+	conn   *rpc.Conn
+	mu     sync.Mutex
+	subs   map[string]func(sdk.Event)
+	seq    int
+	broker *broker
 }
 
 func newRemote(cfg *config) (*Agent, error) {
@@ -57,16 +66,24 @@ func newRemote(cfg *config) (*Agent, error) {
 	// Host side: model provider + keys, sandbox provider, host-only tools.
 	hostCfg := *cfg
 	hostCfg.runIn, hostCfg.profiles, hostCfg.dirs = nil, nil, nil
-	hostCfg.specs = append([]engine.PluginSpec{{Use: "sandbox_" + ri.Provider, Config: ri.ProviderConfig}}, ri.HostPlugins...)
-	// Model providers (and their keys) always stay on the host.
-	var boxSpecs []engine.PluginSpec
+	if err := sdk.CheckSandboxSpec(ri.Spec); err != nil {
+		return nil, fmt.Errorf("eipagent: RunIn.Spec: %w", err)
+	}
+	hostCfg.specs = []engine.PluginSpec{{Use: "sandbox_" + ri.Provider, Config: ri.ProviderConfig}}
+	// Secret providers, then model providers (which resolve their keys
+	// through them), always stay on the host.
+	var boxSpecs, models []engine.PluginSpec
 	for _, s := range cfg.specs {
-		if strings.HasPrefix(sdk.CanonicalPlugin(s.Use), "model_") {
+		switch use := sdk.CanonicalPlugin(s.Use); {
+		case strings.HasPrefix(use, "secrets_"):
 			hostCfg.specs = append(hostCfg.specs, s)
-		} else {
+		case strings.HasPrefix(use, "model_"):
+			models = append(models, s)
+		default:
 			boxSpecs = append(boxSpecs, s)
 		}
 	}
+	hostCfg.specs = append(append(hostCfg.specs, ri.HostPlugins...), models...)
 	if len(cfg.profiles) > 0 && hostCfg.model == "" {
 		var p engine.Profile
 		if err := engine.ReadJSON(cfg.profiles[len(cfg.profiles)-1], &p); err == nil {
@@ -98,7 +115,7 @@ func newRemote(cfg *config) (*Agent, error) {
 	if err != nil {
 		return fail(err)
 	}
-	r := &remote{host: host, box: box, subs: map[string]func(sdk.Event){}}
+	r := &remote{host: host, box: box, subs: map[string]func(sdk.Event){}, broker: newBroker(host, ri)}
 	fail = func(err error) (*Agent, error) { r.close(); return nil, err }
 
 	tmp, err := os.MkdirTemp("", "eip-runin-")
@@ -186,7 +203,8 @@ func newRemote(cfg *config) (*Agent, error) {
 func (r *remote) handle(noTools bool, hostTools []sdk.Tool) {
 	r.conn.Handle("host.hello", func(context.Context, json.RawMessage) (any, error) {
 		snap := r.host.eng.Root().Snapshot()
-		h := wireHello{}
+		_, hasSecrets := snap.Services["secrets"].(*sdk.Secrets)
+		h := wireHello{Secrets: hasSecrets, Egress: true}
 		for k := range snap.Services {
 			if strings.HasPrefix(k, "model/") {
 				h.Providers = append(h.Providers, strings.TrimPrefix(k, "model/"))
@@ -222,6 +240,20 @@ func (r *remote) handle(noTools bool, hostTools []sdk.Tool) {
 			return p.Generate(c, req)
 		}
 		return snap.ModelChain(base)(c, req) // host middleware & policy apply
+	})
+	r.conn.Handle("host.secret", func(c context.Context, raw json.RawMessage) (any, error) {
+		var req wireSecretReq
+		if err := json.Unmarshal(raw, &req); err != nil {
+			return nil, err
+		}
+		return r.broker.placeholder(c, req.Caller, req.Name)
+	})
+	r.conn.Handle("host.http", func(c context.Context, raw json.RawMessage) (any, error) {
+		var req wireHTTPReq
+		if err := json.Unmarshal(raw, &req); err != nil {
+			return nil, err
+		}
+		return r.broker.fetch(c, req)
 	})
 	r.conn.Handle("host.tool", func(c context.Context, raw json.RawMessage) (any, error) {
 		var call wireToolCall

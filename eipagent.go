@@ -387,6 +387,24 @@ func (c *config) resolve() (*engine.Profile, *engine.Policy, *engine.Lock, error
 	if c.hotReload != nil {
 		pol.HotReload = *c.hotReload
 	}
+	if c.bridgedSecrets != nil {
+		// In a RunIn box no secrets_* plugin loads (the profile's or the
+		// policy's): the host's provider answers, with placeholders, and
+		// it loads first so required plugins can resolve their refs.
+		keep := func(specs []engine.PluginSpec) []engine.PluginSpec {
+			var out []engine.PluginSpec
+			for _, s := range specs {
+				if !strings.HasPrefix(sdk.CanonicalPlugin(s.Use), "secrets_") {
+					out = append(out, s)
+				}
+			}
+			return out
+		}
+		prof.Plugins = keep(prof.Plugins)
+		cp := *pol
+		cp.Require = append([]engine.PluginSpec{{Use: c.bridgedSecrets.Name}}, keep(pol.Require)...)
+		pol = &cp
+	}
 	lock := &engine.Lock{Plugins: map[string]string{}}
 	lockPath := c.lockPath
 	if lockPath == "" {

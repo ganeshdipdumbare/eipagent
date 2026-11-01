@@ -2,6 +2,15 @@
 
 All notable changes to eipagent. Versions follow [semantic versioning](https://semver.org); see [Versioning](README.md#versioning) for what that covers while the major version is 0.
 
+## Unreleased
+
+### Security
+
+- `WithRunIn`: secrets never enter the sandbox. `secrets_*` providers stay on the host. The box's `secrets` service returns placeholders (`eipsec_...`), and the box's HTTP is made by the host, which swaps a placeholder for its value only on requests to that secret's `RunIn.SecretHosts`. Responses come back redacted. Requests without secrets may reach only `RunIn.Egress`, which is empty by default.
+- Sandbox env and mounts are checked by the core (`sdk.CheckSandboxSpec`, `sdk.CheckSandboxEnv`): resolved secret values, credential-looking names without a placeholder, and mounts of `/` or a container runtime socket are refused.
+- `eip serve --stdio` refuses to start when its environment holds a credential.
+- **Behavior change:** HTTP from plugins inside a `WithRunIn` box goes through the host and is refused unless the host is listed in `RunIn.Egress` or `RunIn.SecretHosts`.
+
 ## v0.4.0 — 2026-11-01
 
 One vocabulary, in Go terms, and a documentation section that says what to use when. **Nothing breaks:** every old name below keeps working until v1.0 and logs a notice once. `eip plugin fix` rewrites plugin files.

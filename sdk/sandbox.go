@@ -2,7 +2,10 @@ package sdk
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"path/filepath"
+	"strings"
 )
 
 // ---- Sandboxes: provided as "sandbox/<name>" by provider plugins ----
@@ -102,16 +105,80 @@ func pluginSandboxes(p *SandboxProvider) *SandboxProvider {
 		if b == nil {
 			return nil, err
 		}
-		cp := *b
+		cp := *guardEnv(b)
 		cp.Upload, cp.Download = nil, nil
 		return &cp, err
 	}
 	cp := *p
 	if p.Create != nil {
-		cp.Create = func(ctx context.Context, spec SandboxSpec) (*Sandbox, error) { return strip(p.Create(ctx, spec)) }
+		cp.Create = func(ctx context.Context, spec SandboxSpec) (*Sandbox, error) {
+			if err := CheckSandboxSpec(spec); err != nil {
+				return nil, err
+			}
+			return strip(p.Create(ctx, spec))
+		}
 	}
 	if p.Attach != nil {
 		cp.Attach = func(ctx context.Context, id string) (*Sandbox, error) { return strip(p.Attach(ctx, id)) }
 	}
 	return &cp
+}
+
+// guardEnv wraps Exec and Start so every command run in the box passes
+// CheckSandboxEnv.
+func guardEnv(b *Sandbox) *Sandbox {
+	if b == nil {
+		return nil
+	}
+	cp := *b
+	if b.Exec != nil {
+		cp.Exec = func(ctx context.Context, req ExecRequest) (*ExecResult, error) {
+			if err := CheckSandboxEnv(req.Env); err != nil {
+				return nil, err
+			}
+			return b.Exec(ctx, req)
+		}
+	}
+	if b.Start != nil {
+		cp.Start = func(ctx context.Context, req ExecRequest) (*Process, error) {
+			if err := CheckSandboxEnv(req.Env); err != nil {
+				return nil, err
+			}
+			return b.Start(ctx, req)
+		}
+	}
+	return &cp
+}
+
+// CheckSandboxEnv refuses environment variables that would put a real
+// credential into a sandbox: a value holding a resolved secret, or a
+// credential-looking name whose value isn't a placeholder. Placeholders
+// (see NewPlaceholder) are the only form a secret may take in a box.
+func CheckSandboxEnv(env map[string]string) error {
+	for k, v := range env {
+		if ContainsSecret(v) {
+			return fmt.Errorf("sandbox env %s holds a secret value; secrets stay outside the sandbox", k)
+		}
+		if SecretLike(k) && v != "" && len(FindPlaceholders(v)) == 0 {
+			return fmt.Errorf("sandbox env %s looks like a credential; pass a secret:// placeholder, not a value", k)
+		}
+	}
+	return nil
+}
+
+// CheckSandboxSpec applies CheckSandboxEnv and refuses mounts that would
+// hand the box the host itself: "/" or a container runtime socket (with
+// it a box could start containers outside every rule here).
+func CheckSandboxSpec(spec SandboxSpec) error {
+	if err := CheckSandboxEnv(spec.Env); err != nil {
+		return err
+	}
+	for _, m := range spec.Mounts {
+		h := filepath.Clean(m.Host)
+		base := filepath.Base(h)
+		if h == "/" || (strings.HasSuffix(base, ".sock") && (strings.Contains(base, "docker") || strings.Contains(base, "podman") || strings.Contains(base, "containerd"))) {
+			return fmt.Errorf("sandbox mount %s is not allowed (host root or container runtime socket)", m.Host)
+		}
+	}
+	return nil
 }

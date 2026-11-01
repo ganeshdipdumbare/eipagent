@@ -1,10 +1,13 @@
 package eipagent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -16,12 +19,24 @@ import (
 
 // Serve runs an agent that is driven over JSON-RPC on r/w — this is
 // `eip serve --stdio`, what runs inside a sandbox for WithRunIn. Model
-// calls and host-only tools are bridged back to the host (bridge_llm,
-// bridge_tools), so API keys never enter the sandbox.
+// calls, secrets, HTTP and host-only tools are bridged back to the host
+// (bridge_llm, bridge_secrets, host.http, bridge_tools), so API keys
+// and other secrets never enter the sandbox.
 func Serve(ctx context.Context, r io.Reader, w io.Writer, opts ...Option) error {
 	conn := rpc.New(r, w, nil)
 	go conn.Serve()
 	defer conn.Close()
+
+	// Fail closed: a box whose environment holds a credential was set up
+	// wrong, and every plugin and command in it could read the value.
+	for _, kv := range os.Environ() {
+		name, v, _ := strings.Cut(kv, "=")
+		if sdk.SecretLike(name) && v != "" && len(sdk.FindPlaceholders(v)) == 0 {
+			err := fmt.Errorf("serve: refusing to start: the sandbox environment holds %s; secrets stay on the host", name)
+			conn.Notify("box.error", err.Error())
+			return err
+		}
+	}
 
 	var hello wireHello
 	if err := conn.Call(ctx, "host.hello", struct{}{}, &hello); err != nil {
@@ -38,6 +53,14 @@ func Serve(ctx context.Context, r io.Reader, w io.Writer, opts ...Option) error 
 	opts = append(opts, withoutProviderAutoload(),
 		WithCompiledPlugin(bridgeLLM(conn, chunks, hello.Providers)),
 		WithCompiledPlugin(bridgeTools(conn, hello.Tools)))
+	if hello.Secrets {
+		opts = append(opts, withBridgedSecrets(bridgeSecrets(conn)))
+	}
+	if hello.Egress {
+		// Plugins' HTTP goes through the host (clients with their own
+		// Transport dial directly, which a no-network box refuses).
+		http.DefaultTransport = &hostTransport{conn: conn}
+	}
 	a, err := New(opts...)
 	if err != nil {
 		conn.Notify("box.error", err.Error())
@@ -190,4 +213,51 @@ func bridgeTools(conn *rpc.Conn, tools []wireTool) engine.Plugin {
 		}
 		return nil
 	}}
+}
+
+// bridgeSecrets provides "secrets" in the box: each lookup returns a
+// placeholder from the host, never a value.
+func bridgeSecrets(conn *rpc.Conn) engine.Plugin {
+	return engine.Plugin{Name: "bridge_secrets", Apply: func(ctx *sdk.Context) error {
+		return ctx.Provide("secrets", &sdk.Secrets{Get: func(c context.Context, caller, name string) (string, error) {
+			var ph string
+			err := conn.Call(c, "host.secret", wireSecretReq{Caller: caller, Name: name}, &ph)
+			return ph, err
+		}})
+	}}
+}
+
+// hostTransport sends HTTP requests to the host (host.http), which
+// swaps placeholders for secrets on allowed hosts and makes the call.
+type hostTransport struct{ conn *rpc.Conn }
+
+func (t *hostTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	var body []byte
+	if req.Body != nil {
+		b, err := io.ReadAll(req.Body)
+		req.Body.Close()
+		if err != nil {
+			return nil, err
+		}
+		body = b
+	}
+	h := map[string][]string(req.Header.Clone())
+	if req.Host != "" && req.Host != req.URL.Host {
+		h["Host"] = []string{req.Host}
+	}
+	var out wireHTTPResp
+	if err := t.conn.Call(req.Context(), "host.http", wireHTTPReq{Method: req.Method, URL: req.URL.String(), Header: h, Body: body}, &out); err != nil {
+		return nil, err
+	}
+	return &http.Response{Status: fmt.Sprintf("%d %s", out.Status, http.StatusText(out.Status)), StatusCode: out.Status,
+		Proto: "HTTP/1.1", ProtoMajor: 1, ProtoMinor: 1, Header: http.Header(out.Header),
+		Body: io.NopCloser(bytes.NewReader(out.Body)), ContentLength: int64(len(out.Body)), Request: req}, nil
+}
+
+// withBridgedSecrets makes p the box's only "secrets" provider.
+func withBridgedSecrets(p engine.Plugin) Option {
+	return func(c *config) {
+		c.bridgedSecrets = &p
+		c.compiled = append(c.compiled, p)
+	}
 }

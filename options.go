@@ -27,6 +27,7 @@ type config struct {
 	noDefaults          bool
 	noProviderAuto      bool
 	runIn               *RunIn
+	bridgedSecrets      *engine.Plugin // in a RunIn box: replaces every secrets_* plugin
 	store               *pluginpkg.Store
 }
 

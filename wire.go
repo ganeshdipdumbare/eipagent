@@ -78,9 +78,29 @@ type wireToolCall struct {
 type wireHello struct {
 	Providers []string   `json:"providers"`
 	Tools     []wireTool `json:"tools"`
+	Secrets   bool       `json:"secrets,omitempty"` // the box's "secrets" hands out placeholders from the host
+	Egress    bool       `json:"egress,omitempty"`  // the box's HTTP goes through the host (host.http)
 }
 
 type wireThreadState struct {
 	Messages []sdk.Message   `json:"messages"`
 	Pending  []sdk.Interrupt `json:"pending"`
+}
+
+type wireSecretReq struct {
+	Caller string `json:"caller"`
+	Name   string `json:"name"`
+}
+
+type wireHTTPReq struct {
+	Method string              `json:"method"`
+	URL    string              `json:"url"`
+	Header map[string][]string `json:"header,omitempty"`
+	Body   []byte              `json:"body,omitempty"`
+}
+
+type wireHTTPResp struct {
+	Status int                 `json:"status"`
+	Header map[string][]string `json:"header,omitempty"`
+	Body   []byte              `json:"body,omitempty"`
 }

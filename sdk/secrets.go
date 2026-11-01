@@ -263,3 +263,77 @@ func NewRunID() string {
 	rand.Read(b)
 	return hex.EncodeToString(b)
 }
+
+// SecretLike reports whether an environment variable name looks like a
+// credential (*_API_KEY, *_TOKEN, *PASSWORD* ...).
+func SecretLike(name string) bool {
+	n := strings.ToUpper(name)
+	for _, s := range []string{"_KEY", "_TOKEN", "_SECRET", "_PASSWORD", "_PASS", "_PASSWD", "_DSN", "_CREDENTIALS", "_CREDENTIAL", "_PAT"} {
+		if strings.HasSuffix(n, s) {
+			return true
+		}
+	}
+	for _, s := range []string{"PASSWORD", "SECRET", "TOKEN", "APIKEY", "API_KEY", "PRIVATE_KEY", "DATABASE_URL"} {
+		if strings.Contains(n, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// Placeholders: inside a WithRunIn sandbox the "secrets" service hands
+// out fake tokens of this form. Only the host maps them back to real
+// values, and only on requests to the hosts allowed for that secret.
+
+// PlaceholderPrefix starts every placeholder: "eipsec_" + 32 hex chars.
+const PlaceholderPrefix = "eipsec_"
+
+const placeholderLen = len(PlaceholderPrefix) + 32
+
+// NewPlaceholder returns a fresh random placeholder.
+func NewPlaceholder() string {
+	b := make([]byte, 16)
+	rand.Read(b)
+	return PlaceholderPrefix + hex.EncodeToString(b)
+}
+
+// FindPlaceholders returns the distinct placeholders in s, in order.
+func FindPlaceholders(s string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for i := 0; ; {
+		j := strings.Index(s[i:], PlaceholderPrefix)
+		if j < 0 {
+			return out
+		}
+		i += j
+		if i+placeholderLen <= len(s) && isHex(s[i+len(PlaceholderPrefix):i+placeholderLen]) {
+			if p := s[i : i+placeholderLen]; !seen[p] {
+				seen[p] = true
+				out = append(out, p)
+			}
+			i += placeholderLen
+		} else {
+			i += len(PlaceholderPrefix)
+		}
+	}
+}
+
+func isHex(s string) bool {
+	for _, r := range s {
+		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// ContainsSecret reports whether s holds a value resolved through the
+// "secrets" service (in any form Redact catches). Placeholders don't
+// count, even where they were registered for redaction.
+func ContainsSecret(s string) bool {
+	for _, p := range FindPlaceholders(s) {
+		s = strings.ReplaceAll(s, p, "")
+	}
+	return Redact(s) != s
+}
