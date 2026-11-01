@@ -131,6 +131,8 @@ func Analyze(filename string, src []byte) (*Facts, error) {
 				fa.Background = true
 			case "WrapModel", "WrapTool", "OnRunStart", "OnRunEnd", "BeforeStep", "AfterModel", "OnEvent":
 				add(&fa.Hooks, sel.Sel.Name)
+			case "On": // the older before/after tool hooks (HookToolBefore / HookToolAfter)
+				add(&fa.Hooks, "WrapTool")
 			case "OnAgentStart", "OnAgentEnd", "OnStepPrepare", "OnModelAfter":
 				add(&fa.Hooks, newHookName[sel.Sel.Name])
 				add(&fa.OldNames, sel.Sel.Name+" (now "+newHookName[sel.Sel.Name]+")")

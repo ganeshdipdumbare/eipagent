@@ -327,7 +327,7 @@ td code { white-space: nowrap; }
 <aside class="side" id="side" aria-label="Documentation">
   <div class="version">
     <span class="logo"><svg viewBox="0 0 32 32" aria-hidden="true"><rect x="3" y="3" width="11" height="11" rx="2.5" fill="var(--bg)"/><rect x="18" y="3" width="11" height="11" rx="2.5" fill="none" stroke="var(--bg)" stroke-width="2.4"/><rect x="3" y="18" width="11" height="11" rx="2.5" fill="none" stroke="var(--bg)" stroke-width="2.4"/><rect x="18" y="18" width="11" height="11" rx="2.5" fill="var(--accent)"/></svg></span>
-    <span><b>v0.1</b><small>Go 1.27 · latest</small></span>
+    <span><b>v0.4.0</b><small>Go 1.27 · latest</small></span>
   </div>
   <nav id="sidenav"></nav>
 </aside>
@@ -1410,7 +1410,7 @@ Config:
 
 Config: models ([&#34;anthropic:claude-...&#34;, &#34;openai:gpt-...&#34;]), tried in
 order after the requested model. Default priority 20 (outside hook_retry).</pre></details></div>
-<div class="builtin" id="plugin-hook_guard"><div class="bhead"><code>hook_guard</code><span class="bsum">registers nothing found by static analysis · no permissions</span></div><p>Vetoes tool calls whose arguments contain a blocked word. Config: words (default [&#34;password&#34;]).</p><details><summary>Config and details</summary><pre>Vetoes tool calls whose arguments contain a blocked word.
+<div class="builtin" id="plugin-hook_guard"><div class="bhead"><code>hook_guard</code><span class="bsum">wraps tool calls · no permissions</span></div><p>Vetoes tool calls whose arguments contain a blocked word. Config: words (default [&#34;password&#34;]).</p><details><summary>Config and details</summary><pre>Vetoes tool calls whose arguments contain a blocked word.
 Config: words (default [&#34;password&#34;]).</pre></details></div>
 <div class="builtin" id="plugin-hook_limits"><div class="bhead"><code>hook_limits</code><span class="bsum">wraps model calls · wraps tool calls · runs at run end · no permissions</span></div><p>Caps model calls, tool calls and tokens per run and per thread.</p><details><summary>Config and details</summary><pre>Caps model calls, tool calls and tokens per run and per thread.
 
