@@ -3,6 +3,7 @@ package app
 import (
 	"bufio"
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
 	"embed"
 	"encoding/hex"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/ganeshdipdumbare/eipagent"
 	"github.com/ganeshdipdumbare/eipagent/audit"
+	"github.com/ganeshdipdumbare/eipagent/pluginpkg"
 	"github.com/ganeshdipdumbare/eipagent/sdk"
 )
 
@@ -29,8 +31,12 @@ type Config struct {
 	DataDir     string  // threads and the audit log live here
 	RefundLimit float64 // refunds above this need a supervisor
 	RatePerMin  int     // agent runs per client per minute (default 20)
-	MaxRuns     int     // agent runs in flight at once (default 8)
-	TrustProxy  bool    // use X-Forwarded-For as the client address
+	// AllowPluginCode lets the Plugins tab install any code (without
+	// permissions). Off: only the bundled sample plugins. Never turn it on
+	// for a public deployment: the code runs in this server.
+	AllowPluginCode bool
+	MaxRuns         int  // agent runs in flight at once (default 8)
+	TrustProxy      bool // use X-Forwarded-For as the client address
 }
 
 type Server struct {
@@ -39,6 +45,9 @@ type Server struct {
 	cfg   Config
 	mux   *http.ServeMux
 	limit *limiter
+
+	plugins *pluginpkg.Store   // plugins added from the UI
+	signer  ed25519.PrivateKey // signs them
 }
 
 // User identities. A real app takes these from its login session.
@@ -69,6 +78,10 @@ func New(cfg Config) (*Server, error) {
 	if os.Getenv("MAIL_RELAY_TOKEN") == "" {
 		os.Setenv("MAIL_RELAY_TOKEN", "demo-relay-token-5f2c9a") // a stand-in; production reads it from Vault
 	}
+	pstore, signer, err := openPluginStore(cfg.DataDir)
+	if err != nil {
+		return nil, err
+	}
 	opts := []eipagent.Option{
 		eipagent.WithModel(cfg.Model),
 		eipagent.WithInstructions(instructions),
@@ -90,6 +103,8 @@ func New(cfg Config) (*Server, error) {
 		eipagent.WithPlugin("threads_file", map[string]any{"dir": filepath.Join(cfg.DataDir, "threads")}),
 		eipagent.WithPlugin("audit_file", map[string]any{"path": filepath.Join(cfg.DataDir, "audit.jsonl")}),
 		eipagent.WithCompiledPlugin(Inspector()),
+		// Plugins added in the Plugins tab, live in this agent.
+		eipagent.WithPluginStore(pstore),
 		eipagent.WithLogger(func(scope, msg string) {}),
 	}
 	if strings.HasPrefix(cfg.Model, "demo:") {
@@ -99,7 +114,8 @@ func New(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{agent: agent, shop: shop, cfg: cfg, mux: http.NewServeMux(), limit: newLimiter(cfg.RatePerMin, cfg.MaxRuns, cfg.TrustProxy)}
+	s := &Server{agent: agent, shop: shop, cfg: cfg, mux: http.NewServeMux(), limit: newLimiter(cfg.RatePerMin, cfg.MaxRuns, cfg.TrustProxy),
+		plugins: pstore, signer: signer}
 	s.routes()
 	return s, nil
 }
@@ -117,6 +133,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/threads/{id}/messages", s.guard(s.postMessage))
 	s.mux.HandleFunc("POST /api/threads/{id}/decisions", s.guard(s.postDecisions))
 	s.mux.HandleFunc("GET /api/approvals", s.approvals)
+	s.mux.HandleFunc("GET /api/plugins", s.listPlugins)
+	s.mux.HandleFunc("POST /api/plugins", s.guard(s.submitPlugin))
+	s.mux.HandleFunc("POST /api/plugins/{name}", s.guard(s.pluginAction))
 	s.mux.HandleFunc("GET /api/audit", s.auditLog)
 	s.mux.HandleFunc("GET /api/orders", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"orders": s.shop.Orders(), "outbox": s.shop.Outbox()})

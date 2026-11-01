@@ -472,3 +472,22 @@ func Apply(ctx *sdk.Context) error {
 		t.Fatalf("summary: %s", got)
 	}
 }
+
+func TestInstallSourceVersionsAndReports(t *testing.T) {
+	pub, priv, _ := GenerateKey()
+	keys, _ := TrustedKeys(pub)
+	sk, _ := ParsePrivateKey(priv)
+	st, _ := OpenStore(t.TempDir(), StoreOptions{Verify: VerifyOptions{TrustedKeys: keys, RequireSignature: true}})
+	v1, rep, err := st.InstallSource("greet", []byte(goodSrc), sk, "sam")
+	if err != nil || v1.Version != "0.1.0" || v1.State != StateValidated || !rep.OK() {
+		t.Fatalf("first: %v %+v", err, v1)
+	}
+	v2, _, err := st.InstallSource("greet", []byte(strings.Replace(goodSrc, `"hi"`, `"hello"`, 1)), sk, "sam")
+	if err != nil || v2.Version != "0.1.1" {
+		t.Fatalf("update: %v %+v", err, v2)
+	}
+	_, rep, err = st.InstallSource("greet", []byte("package plugin\n\nimport \"os/exec\"\n\nvar _ = exec.Command\n"), sk, "sam")
+	if err == nil || rep == nil || rep.OK() {
+		t.Fatal("bad source installed, or no report for the UI")
+	}
+}

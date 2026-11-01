@@ -22,7 +22,7 @@ func DemoModel() eipagent.Plugin {
 			Name:         "demo",
 			Capabilities: map[string]bool{"tools": true, "streaming": true},
 			Generate: func(c context.Context, req *sdk.ModelRequest) (*sdk.ModelResponse, error) {
-				msg := decide(req.Messages)
+				msg := decide(req.Messages, req.Tools)
 				if req.Stream != nil && msg.Content != "" {
 					for _, w := range strings.SplitAfter(msg.Content, " ") {
 						select {
@@ -74,7 +74,52 @@ func say(format string, a ...any) sdk.Message {
 	return sdk.Message{Role: sdk.RoleAssistant, Content: fmt.Sprintf(format, a...)}
 }
 
-func decide(msgs []sdk.Message) sdk.Message {
+// demoTools are the app's own tools; any other tool came from a plugin
+// added at runtime (the Plugins tab).
+var demoTools = map[string]bool{"lookup_order": true, "search_help_center": true, "issue_refund": true, "send_email": true}
+
+var cityRe = regexp.MustCompile(`\b(?:to|in|for)\s+([A-Z][a-zA-Z]+(?:\s[A-Z][a-zA-Z]+)?)`)
+
+// pluginTool finds a tool from a runtime plugin that the message names
+// ("shipping estimate" or "shipping_estimate"), the way a real model
+// would pick a newly available tool.
+func pluginTool(text string, tools []sdk.Tool) *sdk.Tool {
+	t := strings.ToLower(text)
+	for i := range tools {
+		n := tools[i].Name
+		if demoTools[n] {
+			continue
+		}
+		if strings.Contains(t, n) || strings.Contains(t, strings.ReplaceAll(n, "_", " ")) {
+			return &tools[i]
+		}
+	}
+	return nil
+}
+
+// argsFor fills a plugin tool's arguments from the message: a city for
+// city-like fields, the order number for order fields, else the text.
+func argsFor(tool sdk.Tool, text, orderID string) map[string]any {
+	args := map[string]any{}
+	props, _ := tool.Schema["properties"].(map[string]any)
+	for k := range props {
+		switch lk := strings.ToLower(k); {
+		case strings.Contains(lk, "city") || strings.Contains(lk, "destination") || strings.Contains(lk, "place"):
+			city := "Berlin"
+			if m := cityRe.FindStringSubmatch(text); m != nil {
+				city = m[1]
+			}
+			args[k] = city
+		case strings.Contains(lk, "order"):
+			args[k] = orderID
+		default:
+			args[k] = text
+		}
+	}
+	return args
+}
+
+func decide(msgs []sdk.Message, tools []sdk.Tool) sdk.Message {
 	ui := -1
 	for i := len(msgs) - 1; i >= 0; i-- {
 		if msgs[i].Role == sdk.RoleUser {
@@ -99,6 +144,15 @@ func decide(msgs []sdk.Message) sdk.Message {
 		if m.Role == sdk.RoleTool {
 			results[m.ToolName] = m
 		}
+	}
+	if t := pluginTool(user, tools); t != nil {
+		if r, ok := results[t.Name]; ok {
+			if r.IsError {
+				return say("The %s plugin couldn't answer: %s", t.Name, r.Content)
+			}
+			return say("%s", r.Content)
+		}
+		return call(t.Name, argsFor(*t, user, orderID))
 	}
 	var order Order
 	if r, ok := results["lookup_order"]; ok && !r.IsError {

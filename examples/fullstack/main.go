@@ -26,12 +26,13 @@ func main() {
 	// the last X-Forwarded-For entry, which the proxy appends. Visitors who
 	// come through another proxy (the docs site's rewrite) share its address.
 	proxied := flag.Bool("trust-proxy", os.Getenv("RENDER") != "", "rate-limit by X-Forwarded-For")
+	allowCode := flag.Bool("allow-plugin-code", false, "let the Plugins tab install any code (never on a public server)")
 	flag.Parse()
 	if port := os.Getenv("PORT"); port != "" { // set by hosts such as Fly.io
 		*addr = ":" + port
 	}
 
-	srv, err := app.New(app.Config{Model: *model, DataDir: *data, RefundLimit: *limit, RatePerMin: *rate, MaxRuns: *maxRuns, TrustProxy: *proxied})
+	srv, err := app.New(app.Config{Model: *model, DataDir: *data, RefundLimit: *limit, RatePerMin: *rate, MaxRuns: *maxRuns, TrustProxy: *proxied, AllowPluginCode: *allowCode})
 	if err != nil {
 		log.Fatal(err)
 	}

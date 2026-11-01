@@ -604,3 +604,37 @@ func TrustedKeys(keys ...string) ([]ed25519.PublicKey, error) {
 	}
 	return out, nil
 }
+
+// InstallSource installs a plugin submitted as source text (from an admin
+// UI or an API). It drafts the manifest from the code (description from
+// the doc comment, Requires and Permissions from the variables), gives it
+// the next version (0.1.0, then the newest installed version + 1 patch),
+// lints it without running it, signs it with key and installs it. The
+// version is held as VALIDATED until approved. The lint report comes back
+// even when installing fails, so a UI can show what to fix.
+func (s *Store) InstallSource(name string, code []byte, key ed25519.PrivateKey, by string) (*Version, *Report, error) {
+	if !nameRe.MatchString(name) {
+		return nil, nil, fmt.Errorf("name %q must match %s", name, nameRe)
+	}
+	fa, err := Analyze(name+".go", code)
+	if err != nil {
+		rep := &Report{Name: name, State: StateDraft, Issues: []Issue{{Error, "source", err.Error()}}}
+		return nil, rep, rep.Err()
+	}
+	m := Infer(name, fa)
+	m.Version = "0.1.0"
+	s.mu.Lock()
+	if p := s.st.Plugins[name]; p != nil {
+		if v, err := parseSemver(newestAny(p)); err == nil {
+			m.Version = fmt.Sprintf("%d.%d.%d", v[0], v[1], v[2]+1)
+		}
+	}
+	s.mu.Unlock()
+	src := &Source{Name: name, Manifest: m, Files: map[string][]byte{name + ".go": code}}
+	data, rep, err := Build(src, key)
+	if err != nil {
+		return nil, rep, err
+	}
+	v, err := s.Install(data, by)
+	return v, rep, err
+}

@@ -761,6 +761,16 @@ for (;;) {
 }</code></pre></div>
   <p>Approve an email and open the Activity tab: you'll see <code>Secret MAIL_RELAY_TOKEN · granted to mailer</code>, and the <code>send_email</code> row names <code>mailer</code> as the plugin that ran it. Every row carries the run id, so you can group a run's model calls, tool calls and secret reads. The token's value is never written. If it ever showed up in a tool result, a model reply or an error, the audit log, traces and logs would show <code>[REDACTED]</code> instead.</p>
 
+  <h3>Add, update and remove plugins while it runs</h3>
+  <p>The <b>Plugins</b> tab adds code to the running agent through the same lifecycle a platform team would use. The public demo offers a sample <code>shipping_estimate</code> plugin in three versions; the third one is broken on purpose. Locally, <code>go run ./examples/fullstack -allow-plugin-code</code> lets you write your own (without permissions: the code runs in the server).</p>
+  <ol class="timeline" aria-label="Plugin flow"><li class=""><span class="n">01</span><span class="h">submit</span><span class="d">Sam submits v0.1.0. The server lints it without running it, says what it does (“adds 1 tool (shipping_estimate)”), signs it with its own key and installs it as VALIDATED. Nothing runs yet.</span></li><li class=""><span class="n">02</span><span class="h">approve</span><span class="d">Ada approves it. <code>Enable</code> loads it into the running agent. Ask in the chat “What's the shipping estimate to Berlin?” and the model calls the new tool.</span></li><li class=""><span class="n">03</span><span class="h">update</span><span class="d">v0.1.1 adds express shipping. Approving it swaps it in; the next run uses it, and v0.1.0 becomes the rollback target.</span></li><li class="loop"><span class="n">04</span><span class="h">broken update</span><span class="d">v0.1.2 fails to start. It's marked FAILED, and v0.1.1 keeps answering: a bad version never replaces a running one.</span></li><li class="end"><span class="n">05</span><span class="h">roll back, remove</span><span class="d">One click goes back to the previous version, or removes the plugin and every version. Every step is in the audit trail.</span></li></ol>
+  <div class="code" data-title="go"><pre><code class="language-go">// The store the agent was built with (eipagent.WithPluginStore(pstore)).
+v, report, err := pstore.InstallSource(name, code, signingKey, user) // lint, sign, hold as VALIDATED
+// later, a supervisor:
+pstore.Approve(name, v.Version, "ada")
+pstore.Enable(name, v.Version) // live in this agent; a failure keeps the old version
+pstore.Rollback(name)          // or Uninstall(name)</code></pre></div>
+
   <h3>What the SDK handles for you</h3>
   <div class="table"><table>
   <thead><tr><th>You need</th><th>Without an agent framework</th><th>With eipagent</th></tr></thead>
@@ -770,6 +780,7 @@ for (;;) {
     <tr><td>Approve, edit or reject a call</td><td>Rewrite messages by hand so the model understands</td><td><code>Approve</code>, <code>Edit</code>, <code>Reject</code> decisions; the loop feeds the outcome back to the model</td></tr>
     <tr><td>Know who approved what</td><td>Ad-hoc logging</td><td><code>Decision.By</code> plus <code>audit_file</code>, hash-chained and verifiable</td></tr>
     <tr><td>Keep card numbers away from the model</td><td>Scrub every prompt path</td><td><code>hook_pii</code> masks them before every model call</td></tr>
+    <tr><td>Add or change behaviour without a redeploy</td><td>Ship a new build</td><td><code>Store.InstallSource</code>, approval, <code>Enable</code>; a failed update keeps the running version, and rollback is one call</td></tr>
     <tr><td>Give one component an API key, and only that one</td><td>Environment variables every package can read</td><td>Per-plugin grants in <code>secrets_env</code> or <code>secrets_vault</code>; every read audited; values redacted from logs, traces and audit</td></tr>
     <tr><td>Stream tokens and tool activity to a UI</td><td>Provider-specific streaming code</td><td>One <code>Events()</code> iterator, the same for every provider</td></tr>
     <tr><td>Two supervisors clicking at once</td><td>Locks around your storage</td><td>Versioned saves return <code>ErrThreadBusy</code> to the second writer</td></tr>
