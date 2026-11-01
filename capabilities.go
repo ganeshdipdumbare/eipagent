@@ -68,13 +68,13 @@ func WithApprovals(tools ...string) Option {
 }
 
 // WithSandbox runs shell and file tools inside a sandbox per thread
-// instead of on the host: "docker" (sandbox_docker), "local"
-// (sandbox_local: no isolation, for development) or a provider you
-// load yourself. Loads sandbox_<provider> + workspace_sandbox.
+// instead of on the host: "docker" (sandbox_docker), "microsandbox"
+// (sandbox_microsandbox: a microVM), "local" (sandbox_local: no
+// isolation, for development) or a provider you load yourself. Loads sandbox_<provider> + workspace_sandbox.
 func WithSandbox(provider string) Option {
 	return func(c *config) {
 		add := []engine.PluginSpec{{Use: "workspace_sandbox", Config: map[string]any{"provider": provider}}}
-		if provider == "docker" || provider == "local" {
+		if provider == "docker" || provider == "microsandbox" || provider == "local" {
 			add = append([]engine.PluginSpec{{Use: "sandbox_" + provider}}, add...)
 		}
 		c.specs = replaceKinds(c.specs, add, "workspace_")

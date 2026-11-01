@@ -853,6 +853,30 @@ if len(ap.Approvals) != 1 {
    any key in the logs or audit log? false</code></pre></div>
   <p>A <code>billing</code> plugin is granted <code>STRIPE_API_KEY</code> in <code>secrets_vault</code>. An <code>analytics</code> plugin looks up the service and asks as <code>billing</code>, and is refused, because the core supplies the caller. The key is rotated in Vault mid-run and the next call picks it up. Its tool leaks the key on purpose. The model and the app see it, but the logs and audit log only ever contain <code>[REDACTED]</code>. <a href="https://github.com/ganeshdipdumbare/eipagent/blob/main/examples/secrets/main.go">Source</a></p>
 
+  <h2>Secrets stay outside a microVM</h2>
+  <div class="code" data-title="terminal"><pre><code class="language-bash">go run ./examples/microsandbox   # needs msb (microsandbox) on an arm64 Mac or Linux with KVM</code></pre></div>
+  <div class="code" data-title="output"><pre><code class="language-plaintext">Booting a microsandbox VM (no network) and starting the agent in it…
+
+1. Inside the VM: no secret env vars
+  kernel: Linux 6.12.113
+  environment:
+    HOME=/root
+    PATH=/.msb/scripts:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    PWD=/workspace/.eipagent/sandboxes/local-94eea2532d40
+    SHLVL=1
+
+2. A plugin in the VM calls the API (host listed in SecretHosts)
+  token in the sandbox: eipsec_71760e2a6264b4a2de54a101ba32d2bc
+  API replied: {"orders": 3, "you_sent": "Bearer [REDACTED]"}
+
+3. The same placeholder sent to a host that isn't listed
+  token in the sandbox: eipsec_71760e2a6264b4a2de54a101ba32d2bc
+  request failed: Get "http://localhost:59372/steal": sandbox egress: secret ACME_API_TOKEN may not be sent to localhost (RunIn.SecretHosts)
+
+On the host, the Acme API received:
+  127.0.0.1:59372 Bearer acme_live_7f3c9a1e5b2d4c6f8a0b</code></pre></div>
+  <p>The whole agent runs in a <a href="https://microsandbox.dev">microsandbox</a> VM with no network (<code>sandbox_microsandbox</code>). The real <code>ACME_API_TOKEN</code> is only in the host's environment. A plugin in the VM asks for it and gets a placeholder; its request goes through the host, which swaps in the real token because <code>127.0.0.1</code> is listed in <code>SecretHosts</code>. The API echoes the token back and the VM sees <code>[REDACTED]</code>. Sending the same placeholder to <code>localhost</code>, which isn't listed, is refused. See <a href="#runin-secrets">Secrets in a sandboxed agent</a>.</p>
+
   <h2>Audit to a SIEM, traces to OpenTelemetry</h2>
   <div class="code" data-title="terminal"><pre><code class="language-bash">go run ./examples/observability</code></pre></div>
   <div class="code" data-title="output"><pre><code class="language-plaintext">SIEM received 9 audit records (bad signatures: 0, chain intact: true)
@@ -1855,6 +1879,7 @@ func Apply(p *sdk.Plugin) error {
   <ul>
     <li><b>Tools on your machine</b> (development): just load <code>tool_shell</code> / <code>tool_fs</code>; a host workspace loads itself (<code>workspace_local</code>).</li>
     <li><b>Tools in a container per conversation:</b> <code>WithSandbox("docker")</code>.</li>
+    <li><b>Tools in a microVM per conversation</b> (its own kernel, a stronger boundary than a container): <code>WithSandbox("microsandbox")</code>, with <a href="https://microsandbox.dev">microsandbox</a> installed.</li>
     <li><b>The model creates its own sandboxes:</b> add <code>tool_sandbox</code>.</li>
     <li><b>The whole agent inside a sandbox</b>, secrets kept on the host:</li>
   </ul>
@@ -1879,6 +1904,7 @@ func Apply(p *sdk.Plugin) error {
     <li><b>Fails closed.</b> <code>eip serve --stdio</code> refuses to start if its environment holds a credential.</li>
     <li><b>Nested sandboxes</b> created inside the box get placeholders too; only the host turns them back into values.</li>
   </ul>
+  <p>To see it end to end in a microVM, run <code>go run ./examples/microsandbox</code> (<a href="#production-examples">output</a>): the agent runs in a <code>sandbox_microsandbox</code> VM with no network, the VM holds only a placeholder, and the API on the host receives the real token.</p>
   <div class="note warn"><b>What it doesn't cover</b><div><p>Placeholders are swapped only in HTTP sent through Go's default transport. A plugin that needs the raw value in its own process (a database DSN, env for a stdio MCP server), or dials with its own transport like <code>tool_fetch</code>, can't use a secret inside the box: load it on the host with <code>RunIn.HostPlugins</code>. The host trusts the box to say which plugin is asking, so grants inside the box are only as strong as the box; a placeholder is still useless outside its <code>SecretHosts</code>. On the host without a sandbox, the agent already has the host's access, so none of this applies.</p></div></div>
   <h2>Built-in plugins</h2>
   <!-- gen:builtins sandboxes -->
@@ -1900,6 +1926,14 @@ directory instead of one per sandbox: every thread then shares it and
 its files outlive sandbox_destroy, so use it only for a single user&#39;s
 own workspace), env_allow ([&#34;PATH&#34;,&#34;HOME&#34;,&#34;LANG&#34;]; secret-looking
 names are never passed without the env:secrets permission).</pre></details></div>
+<div class="builtin" id="plugin-sandbox_microsandbox"><div class="bhead"><code>sandbox_microsandbox</code><span class="bsum">provides sandbox/&lt;name&gt; · permissions exec</span></div><p>MicroVM sandboxes through the microsandbox CLI (msb), provided as &#34;sandbox/microsandbox&#34;. Each sandbox is its own lightweight VM with its own kernel, so it is a stronger boundary than a container. Sandboxes have no network by default; allowlist mode turns hosts into msb network rules.</p><details><summary>Config and details</summary><pre>MicroVM sandboxes through the microsandbox CLI (msb), provided as
+&#34;sandbox/microsandbox&#34;. Each sandbox is its own lightweight VM with its
+own kernel, so it is a stronger boundary than a container. Sandboxes
+have no network by default; allowlist mode turns hosts into msb
+network rules.
+
+Config: binary (&#34;msb&#34;), image (&#34;alpine&#34;), name (&#34;microsandbox&#34;),
+extra_args ([]).</pre></details></div>
 <div class="builtin" id="plugin-workspace_local"><div class="bhead"><code>workspace_local</code><span class="bsum">provides workspace · uses sandbox/local · requires sandbox/local · no permissions</span></div><p>Shell and file tools act on the host, in one workspace directory (via sandbox/local). Provided as &#34;workspace&#34;. Use workspace_sandbox instead to move every shell/fs tool into isolated sandboxes.</p><details><summary>Config and details</summary><pre>Shell and file tools act on the host, in one workspace directory
 (via sandbox/local). Provided as &#34;workspace&#34;. Use workspace_sandbox instead to
 move every shell/fs tool into isolated sandboxes.

@@ -60,6 +60,7 @@ The model string is just `ollama:<model>` (for example `ollama:qwen3.5:4b`). Set
 | Example | Shows |
 |---|---|
 | [`examples/secrets`](examples/secrets/main.go) | `secrets_vault` against an in-process Vault: per-plugin grants, a plugin that can't ask as another, key rotation without a restart, a leaked key redacted from logs and audit, `secret.access` records |
+| [`examples/microsandbox`](examples/microsandbox/main.go) | the agent in a [microsandbox](https://microsandbox.dev) microVM with no network (needs `msb`): no secret env vars in the VM, a plugin that holds only a placeholder, the host swapping in the real token for an allowed host, the echoed token redacted, and the placeholder refused for any other host |
 | [`examples/observability`](examples/observability/main.go) | `audit_http` to an in-process SIEM that checks HMAC signatures and the hash chain; `trace_otlp` to an in-process OpenTelemetry collector, printing the span tree and the shared fields (`run`, `thread`, `user`, `plugin`, `provider`) |
 | [`examples/plugin-validate`](examples/plugin-validate/main.go) | the linter's report on a plugin with mistakes, then a signed package, and what verification refuses: a tampered file, a manifest that grants itself `exec`, an unknown signer, an unsigned package, a wrong pin |
 | [`examples/plugin-store`](examples/plugin-store/main.go) | one plugin through install, approval, enable, update, a failed update that keeps the old version, rollback and quarantine, in a running agent |
@@ -550,7 +551,7 @@ Named by what they do. The prefix is a convention for the plugins we ship, not a
 | [Hooks](https://eipagent-docs.vercel.app/#kind-hooks): run around calls | `hook_retry`, `hook_fallback`, `hook_limits`, `hook_summarize`, `hook_approval`, `hook_review`, `hook_pii`, `hook_tool_errors`, `hook_log`, `hook_guard`, `hook_stats` |
 | [Model providers](https://eipagent-docs.vercel.app/#kind-models) | `model_openai` (OpenAI, DeepSeek, Ollama, vLLM, OpenRouter, Groq), `model_anthropic`, `model_gemini`, `model_mock` |
 | [Threads and memory](https://eipagent-docs.vercel.app/#kind-threads-memory) | `threads_inmem` / `_file` / `_sql`, `memory_inmem` / `_file` / `_sql`, `db_sql` |
-| [Sandboxes and workspaces](https://eipagent-docs.vercel.app/#kind-sandboxes) | `sandbox_local`, `sandbox_docker`, `workspace_local`, `workspace_sandbox` |
+| [Sandboxes and workspaces](https://eipagent-docs.vercel.app/#kind-sandboxes) | `sandbox_local`, `sandbox_docker`, `sandbox_microsandbox`, `workspace_local`, `workspace_sandbox` |
 | [Triggers](https://eipagent-docs.vercel.app/#kind-triggers) | `trigger_schedule`, `trigger_webhook` |
 | [Telemetry and audit](https://eipagent-docs.vercel.app/#kind-telemetry) | `trace_file`, `trace_otlp`, `audit_file`, `audit_http` |
 | [Secrets](https://eipagent-docs.vercel.app/#kind-secrets) | `secrets_env`, `secrets_vault` |
@@ -589,7 +590,7 @@ There are two directions:
   )
   ```
 
-Providers: `sandbox_local` (no isolation, for development) and `sandbox_docker` (Docker or Podman, with no network by default). Any other backend, such as Firecracker, E2B, Kubernetes or microsandbox, only needs to provide `sdk.SandboxProvider`. See [`examples/custom-sandbox`](examples/custom-sandbox).
+Providers: `sandbox_local` (no isolation, for development), `sandbox_docker` (Docker or Podman, with no network by default) and `sandbox_microsandbox` ([microsandbox](https://microsandbox.dev) microVMs, with no network by default). Any other backend, such as Firecracker, E2B or Kubernetes, only needs to provide `sdk.SandboxProvider`. See [`examples/custom-sandbox`](examples/custom-sandbox).
 
 ## Security
 

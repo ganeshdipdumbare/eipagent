@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -148,5 +149,68 @@ func TestServeRefusesSecretEnv(t *testing.T) {
 	err := eipagent.Serve(bg, pr, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "refusing to start") {
 		t.Fatalf("a box with a credential in its environment must not start: %v", err)
+	}
+}
+
+// The same guarantees inside a microsandbox microVM with no network.
+func TestRunInMicrosandbox(t *testing.T) {
+	if _, err := exec.LookPath("msb"); err != nil || testing.Short() {
+		t.Skip("needs msb (microsandbox)")
+	}
+	bin := filepath.Join(t.TempDir(), "eip")
+	build := exec.Command("go", "build", "-o", bin, "./cmd/eip")
+	build.Env = append(os.Environ(), "GOOS=linux", "GOARCH="+runtime.GOARCH, "CGO_ENABLED=0")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build eip: %v %s", err, out)
+	}
+	const real = "ghp_real-token-1234567890"
+	t.Setenv("GH_TOKEN", real)
+	var seen []string
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.Header.Get("Authorization"))
+		io.WriteString(w, "you sent "+r.Header.Get("Authorization"))
+	}))
+	defer api.Close()
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "probe.go"), []byte(probeSrc), 0o644)
+	a, err := eipagent.New(eipagent.WithModel("mock:m"), eipagent.WithPreset("dev"),
+		eipagent.WithPlugin("llm_mock", map[string]any{"script": []any{map[string]any{"tool": "probe", "args": map[string]any{"url": api.URL}}, map[string]any{"text": "ok"}}}),
+		eipagent.WithPluginDir(dir), eipagent.WithPlugins("probe"),
+		eipagent.WithRunIn(eipagent.RunIn{Provider: "microsandbox", Binary: bin, SecretHosts: map[string][]string{"GH_TOKEN": {"127.0.0.1"}}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	res, err := a.Generate(bg, "probe")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := res.Steps[0].ToolResults[0].Content
+	if strings.Contains(out, real) || !strings.Contains(out, "token="+sdk.PlaceholderPrefix) || strings.Contains(out, "GH_TOKEN") {
+		t.Fatalf("the VM must see only a placeholder and no secret env: %q", out)
+	}
+	if len(seen) != 1 || seen[0] != "Bearer "+real || !strings.Contains(out, "body=you sent Bearer [REDACTED]") {
+		t.Fatalf("the host swaps on an allowed host and redacts the reply: %q %q", seen, out)
+	}
+}
+
+// WithSandbox("microsandbox") runs shell tools in a microVM per thread.
+func TestWithSandboxMicrosandbox(t *testing.T) {
+	if _, err := exec.LookPath("msb"); err != nil || testing.Short() {
+		t.Skip("needs msb (microsandbox)")
+	}
+	t.Setenv("HOST_ONLY_TOKEN", "should-not-leak")
+	a := mockAgent(t, []any{
+		map[string]any{"tool": "write_file", "args": map[string]any{"path": "note.txt", "content": "from the vm\n"}},
+		map[string]any{"tool": "bash", "args": map[string]any{"command": "cat note.txt; uname -s; env | grep -c TOKEN || true"}},
+		map[string]any{"text": "done"},
+	}, eipagent.WithSandbox("microsandbox"), eipagent.WithPlugins("tool_shell", "tool_fs"))
+	res, err := a.Generate(bg, "go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := res.Steps[1].ToolResults[0].Content
+	if !strings.Contains(out, "from the vm\nLinux\n0") {
+		t.Fatalf("shell in the microVM: %q", out)
 	}
 }

@@ -4,6 +4,11 @@ All notable changes to eipagent. Versions follow [semantic versioning](https://s
 
 ## Unreleased
 
+### Added
+
+- `sandbox_microsandbox`: microVM sandboxes through the [microsandbox](https://microsandbox.dev) CLI (`msb`), with no network by default and allowlists as msb network rules. It works for `WithRunIn`, `WithSandbox` and `tool_sandbox`.
+- `examples/microsandbox`: the agent in a microVM, showing that the VM holds only a placeholder and the real token is used on the host.
+
 ### Security
 
 - `WithRunIn`: secrets never enter the sandbox. `secrets_*` providers stay on the host. The box's `secrets` service returns placeholders (`eipsec_...`), and the box's HTTP is made by the host, which swaps a placeholder for its value only on requests to that secret's `RunIn.SecretHosts`. Responses come back redacted. Requests without secrets may reach only `RunIn.Egress`, which is empty by default.
