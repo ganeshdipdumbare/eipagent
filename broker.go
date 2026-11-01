@@ -11,6 +11,7 @@ import (
 	"path"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ganeshdipdumbare/eipagent/sdk"
 )
@@ -18,12 +19,12 @@ import (
 // broker keeps secrets on the host for an agent running WithRunIn. The
 // box's "secrets" service gets placeholders (host.secret); the box's
 // HTTP requests are made by the host (host.http), which swaps a
-// placeholder for its value only on requests to that secret's allowed
-// hosts and redacts secret values out of the response.
+// placeholder for its value only on requests its rules allow, redacts
+// secret values out of the response and records every request.
 type broker struct {
 	host   *Agent
-	hosts  map[string][]string // secret name -> allowed host globs (RunIn.SecretHosts)
-	egress []string            // host globs the box may reach without secrets (RunIn.Egress)
+	hosts  map[string][]egressRule // secret name -> where its placeholder may go (RunIn.SecretHosts)
+	egress []egressRule            // where the box may go without secrets (RunIn.Egress)
 	client *http.Client
 
 	mu    sync.Mutex
@@ -36,11 +37,105 @@ type brokerSecret struct{ caller, name string }
 // maxBrokerBody caps a response relayed to the box.
 const maxBrokerBody = 32 << 20
 
-func newBroker(host *Agent, ri *RunIn) *broker {
-	return &broker{host: host, hosts: ri.SecretHosts, egress: ri.Egress, byKey: map[string]string{}, byPh: map[string]brokerSecret{},
+// egressRule is one RunIn.SecretHosts or RunIn.Egress entry:
+//
+//	"api.github.com"                    any method, any path
+//	"*.github.com"                      host glob
+//	"GET api.github.com/repos/*"        only GET, paths under /repos/
+//	"GET|POST api.acme.com/v1/orders"   these methods, this exact path
+//
+// A path pattern is a path.Match glob; a trailing "*" also matches
+// deeper paths ("/repos/*" matches "/repos/a/b").
+type egressRule struct {
+	methods map[string]bool // nil: any
+	host    string
+	path    string // "": any
+}
+
+func parseRule(s string) (egressRule, error) {
+	var r egressRule
+	s = strings.TrimSpace(s)
+	if m, rest, ok := strings.Cut(s, " "); ok {
+		r.methods = map[string]bool{}
+		for _, x := range strings.FieldsFunc(m, func(c rune) bool { return c == '|' || c == ',' }) {
+			for _, c := range x {
+				if c < 'A' || c > 'Z' {
+					return r, fmt.Errorf("rule %q: %q is not an HTTP method (write \"GET host/path\")", s, x)
+				}
+			}
+			r.methods[x] = true
+		}
+		s = strings.TrimSpace(rest)
+	}
+	host, p, _ := strings.Cut(s, "/")
+	if host == "" || strings.ContainsAny(host, " \t") {
+		return r, fmt.Errorf("rule %q: no host", s)
+	}
+	r.host = strings.ToLower(host)
+	if p != "" {
+		r.path = "/" + p
+		if _, err := path.Match(r.path, ""); err != nil {
+			return r, fmt.Errorf("rule %q: bad path pattern: %w", s, err)
+		}
+	}
+	return r, nil
+}
+
+func parseRules(list []string) ([]egressRule, error) {
+	out := make([]egressRule, 0, len(list))
+	for _, s := range list {
+		r, err := parseRule(s)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, nil
+}
+
+func (r egressRule) allows(method, host, p string) bool {
+	if r.methods != nil && !r.methods[method] {
+		return false
+	}
+	if ok, _ := path.Match(r.host, strings.ToLower(host)); !ok {
+		return false
+	}
+	if r.path == "" {
+		return true
+	}
+	if p == "" {
+		p = "/"
+	}
+	if ok, _ := path.Match(r.path, p); ok {
+		return true
+	}
+	return strings.HasSuffix(r.path, "*") && strings.HasPrefix(p, strings.TrimSuffix(r.path, "*"))
+}
+
+func anyAllows(rules []egressRule, method, host, p string) bool {
+	for _, r := range rules {
+		if r.allows(method, host, p) {
+			return true
+		}
+	}
+	return false
+}
+
+func newBroker(host *Agent, ri *RunIn) (*broker, error) {
+	b := &broker{host: host, hosts: map[string][]egressRule{}, byKey: map[string]string{}, byPh: map[string]brokerSecret{},
 		// Redirects go back to the box, whose client asks again, so every
-		// hop is checked against the allowlists.
+		// hop is checked against the rules.
 		client: &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+	var err error
+	if b.egress, err = parseRules(ri.Egress); err != nil {
+		return nil, fmt.Errorf("RunIn.Egress: %w", err)
+	}
+	for name, list := range ri.SecretHosts {
+		if b.hosts[name], err = parseRules(list); err != nil {
+			return nil, fmt.Errorf("RunIn.SecretHosts[%s]: %w", name, err)
+		}
+	}
+	return b, nil
 }
 
 func (b *broker) services() (*sdk.Secrets, *sdk.Audit) {
@@ -95,24 +190,46 @@ func (b *broker) placeholder(ctx context.Context, caller, name string) (string, 
 	return ph, nil
 }
 
-func hostAllowed(globs []string, host string) bool {
-	host = strings.ToLower(host)
-	for _, g := range globs {
-		if ok, _ := path.Match(strings.ToLower(g), host); ok {
-			return true
+// fetch answers host.http: it checks the request against the rules,
+// swaps placeholders for values, makes the request, redacts the
+// response, and records the request (allowed or not) as sandbox.egress.
+func (b *broker) fetch(ctx context.Context, req wireHTTPReq) (resp *wireHTTPResp, err error) {
+	t := time.Now()
+	method := strings.ToUpper(req.Method)
+	if method == "" {
+		method = "GET"
+	}
+	u, perr := url.Parse(req.URL)
+	rec := map[string]any{"method": method, "url": sdk.Redact(req.URL)}
+	var names []string
+	defer func() {
+		rec["ms"] = time.Since(t).Milliseconds()
+		if len(names) > 0 {
+			rec["secrets"] = names
 		}
+		switch {
+		case resp != nil:
+			rec["decision"], rec["status"] = "allowed", resp.Status
+		case rec["decision"] == nil:
+			rec["decision"], rec["error"] = "allowed", sdk.Redact(err.Error()) // allowed, but the call failed
+		}
+		b.record(rec)
+	}()
+	if perr != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		rec["decision"] = "denied"
+		err = fmt.Errorf("sandbox egress: bad URL %q", req.URL)
+		rec["error"] = err.Error()
+		return nil, err
 	}
-	return false
-}
-
-// fetch answers host.http: it checks the destination, swaps placeholders
-// for values, makes the request and redacts the response.
-func (b *broker) fetch(ctx context.Context, req wireHTTPReq) (*wireHTTPResp, error) {
-	u, err := url.Parse(req.URL)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return nil, fmt.Errorf("sandbox egress: bad URL %q", req.URL)
+	dest, p := u.Hostname(), u.EscapedPath()
+	if p == "" {
+		p = "/"
 	}
-	dest := u.Hostname()
+	rec["host"], rec["path"] = dest, sdk.Redact(p)
+	deny := func(e error) (*wireHTTPResp, error) {
+		rec["decision"], rec["error"] = "denied", e.Error()
+		return nil, e
+	}
 	var all strings.Builder
 	all.WriteString(req.URL)
 	for k, vs := range req.Header {
@@ -126,21 +243,21 @@ func (b *broker) fetch(ctx context.Context, req wireHTTPReq) (*wireHTTPResp, err
 		sec, ok := b.byPh[ph]
 		b.mu.Unlock()
 		if !ok {
-			return nil, fmt.Errorf("sandbox egress: unknown secret placeholder %s", ph)
+			return deny(fmt.Errorf("sandbox egress: unknown secret placeholder %s", ph))
 		}
-		if !hostAllowed(b.hosts[sec.name], dest) {
-			b.audit("secret.egress_denied", map[string]any{"plugin": sec.caller, "secret": sec.name, "host": dest})
-			return nil, fmt.Errorf("sandbox egress: secret %s may not be sent to %s (RunIn.SecretHosts)", sec.name, dest)
+		names = append(names, sec.name)
+		if !anyAllows(b.hosts[sec.name], method, dest, p) {
+			rec["plugin"] = sec.caller
+			return deny(fmt.Errorf("sandbox egress: secret %s may not be sent to %s %s%s (RunIn.SecretHosts)", sec.name, method, dest, p))
 		}
 		v, err := b.resolve(ctx, sec.caller, sec.name)
 		if err != nil {
-			return nil, err
+			return deny(err)
 		}
 		values[ph] = v
 	}
-	if len(phs) == 0 && !hostAllowed(b.egress, dest) {
-		b.audit("sandbox.egress_denied", map[string]any{"host": dest})
-		return nil, fmt.Errorf("sandbox egress: %s is not allowed (RunIn.Egress)", dest)
+	if len(phs) == 0 && !anyAllows(b.egress, method, dest, p) {
+		return deny(fmt.Errorf("sandbox egress: %s %s%s is not allowed (RunIn.Egress)", method, dest, p))
 	}
 	swap := func(s string) string {
 		for ph, v := range values {
@@ -152,7 +269,7 @@ func (b *broker) fetch(ctx context.Context, req wireHTTPReq) (*wireHTTPResp, err
 	for ph, v := range values {
 		body = bytes.ReplaceAll(body, []byte(ph), []byte(v))
 	}
-	hr, err := http.NewRequestWithContext(ctx, req.Method, swap(req.URL), bytes.NewReader(body))
+	hr, err := http.NewRequestWithContext(ctx, method, swap(req.URL), bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -161,23 +278,39 @@ func (b *broker) fetch(ctx context.Context, req wireHTTPReq) (*wireHTTPResp, err
 			hr.Header.Add(k, swap(v))
 		}
 	}
-	resp, err := b.client.Do(hr)
+	hresp, err := b.client.Do(hr)
 	if err != nil {
 		return nil, errors.New(sdk.Redact(err.Error()))
 	}
-	defer resp.Body.Close()
-	rb, err := io.ReadAll(io.LimitReader(resp.Body, maxBrokerBody+1))
+	defer hresp.Body.Close()
+	rb, err := io.ReadAll(io.LimitReader(hresp.Body, maxBrokerBody+1))
 	if err != nil {
 		return nil, errors.New(sdk.Redact(err.Error()))
 	}
 	if len(rb) > maxBrokerBody {
 		return nil, fmt.Errorf("sandbox egress: response from %s is over %d bytes", dest, maxBrokerBody)
 	}
-	out := &wireHTTPResp{Status: resp.StatusCode, Header: map[string][]string{}, Body: []byte(sdk.Redact(string(rb)))}
-	for k, vs := range resp.Header {
+	out := &wireHTTPResp{Status: hresp.StatusCode, Header: map[string][]string{}, Body: []byte(sdk.Redact(string(rb)))}
+	for k, vs := range hresp.Header {
 		for _, v := range vs {
 			out.Header[k] = append(out.Header[k], sdk.Redact(v))
 		}
 	}
 	return out, nil
+}
+
+// record writes one sandbox.egress audit record and a host log line.
+func (b *broker) record(d map[string]any) {
+	line := fmt.Sprintf("sandbox egress %s %v %v%v", d["decision"], d["method"], d["host"], d["path"])
+	if st, ok := d["status"]; ok {
+		line += fmt.Sprintf(" -> %v", st)
+	}
+	if n, ok := d["secrets"]; ok {
+		line += fmt.Sprintf(" secrets=%v", n)
+	}
+	if e, ok := d["error"]; ok {
+		line += fmt.Sprintf(" (%v)", e)
+	}
+	b.host.eng.Root().Logf("%s", line)
+	b.audit("sandbox.egress", d)
 }

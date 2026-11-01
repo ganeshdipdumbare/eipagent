@@ -1,6 +1,8 @@
 package eipagent_test
 
 import (
+	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -71,6 +73,7 @@ func TestRunInSecretsStayOnHost(t *testing.T) {
 	other := strings.Replace(api.URL, "127.0.0.1", "localhost", 1) // same server, host not allowed
 
 	dir := t.TempDir()
+	auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
 	os.WriteFile(filepath.Join(dir, "probe.go"), []byte(probeSrc), 0o644)
 	call := func(url string) map[string]any {
 		return map[string]any{"tool": "probe", "args": map[string]any{"url": url}}
@@ -79,7 +82,8 @@ func TestRunInSecretsStayOnHost(t *testing.T) {
 		eipagent.WithPlugin("llm_mock", map[string]any{"script": []any{call(api.URL), map[string]any{"text": "ok"}, call(other), map[string]any{"text": "ok"}}}),
 		eipagent.WithPluginDir(dir), eipagent.WithPlugins("probe"),
 		eipagent.WithRunIn(eipagent.RunIn{Provider: "local", ProviderConfig: map[string]any{"root": t.TempDir()}, Binary: bin,
-			SecretHosts: map[string][]string{"GH_TOKEN": {"127.0.0.1"}}}))
+			SecretHosts: map[string][]string{"GH_TOKEN": {"127.0.0.1"}},
+			HostPlugins: []eipagent.PluginSpec{{Use: "audit_file", Config: map[string]any{"path": auditPath}}}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,8 +109,29 @@ func TestRunInSecretsStayOnHost(t *testing.T) {
 		t.Fatal(err)
 	}
 	out = res.Steps[0].ToolResults[0].Content
-	if len(seen) != 1 || !strings.Contains(out, "may not be sent to localhost") {
+	if len(seen) != 1 || !strings.Contains(out, "may not be sent to GET localhost/") {
 		t.Fatalf("a placeholder bound for a host not in SecretHosts must be refused: %q %q", out, seen)
+	}
+
+	// Every request through the host is audited, allowed or not, and the
+	// log never holds the token.
+	raw, _ := os.ReadFile(auditPath)
+	var egress []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		var r struct {
+			Body struct {
+				Type string
+				Data map[string]any
+			}
+		}
+		if json.Unmarshal([]byte(line), &r) == nil && r.Body.Type == "sandbox.egress" {
+			egress = append(egress, r.Body.Data)
+		}
+	}
+	if strings.Contains(string(raw), real) || len(egress) != 2 ||
+		egress[0]["decision"] != "allowed" || egress[0]["status"] != float64(200) || egress[0]["host"] != "127.0.0.1" ||
+		egress[1]["decision"] != "denied" || egress[1]["host"] != "localhost" || fmt.Sprint(egress[1]["secrets"]) != "[GH_TOKEN]" {
+		t.Fatalf("sandbox.egress records: %v", egress)
 	}
 }
 

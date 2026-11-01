@@ -855,20 +855,29 @@ if len(ap.Approvals) != 1 {
   environment:
     HOME=/root
     PATH=/.msb/scripts:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-    PWD=/workspace/.eipagent/sandboxes/local-94eea2532d40
+    PWD=/workspace/.eipagent/sandboxes/local-662db6d6e7af
     SHLVL=1
 
-2. A plugin in the VM calls the API (host listed in SecretHosts)
-  token in the sandbox: eipsec_71760e2a6264b4a2de54a101ba32d2bc
+2. A plugin in the VM calls the API (GET /orders is allowed for the token)
+  token in the sandbox: eipsec_625391045930c902e02c46e5a93a582d
   API replied: {"orders": 3, "you_sent": "Bearer [REDACTED]"}
 
-3. The same placeholder sent to a host that isn't listed
-  token in the sandbox: eipsec_71760e2a6264b4a2de54a101ba32d2bc
-  request failed: Get "http://localhost:59372/steal": sandbox egress: secret ACME_API_TOKEN may not be sent to localhost (RunIn.SecretHosts)
+3. The same token on a DELETE (only GET is allowed)
+  token in the sandbox: eipsec_625391045930c902e02c46e5a93a582d
+  request failed: Delete "http://127.0.0.1:58497/orders": sandbox egress: secret ACME_API_TOKEN may not be sent to DELETE 127.0.0.1/orders (RunIn.SecretHosts)
+
+4. The same token sent to a host that isn't listed
+  token in the sandbox: eipsec_625391045930c902e02c46e5a93a582d
+  request failed: Get "http://localhost:58497/steal": sandbox egress: secret ACME_API_TOKEN may not be sent to GET localhost/steal (RunIn.SecretHosts)
 
 On the host, the Acme API received:
-  127.0.0.1:59372 Bearer acme_live_7f3c9a1e5b2d4c6f8a0b</code></pre></div>
-  <p>The whole agent runs in a <a href="https://microsandbox.dev">microsandbox</a> VM with no network (<code>sandbox_microsandbox</code>). The real <code>ACME_API_TOKEN</code> is only in the host's environment. A plugin in the VM asks for it and gets a placeholder; its request goes through the host, which swaps in the real token because <code>127.0.0.1</code> is listed in <code>SecretHosts</code>. The API echoes the token back and the VM sees <code>[REDACTED]</code>. Sending the same placeholder to <code>localhost</code>, which isn't listed, is refused. See <a href="#runin-secrets">Secrets in a sandboxed agent</a>.</p>
+  GET 127.0.0.1:58497/orders Bearer acme_live_7f3c9a1e5b2d4c6f8a0b
+
+The host's record of every request from the VM (sandbox.egress):
+  allowed GET 127.0.0.1/orders -&gt; 200 secrets=[ACME_API_TOKEN]
+  denied DELETE 127.0.0.1/orders secrets=[ACME_API_TOKEN] (... may not be sent to DELETE 127.0.0.1/orders ...)
+  denied GET localhost/steal secrets=[ACME_API_TOKEN] (... may not be sent to GET localhost/steal ...)</code></pre></div>
+  <p>The whole agent runs in a <a href="https://microsandbox.dev">microsandbox</a> VM with no network (<code>sandbox_microsandbox</code>). The real <code>ACME_API_TOKEN</code> is only in the host's environment. A plugin in the VM asks for it and gets a placeholder; its request goes through the host, which swaps in the real token because the rule <code>GET 127.0.0.1/orders*</code> in <code>SecretHosts</code> allows it. The API echoes the token back and the VM sees <code>[REDACTED]</code>. The same placeholder on a <code>DELETE</code>, or sent to <code>localhost</code>, is refused. The host records every request as <code>sandbox.egress</code>, allowed or not. See <a href="#runin-secrets">Secrets in a sandboxed agent</a>.</p>
 
   <h2>Audit to a SIEM, traces to OpenTelemetry</h2>
   <div class="code" data-title="terminal"><pre><code class="language-bash">go run ./examples/observability</code></pre></div>
@@ -1882,15 +1891,31 @@ func Apply(p *sdk.Plugin) error {
 	eipagent.WithRunIn(eipagent.RunIn{
 		Provider: "docker",
 		Binary:   "./eip-linux", // GOOS=linux go build -o eip-linux ./cmd/eip
-		// The placeholder for GH_TOKEN becomes the real token only on requests to these hosts.
-		SecretHosts: map[string][]string{"GH_TOKEN": {"api.github.com"}},
-		// Hosts the box may reach without a secret. Empty: none.
-		Egress: []string{"pkg.go.dev"},
+		// Where each secret's placeholder becomes the real value:
+		// a host, a host glob, or methods plus a path.
+		SecretHosts: map[string][]string{"GH_TOKEN": {"GET api.github.com/repos/*", "POST api.github.com/repos/*/issues"}},
+		// Where the box may go without a secret, same form. Empty: nowhere.
+		Egress: []string{"GET proxy.golang.org"},
+		// Keep the audit log on the host, with a record of every request.
+		HostPlugins: []eipagent.PluginSpec{{Use: "audit_file"}},
 	}),
 )</code></pre></div>
   <h2 id="runin-secrets">Secrets in a sandboxed agent</h2>
   <p>With <code>WithRunIn</code>, no secret value enters the sandbox: not through env vars, not through plugins, and not through sandboxes the agent starts from inside it.</p>
-  <ol class="timeline" aria-label="How a secret is used from the sandbox"><li><span class="n">01</span><span class="h">stays on the host</span><span class="d">Model providers and every <code>secrets_*</code> provider run on the host. Model calls are relayed from the box.</span></li><li><span class="n">02</span><span class="h">fake token</span><span class="d">A plugin in the box asks for <code>secret://GH_TOKEN</code>. The host checks its grants and returns a placeholder (<code>eipsec_</code> + 32 hex), never the value. The read is audited as <code>secret.access</code>.</span></li><li><span class="n">03</span><span class="h">request via host</span><span class="d">The plugin puts the placeholder in a header and sends the request. The box's HTTP goes to the host, not the network.</span></li><li><span class="n">04</span><span class="h">swap on allowed hosts</span><span class="d">If the destination matches <code>SecretHosts["GH_TOKEN"]</code>, the host swaps in the real token and makes the call. Otherwise it refuses and records <code>secret.egress_denied</code>. Requests without a placeholder may reach only <code>Egress</code>.</span></li><li class="end"><span class="n">05</span><span class="h">redacted reply</span><span class="d">Secret values are replaced with <code>[REDACTED]</code> in the response before it goes back, so a reflected token never reaches the box. Redirects come back to the box, so every hop is checked again.</span></li></ol>
+  <ol class="timeline" aria-label="How a secret is used from the sandbox"><li><span class="n">01</span><span class="h">stays on the host</span><span class="d">Model providers and every <code>secrets_*</code> provider run on the host. Model calls are relayed from the box.</span></li><li><span class="n">02</span><span class="h">fake token</span><span class="d">A plugin in the box asks for <code>secret://GH_TOKEN</code>. The host checks its grants and returns a placeholder (<code>eipsec_</code> + 32 hex), never the value. The read is audited as <code>secret.access</code>.</span></li><li><span class="n">03</span><span class="h">request via host</span><span class="d">The plugin puts the placeholder in a header and sends the request. The box's HTTP goes to the host, not the network.</span></li><li><span class="n">04</span><span class="h">swap where allowed</span><span class="d">If the request matches a rule in <code>SecretHosts["GH_TOKEN"]</code> (host, and method and path when the rule names them), the host swaps in the real token and makes the call. Otherwise it refuses. Requests without a placeholder must match <code>Egress</code>. Every request, allowed or refused, is recorded as <code>sandbox.egress</code>.</span></li><li class="end"><span class="n">05</span><span class="h">redacted reply</span><span class="d">Secret values are replaced with <code>[REDACTED]</code> in the response before it goes back, so a reflected token never reaches the box. Redirects come back to the box, so every hop is checked again.</span></li></ol>
+  <h3>Rules</h3>
+  <div class="table"><table>
+    <thead><tr><th>Rule</th><th>Allows</th></tr></thead>
+    <tbody>
+      <tr><td><code>api.github.com</code></td><td>Any method, any path on that host</td></tr>
+      <tr><td><code>*.github.com</code></td><td>Any subdomain (a host glob)</td></tr>
+      <tr><td><code>GET api.github.com/repos/*</code></td><td>Only <code>GET</code>, only paths under <code>/repos/</code> (a trailing <code>*</code> also matches deeper paths)</td></tr>
+      <tr><td><code>GET|POST api.acme.com/v1/orders</code></td><td>These methods, exactly this path</td></tr>
+    </tbody>
+  </table></div>
+  <p>A bad rule stops <code>New</code> with an error, so a typo can't silently allow more than intended.</p>
+  <h3>Audit</h3>
+  <p>Every request the box makes through the host is recorded as <code>sandbox.egress</code>: <code>decision</code> (<code>allowed</code> or <code>denied</code>), <code>method</code>, <code>host</code>, <code>path</code>, <code>status</code>, <code>ms</code>, the <code>secrets</code> it used (names, never values), and the <code>error</code> when it was refused or failed. The host also logs a line per request. Audit plugins listed in the profile run in the box, so load <code>audit_file</code> or <code>audit_http</code> in <code>RunIn.HostPlugins</code> to keep these records on the host.</p>
   <ul>
     <li><b>Env is checked.</b> <code>RunIn.Spec</code> and every sandbox a plugin creates or runs a command in are refused if an env value holds a resolved secret, or a credential-looking name (<code>*_TOKEN</code>, <code>*_API_KEY</code>, <code>*PASSWORD*</code> …) has a value that isn't a placeholder.</li>
     <li><b>No way out to the host.</b> Mounts of <code>/</code> or a docker, podman or containerd socket are refused, so a box can't start containers outside these rules.</li>

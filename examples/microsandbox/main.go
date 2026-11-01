@@ -7,7 +7,9 @@
 //   - its HTTP request goes to the host, which swaps the placeholder for
 //     the real token because the API's host is listed for that secret;
 //   - the API's reply echoes the token, and it comes back redacted;
-//   - the same placeholder sent to a host that isn't listed is refused.
+//   - the token may only be used for GET requests under /orders, so a
+//     DELETE to the same API is refused, and so is any other host;
+//   - the host records every request the VM makes, allowed or not.
 //
 // Needs msb (https://microsandbox.dev) on an arm64 Mac or a Linux host
 // with KVM:
@@ -54,14 +56,18 @@ func Apply(p *sdk.Plugin) error {
 	p.AddTool(sdk.Tool{
 		Name:        "call_api",
 		Description: "Call the Acme API with the Acme token",
-		Schema:      sdk.Object(map[string]any{"url": sdk.Str("URL to call")}, "url"),
+		Schema:      sdk.Object(map[string]any{"url": sdk.Str("URL to call"), "method": sdk.Str("HTTP method (default GET)")}, "url"),
 		Run: func(c context.Context, args map[string]any) (string, error) {
 			token, err := p.Secret("secret://ACME_API_TOKEN")
 			if err != nil {
 				return "", err
 			}
 			out := "token in the sandbox: " + token + "\n"
-			req, _ := http.NewRequestWithContext(c, "GET", sdk.ArgString(args, "url"), nil)
+			method := sdk.ArgString(args, "method")
+			if method == "" {
+				method = "GET"
+			}
+			req, _ := http.NewRequestWithContext(c, method, sdk.ArgString(args, "url"), nil)
 			req.Header.Set("Authorization", "Bearer "+token)
 			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
@@ -93,10 +99,10 @@ func main() {
 	// A stand-in for the Acme API on the host. It records the token it
 	// receives, and echoes it back (as a careless API might).
 	var mu sync.Mutex
-	var received []string
+	var received, egress []string
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
-		received = append(received, r.Host+" "+r.Header.Get("Authorization"))
+		received = append(received, r.Method+" "+r.Host+r.URL.Path+" "+r.Header.Get("Authorization"))
 		mu.Unlock()
 		io.WriteString(w, `{"orders": 3, "you_sent": "`+r.Header.Get("Authorization")+`"}`)
 	}))
@@ -125,17 +131,26 @@ func main() {
 		eipagent.WithPlugin("model_mock", map[string]any{"script": []any{
 			step("bash", map[string]any{"command": "echo \"kernel: $(uname -sr)\"; echo 'environment:'; env | sort | sed 's/^/  /'"}),
 			step("call_api", map[string]any{"url": api.URL + "/orders"}),
+			step("call_api", map[string]any{"url": api.URL + "/orders", "method": "DELETE"}),
 			step("call_api", map[string]any{"url": other + "/steal"}),
 			map[string]any{"text": "done"},
 		}}),
 		eipagent.WithPlugins("tool_shell"),
+		eipagent.WithLogger(func(scope, msg string) {
+			if strings.HasPrefix(msg, "sandbox egress") {
+				mu.Lock()
+				egress = append(egress, msg)
+				mu.Unlock()
+			}
+		}),
 		eipagent.WithPluginDir(dir), eipagent.WithLockFile(lock), eipagent.WithPlugins("call_api"),
 		eipagent.WithRunIn(eipagent.RunIn{
 			Provider: "microsandbox",
 			Binary:   bin,
 			Spec:     sdk.SandboxSpec{Network: sdk.NetworkPolicy{Mode: "none"}},
-			// The placeholder becomes the real token only on requests to this host.
-			SecretHosts: map[string][]string{"ACME_API_TOKEN": {"127.0.0.1"}},
+			// The placeholder becomes the real token only on GET requests
+			// under /orders on this host.
+			SecretHosts: map[string][]string{"ACME_API_TOKEN": {"GET 127.0.0.1/orders*"}},
 		}),
 	)
 	if err != nil {
@@ -149,8 +164,9 @@ func main() {
 	}
 	titles := []string{
 		"1. Inside the VM: no secret env vars",
-		"2. A plugin in the VM calls the API (host listed in SecretHosts)",
-		"3. The same placeholder sent to a host that isn't listed",
+		"2. A plugin in the VM calls the API (GET /orders is allowed for the token)",
+		"3. The same token on a DELETE (only GET is allowed)",
+		"4. The same token sent to a host that isn't listed",
 	}
 	for i, s := range res.Steps {
 		if i < len(titles) && len(s.ToolResults) > 0 {
@@ -161,6 +177,10 @@ func main() {
 	fmt.Printf("\nOn the host, the Acme API received:\n")
 	for _, r := range received {
 		fmt.Println("  " + r)
+	}
+	fmt.Printf("\nThe host's record of every request from the VM (sandbox.egress):\n")
+	for _, r := range egress {
+		fmt.Println("  " + strings.TrimPrefix(r, "sandbox egress "))
 	}
 	mu.Unlock()
 	fmt.Println("\nThe real token was only ever on the host: the VM held a placeholder, and the reply came back redacted.")

@@ -8,10 +8,12 @@ All notable changes to eipagent. Versions follow [semantic versioning](https://s
 
 - `sandbox_microsandbox`: microVM sandboxes through the [microsandbox](https://microsandbox.dev) CLI (`msb`), with no network by default and allowlists as msb network rules. It works for `WithRunIn`, `WithSandbox` and `tool_sandbox`.
 - `examples/microsandbox`: the agent in a microVM, showing that the VM holds only a placeholder and the real token is used on the host.
+- `RunIn.SecretHosts` and `RunIn.Egress` rules take optional methods and a path: `GET api.github.com/repos/*`, `GET|POST api.acme.com/v1/orders`. A malformed rule fails `New`.
+- Every request from a `WithRunIn` sandbox through the host is audited as `sandbox.egress` (decision, method, host, path, status, ms, secret names) and logged on the host.
 
 ### Security
 
-- `WithRunIn`: secrets never enter the sandbox. `secrets_*` providers stay on the host. The box's `secrets` service returns placeholders (`eipsec_...`), and the box's HTTP is made by the host, which swaps a placeholder for its value only on requests to that secret's `RunIn.SecretHosts`. Responses come back redacted. Requests without secrets may reach only `RunIn.Egress`, which is empty by default.
+- `WithRunIn`: secrets never enter the sandbox. `secrets_*` providers stay on the host. The box's `secrets` service returns placeholders (`eipsec_...`), and the box's HTTP is made by the host, which swaps a placeholder for its value only on requests that match that secret's `RunIn.SecretHosts` rules. Responses come back redacted. Requests without secrets may reach only `RunIn.Egress`, which is empty by default.
 - Sandbox env and mounts are checked by the core (`sdk.CheckSandboxSpec`, `sdk.CheckSandboxEnv`): resolved secret values, credential-looking names without a placeholder, and mounts of `/` or a container runtime socket are refused.
 - `eip serve --stdio` refuses to start when its environment holds a credential.
 - **Behavior change:** HTTP from plugins inside a `WithRunIn` box goes through the host and is refused unless the host is listed in `RunIn.Egress` or `RunIn.SecretHosts`.

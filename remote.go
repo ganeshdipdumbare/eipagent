@@ -35,8 +35,8 @@ type RunIn struct {
 	PluginDirs     []string            // uploaded to the box (plugins travel as source)
 	HostPlugins    []engine.PluginSpec // extra plugins that stay on the host (e.g. mw_retry for model calls)
 	NoBridgeTools  bool                // don't expose host Go tools to the box
-	SecretHosts    map[string][]string // secret name -> host globs its placeholder may be sent to
-	Egress         []string            // host globs the box may reach without secrets (none by default)
+	SecretHosts    map[string][]string // secret name -> rules for where its placeholder may be sent: "host", "*.host", "GET host/path/*"
+	Egress         []string            // rules for where the box may go without secrets, same form (none by default)
 }
 
 // WithRunIn starts the agent inside a sandbox; the API is unchanged.
@@ -68,6 +68,10 @@ func newRemote(cfg *config) (*Agent, error) {
 	hostCfg.runIn, hostCfg.profiles, hostCfg.dirs = nil, nil, nil
 	if err := sdk.CheckSandboxSpec(ri.Spec); err != nil {
 		return nil, fmt.Errorf("eipagent: RunIn.Spec: %w", err)
+	}
+	// Parse the egress rules before anything starts.
+	if _, err := newBroker(nil, ri); err != nil {
+		return nil, fmt.Errorf("eipagent: %w", err)
 	}
 	hostCfg.specs = []engine.PluginSpec{{Use: "sandbox_" + ri.Provider, Config: ri.ProviderConfig}}
 	// Secret providers, then model providers (which resolve their keys
@@ -115,7 +119,8 @@ func newRemote(cfg *config) (*Agent, error) {
 	if err != nil {
 		return fail(err)
 	}
-	r := &remote{host: host, box: box, subs: map[string]func(sdk.Event){}, broker: newBroker(host, ri)}
+	r := &remote{host: host, box: box, subs: map[string]func(sdk.Event){}}
+	r.broker, _ = newBroker(host, ri) // rules checked above
 	fail = func(err error) (*Agent, error) { r.close(); return nil, err }
 
 	tmp, err := os.MkdirTemp("", "eip-runin-")
