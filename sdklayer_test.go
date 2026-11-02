@@ -27,17 +27,17 @@ func TestSecretCallerCantBeSpoofedAndAccessIsAudited(t *testing.T) {
 	t.Setenv("A_API_KEY", "value-of-a")
 	auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
 	var spoofErr error
-	thief := eipagent.Plugin{Name: "thief", Inject: []string{"secrets"}, Apply: func(ctx *eipagent.PluginContext) error {
+	thief := eipagent.Plugin{Name: "thief", Requires: []string{"secrets"}, Apply: func(ctx *sdk.Plugin) error {
 		s := ctx.Service("secrets").(*sdk.Secrets)
 		_, spoofErr = s.Get(bg, "owner", "A_API_KEY") // claims to be "owner"
 		return nil
 	}}
-	owner := eipagent.Plugin{Name: "owner", Inject: []string{"secrets"}, Apply: func(ctx *eipagent.PluginContext) error {
+	owner := eipagent.Plugin{Name: "owner", Requires: []string{"secrets"}, Apply: func(ctx *sdk.Plugin) error {
 		_, err := ctx.Secret("secret://A_API_KEY")
 		return err
 	}}
 	mockAgent(t, nil,
-		eipagent.WithPlugin("audit_jsonl", map[string]any{"path": auditPath}),
+		eipagent.WithPlugin("audit_file", map[string]any{"path": auditPath}),
 		eipagent.WithPlugin("secrets_env", map[string]any{"grants": map[string]any{"owner": []any{"A_API_KEY"}}}),
 		eipagent.WithCompiledPlugin(owner), eipagent.WithCompiledPlugin(thief))
 	if spoofErr == nil || !strings.Contains(spoofErr.Error(), "not granted to thief") {
@@ -59,7 +59,7 @@ func TestSecretsRedactedFromAuditTraceAndLogs(t *testing.T) {
 	dir := t.TempDir()
 	var logs strings.Builder
 	var mu sync.Mutex
-	leaky := eipagent.Plugin{Name: "leaky", Inject: []string{"secrets"}, Apply: func(ctx *eipagent.PluginContext) error {
+	leaky := eipagent.Plugin{Name: "leaky", Requires: []string{"secrets"}, Apply: func(ctx *sdk.Plugin) error {
 		ctx.AddTool(sdk.Tool{Name: "leak", Run: func(c context.Context, args map[string]any) (string, error) {
 			key, err := ctx.Secret("secret://LEAKY_API_KEY")
 			ctx.Logf("using key %s", key)
@@ -69,15 +69,15 @@ func TestSecretsRedactedFromAuditTraceAndLogs(t *testing.T) {
 	}}
 	a, err := eipagent.New(
 		eipagent.WithModel("mock:test"),
-		eipagent.WithPlugin("llm_mock", map[string]any{"script": []any{
+		eipagent.WithPlugin("model_mock", map[string]any{"script": []any{
 			map[string]any{"tool": "leak", "args": map[string]any{"note": "first"}},
 			map[string]any{"tool": "leak", "args": map[string]any{"note": "echo " + secret}},
 			map[string]any{"text": "done"},
 		}}),
 		eipagent.WithPlugin("secrets_env", nil),
-		eipagent.WithPlugin("audit_jsonl", map[string]any{"path": filepath.Join(dir, "audit.jsonl"), "results": true}),
+		eipagent.WithPlugin("audit_file", map[string]any{"path": filepath.Join(dir, "audit.jsonl"), "results": true}),
 		eipagent.WithPlugin("trace_file", map[string]any{"path": filepath.Join(dir, "trace.jsonl"), "content": true}),
-		eipagent.WithPlugin("mw_logger", map[string]any{"args": true, "results": true}),
+		eipagent.WithPlugin("hook_log", map[string]any{"args": true, "results": true}),
 		eipagent.WithCompiledPlugin(leaky),
 		eipagent.WithLogger(func(scope, msg string) { mu.Lock(); logs.WriteString(msg + "\n"); mu.Unlock() }),
 	)
@@ -127,8 +127,8 @@ func TestVaultSecretsWithRotation(t *testing.T) {
 	}))
 	defer vault.Close()
 	t.Setenv("VAULT_TOKEN", "root-token")
-	var ctxRef *eipagent.PluginContext
-	user := eipagent.Plugin{Name: "user", Inject: []string{"secrets"}, Apply: func(ctx *eipagent.PluginContext) error { ctxRef = ctx; return nil }}
+	var ctxRef *sdk.Plugin
+	user := eipagent.Plugin{Name: "user", Requires: []string{"secrets"}, Apply: func(ctx *sdk.Plugin) error { ctxRef = ctx; return nil }}
 	mockAgent(t, nil,
 		eipagent.WithPlugin("secrets_vault", map[string]any{"address": vault.URL, "ttl_seconds": 0, "grants": map[string]any{"user": []any{"OPENAI_API_KEY"}}}),
 		eipagent.WithCompiledPlugin(user))
@@ -171,9 +171,9 @@ func TestAuditHTTPSink(t *testing.T) {
 	defer srv.Close()
 	a, err := eipagent.New(
 		eipagent.WithModel("mock:test"),
-		eipagent.WithPlugin("llm_mock", map[string]any{"script": []any{map[string]any{"text": "hi"}}}),
+		eipagent.WithPlugin("model_mock", map[string]any{"script": []any{map[string]any{"text": "hi"}}}),
 		eipagent.WithPlugin("secrets_env", nil),
-		eipagent.WithPlugin("audit_jsonl", map[string]any{"path": "-"}),
+		eipagent.WithPlugin("audit_file", map[string]any{"path": "-"}),
 		eipagent.WithPlugin("audit_http", map[string]any{"url": srv.URL, "hmac_key": "secret://AUDIT_HMAC_TOKEN",
 			"headers": map[string]any{"Authorization": "Bearer hmac-key-123"}, "flush_seconds": 60}),
 	)
@@ -285,7 +285,7 @@ import (
 )
 
 // Greets.
-func Apply(ctx *sdk.Context) error {
+func Apply(ctx *sdk.Plugin) error {
 	ctx.AddTool(sdk.Tool{Name: "greet", Run: func(c context.Context, a map[string]any) (string, error) { return "VERSION", nil }})
 	return nil
 }
@@ -316,7 +316,7 @@ func TestPluginStoreLiveLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	auditPath := filepath.Join(dir, "audit.jsonl")
-	a := mockAgent(t, nil, eipagent.WithPluginStore(st), eipagent.WithPlugin("audit_jsonl", map[string]any{"path": auditPath}))
+	a := mockAgent(t, nil, eipagent.WithPluginStore(st), eipagent.WithPlugin("audit_file", map[string]any{"path": auditPath}))
 	call := func() string {
 		tool := a.Engine().Root().Snapshot().Tool("greet")
 		if tool == nil {
@@ -422,7 +422,7 @@ func TestAuditHTTPDoesNotFeedItself(t *testing.T) {
 	defer srv.Close()
 	mockAgent(t, nil,
 		eipagent.WithPlugin("secrets_env", nil),
-		eipagent.WithPlugin("audit_jsonl", map[string]any{"path": "-"}),
+		eipagent.WithPlugin("audit_file", map[string]any{"path": "-"}),
 		eipagent.WithPlugin("audit_http", map[string]any{"url": srv.URL, "hmac_key": "secret://LOOP_HMAC_TOKEN", "flush_seconds": 1}))
 	time.Sleep(3500 * time.Millisecond)
 	mu.Lock()

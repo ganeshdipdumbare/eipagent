@@ -22,7 +22,7 @@ func mockAgent(t *testing.T, script []any, opts ...eipagent.Option) *eipagent.Ag
 	t.Helper()
 	base := []eipagent.Option{
 		eipagent.WithModel("mock:test"),
-		eipagent.WithPlugin("llm_mock", map[string]any{"script": script}),
+		eipagent.WithPlugin("model_mock", map[string]any{"script": script}),
 		eipagent.WithLogger(func(scope, msg string) { t.Logf("[%s] %s", scope, msg) }),
 	}
 	a, err := eipagent.New(append(base, opts...)...)
@@ -158,7 +158,7 @@ func TestNoModel(t *testing.T) {
 func TestCompiledPluginAndMiddleware(t *testing.T) {
 	var seen []string
 	var mu sync.Mutex
-	p := eipagent.Plugin{Name: "spy", Apply: func(ctx *eipagent.PluginContext) error {
+	p := eipagent.Plugin{Name: "spy", Apply: func(ctx *sdk.Plugin) error {
 		ctx.WrapModel(func(c context.Context, req *eipagent.ModelRequest, next eipagent.ModelHandler) (*eipagent.ModelResponse, error) {
 			mu.Lock()
 			seen = append(seen, req.Model)
@@ -300,7 +300,7 @@ func TestRunLifecycleAlwaysCloses(t *testing.T) {
 	var log []string
 	var mu sync.Mutex
 	rec := func(s string) { mu.Lock(); log = append(log, s); mu.Unlock() }
-	spy := eipagent.Plugin{Name: "lifecycle_spy", Apply: func(ctx *eipagent.PluginContext) error {
+	spy := eipagent.Plugin{Name: "lifecycle_spy", Apply: func(ctx *sdk.Plugin) error {
 		ctx.OnAgentStart(func(c context.Context, st *sdk.RunState) error { rec("start"); return nil })
 		ctx.OnAgentEnd(func(c context.Context, st *sdk.RunState, res *sdk.RunResult) error {
 			rec("end:" + res.FinishReason)

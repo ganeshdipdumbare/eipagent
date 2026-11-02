@@ -12,17 +12,59 @@
   - Each plugin gets only the secrets granted to it.
   - Sandboxes are pluggable, and the agent can run inside one.
 
-**Demo:** [`examples/fullstack`](examples/fullstack) is a support desk with a Go backend and web UI: streaming, refunds that wait for a supervisor, redaction and an audit trail. Run it with `go run ./examples/fullstack`, or try it live at https://eipagent-docs.vercel.app/demo/ (the backend runs on a free instance, so the first visit can take a minute to wake it).
+## Quick start
 
-**Docs:** https://eipagent-docs.vercel.app has the full guide, with examples, lifecycles and reference. The source is `docs/site.html`; run `docs/build.sh` to regenerate `docs/public/index.html`, then deploy with `vercel deploy --prod` from `docs/public`.
-
-Requires **Go 1.27**. Install a tagged release:
+Requires **Go 1.27**.
 
 ```bash
 go get github.com/ganeshdipdumbare/eipagent@v0.4.0
 ```
 
-The repository is private, so Go needs to know that and needs git access: run `go env -w GOPRIVATE=github.com/ganeshdipdumbare/*` once, and `gh auth setup-git` (or an SSH key) so `git` can fetch it. Releases and breaking changes are listed in [CHANGELOG.md](CHANGELOG.md); see [Versioning](#versioning).
+The repository is private: run `go env -w GOPRIVATE=github.com/ganeshdipdumbare/*` once, and `gh auth setup-git` (or an SSH key) so `git` can fetch it.
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	"github.com/ganeshdipdumbare/eipagent"
+)
+
+func main() {
+	agent, err := eipagent.New(
+		eipagent.WithModel("mock:demo"), // or "anthropic:claude-sonnet-5-5", "openai:gpt-4.1", "ollama:llama3" ...
+		eipagent.WithInstructions("You are a concise assistant."),
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer agent.Close()
+
+	res, err := agent.Generate(context.Background(), "Say hello in five words.")
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(res.Text)
+}
+```
+
+`mock:demo` is an offline fake model, so this runs with no API key. For a real model, change the model string and set its key (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY` …). The right provider plugin loads by itself.
+
+**Words you'll meet** (the [glossary](https://eipagent-docs.vercel.app/#concepts) has more):
+
+- **Plugin:** a Go file with `func Apply(p *sdk.Plugin) error`. The loop, providers, tools, memory and policy are all plugins.
+- **Service:** something a plugin provides by name for others to use: `model/anthropic`, `threads`, `memory`, `secrets`.
+- **Hook:** code a plugin runs around each step, model call or tool call (retries, approvals, redaction …).
+- **Run** and **thread:** one `Generate` call, and a conversation saved across runs.
+
+**Demo:** [`examples/fullstack`](examples/fullstack) is a support desk with a Go backend and web UI: streaming, refunds that wait for a supervisor, redaction and an audit trail. Run it with `go run ./examples/fullstack`, or try it live at https://eipagent-docs.vercel.app/demo/ (the backend runs on a free instance, so the first visit can take a minute to wake it).
+
+**Docs:** https://eipagent-docs.vercel.app has the full guide, with examples, lifecycles and reference. The source is `docs/site.html`; run `docs/build.sh` to regenerate `docs/public/index.html`, then deploy with `vercel deploy --prod` from `docs/public`.
+
+Releases and breaking changes are listed in [CHANGELOG.md](CHANGELOG.md); see [Versioning](#versioning).
 
 ```bash
 go test ./...                    # offline: the mock model needs no keys
@@ -31,14 +73,16 @@ go run ./examples/readme         # runs every example in this README
 
 ## Contents
 
-1. [Examples](#examples)
-2. [How it works: lifecycles](#how-it-works-lifecycles)
-3. [Plugins](#plugins)
-4. [Sandboxes](#sandboxes)
-5. [Security](#security)
-6. [Scaling and persistence](#scaling-and-persistence)
-7. [CLI](#cli)
-8. [Status](#status)
+1. [Quick start](#quick-start)
+2. [Examples](#examples)
+3. [How it works: lifecycles](#how-it-works-lifecycles)
+4. [Plugins](#plugins)
+5. [Sandboxes](#sandboxes)
+6. [Security](#security)
+7. [Scaling and persistence](#scaling-and-persistence)
+8. [CLI](#cli)
+9. [Versioning](#versioning)
+10. [Status](#status)
 
 ---
 
@@ -192,7 +236,7 @@ agent, _ := eipagent.New(
 A compiled plugin is ordinary Go code. An interpreted plugin is the same code in a `.go` file loaded at runtime (see [Plugins](#plugins)).
 
 ```go
-timing := eipagent.Plugin{Name: "timing", Apply: func(p *eipagent.PluginAPI) error {
+timing := eipagent.Plugin{Name: "timing", Apply: func(p *sdk.Plugin) error {
 	p.WrapModel(func(c context.Context, req *eipagent.ModelRequest, next eipagent.ModelHandler) (*eipagent.ModelResponse, error) {
 		resp, err := next(c, req) // the model call, plus any inner hooks
 		if err == nil {

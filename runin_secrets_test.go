@@ -79,7 +79,7 @@ func TestRunInSecretsStayOnHost(t *testing.T) {
 		return map[string]any{"tool": "probe", "args": map[string]any{"url": url}}
 	}
 	a, err := eipagent.New(eipagent.WithModel("mock:m"), eipagent.WithPreset("dev"),
-		eipagent.WithPlugin("llm_mock", map[string]any{"script": []any{call(api.URL), map[string]any{"text": "ok"}, call(other), map[string]any{"text": "ok"}}}),
+		eipagent.WithPlugin("model_mock", map[string]any{"script": []any{call(api.URL), map[string]any{"text": "ok"}, call(other), map[string]any{"text": "ok"}}}),
 		eipagent.WithPluginDir(dir), eipagent.WithPlugins("probe"),
 		eipagent.WithRunIn(eipagent.RunIn{Provider: "local", ProviderConfig: map[string]any{"root": t.TempDir()}, Binary: bin,
 			SecretHosts: map[string][]string{"GH_TOKEN": {"127.0.0.1"}},
@@ -199,7 +199,7 @@ func TestRunInMicrosandbox(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "probe.go"), []byte(probeSrc), 0o644)
 	a, err := eipagent.New(eipagent.WithModel("mock:m"), eipagent.WithPreset("dev"),
-		eipagent.WithPlugin("llm_mock", map[string]any{"script": []any{map[string]any{"tool": "probe", "args": map[string]any{"url": api.URL}}, map[string]any{"text": "ok"}}}),
+		eipagent.WithPlugin("model_mock", map[string]any{"script": []any{map[string]any{"tool": "probe", "args": map[string]any{"url": api.URL}}, map[string]any{"text": "ok"}}}),
 		eipagent.WithPluginDir(dir), eipagent.WithPlugins("probe"),
 		eipagent.WithRunIn(eipagent.RunIn{Provider: "microsandbox", Binary: bin, SecretHosts: map[string][]string{"GH_TOKEN": {"127.0.0.1"}}}))
 	if err != nil {

@@ -19,7 +19,7 @@ func persistenceSuite(t *testing.T, opts ...eipagent.Option) {
 		map[string]any{"tool": "delete_file", "args": map[string]any{"path": "x"}},
 		map[string]any{"text": "deleted"},
 	}
-	hitl := eipagent.WithPlugin("mw_hitl", map[string]any{"interrupt_on": map[string]any{"delete_file": true}})
+	hitl := eipagent.WithPlugin("hook_approval", map[string]any{"interrupt_on": map[string]any{"delete_file": true}})
 	run := fmt.Sprintf("%s-%d", t.Name(), time.Now().UnixNano()) // shared DBs outlive test runs
 	thread := "user-1/" + run
 
@@ -72,8 +72,8 @@ func persistenceSuite(t *testing.T, opts ...eipagent.Option) {
 func TestFilePersistence(t *testing.T) {
 	dir := t.TempDir()
 	persistenceSuite(t,
-		eipagent.WithPlugin("checkpoint_file", map[string]any{"dir": dir + "/threads"}),
-		eipagent.WithPlugin("store_file", map[string]any{"path": dir + "/store.json"}))
+		eipagent.WithPlugin("threads_file", map[string]any{"dir": dir + "/threads"}),
+		eipagent.WithPlugin("memory_file", map[string]any{"path": dir + "/store.json"}))
 }
 
 // Run with EIP_TEST_PG_DSN=postgres://... go test -run Postgres
