@@ -173,10 +173,26 @@ func buildBody(req *sdk.ModelRequest) map[string]any {
 		gen["responseMimeType"] = "application/json"
 		gen["responseJsonSchema"] = req.ResponseSchema
 	}
+	// hook_thinking: a fixed budget (Gemini 2.5) or a level (Gemini 3).
+	if t, ok := req.Extra["eip.thinking"].(map[string]any); ok {
+		tc := map[string]any{"includeThoughts": true}
+		if b, ok := t["budget_tokens"].(int); ok && b > 0 {
+			tc["thinkingBudget"] = b
+		} else if e, _ := t["effort"].(string); e != "" {
+			if e == "xhigh" || e == "max" {
+				e = "high"
+			}
+			tc["thinkingLevel"] = e
+		}
+		gen["thinkingConfig"] = tc
+	}
 	if len(gen) > 0 {
 		body["generationConfig"] = gen
 	}
 	for k, v := range req.Extra {
+		if strings.HasPrefix(k, "eip.") {
+			continue
+		}
 		body[k] = v
 	}
 	return body

@@ -1278,6 +1278,7 @@ office: VALIDATED
       <tr><td>run the whole agent inside a sandbox</td><td><code>WithRunIn(…)</code></td><td><code>sandbox_*</code></td><td><a href="#kind-sandboxes">Sandboxes</a></td></tr>
       <tr><td>use tools from an MCP server</td><td><code>WithMCP(name, …)</code></td><td><code>tool_mcp</code></td><td><a href="#kind-tools">Tools</a></td></tr>
       <tr><td>let the model fetch web pages from allowed hosts</td><td></td><td><code>tool_fetch</code></td><td><a href="#kind-tools">Tools</a></td></tr>
+      <tr><td>let the model search the web</td><td><code>WithWebSearch("duckduckgo")</code></td><td><code>tool_websearch</code></td><td><a href="#kind-tools">Tools</a></td></tr>
       <tr><td>delegate to specialised subagents</td><td></td><td><code>tool_subagents</code></td><td><a href="#multi-agent">Subagents</a></td></tr>
       <tr><td>load instructions on demand (SKILL.md folders)</td><td></td><td><code>tool_skills</code></td><td><a href="#kind-tools">Tools</a></td></tr>
       <tr><td>ask a person before a tool runs</td><td><code>WithApprovals("tool", …)</code></td><td><code>hook_approval</code></td><td><a href="#human-in-the-loop">Human in the loop</a></td></tr>
@@ -1285,6 +1286,9 @@ office: VALIDATED
       <tr><td>keep card numbers and emails away from the model</td><td></td><td><code>hook_pii</code></td><td><a href="#kind-hooks">Hooks</a></td></tr>
       <tr><td>cap model calls, tool calls or tokens</td><td></td><td><code>hook_limits</code>, <code>policy</code></td><td><a href="#kind-hooks">Hooks</a></td></tr>
       <tr><td>keep long conversations within the context window</td><td></td><td><code>hook_summarize</code></td><td><a href="#kind-hooks">Hooks</a></td></tr>
+      <tr><td>turn on model reasoning (thinking) with one setting</td><td><code>WithThinking("high")</code></td><td><code>hook_thinking</code></td><td><a href="#kind-hooks">Hooks</a></td></tr>
+      <tr><td>cut cost and latency with prompt caching</td><td></td><td><code>hook_cache</code></td><td><a href="#kind-hooks">Hooks</a></td></tr>
+      <tr><td>retry when structured output doesn't match the schema</td><td></td><td><code>hook_output_validate</code></td><td><a href="#kind-hooks">Hooks</a></td></tr>
       <tr><td>keep conversations (and paused approvals) across restarts</td><td><code>WithPersistence("file" | "postgres", …)</code></td><td><code>threads_file</code> / <code>threads_sql</code></td><td><a href="#kind-threads-memory">Threads and memory</a></td></tr>
       <tr><td>let the agent remember facts between conversations</td><td><code>WithPersistence(…)</code> + <code>WithPlugins("tool_memory")</code></td><td><code>memory_*</code>, <code>tool_memory</code></td><td><a href="#kind-threads-memory">Threads and memory</a></td></tr>
       <tr><td>run several replicas that share state</td><td><code>WithPersistence("postgres", …)</code></td><td><code>threads_sql</code>, <code>memory_sql</code>, <code>db_sql</code></td><td><a href="#kind-threads-memory">Threads and memory</a></td></tr>
@@ -1369,6 +1373,17 @@ Config:
 
 Policy and audit hooks follow subagents (they run in the same snapshot).</pre></details></div>
 <div class="builtin" id="plugin-tool_time"><div class="bhead"><code>tool_time</code><span class="bsum">adds 1 tool (current_time) · no permissions</span></div><p>Returns the current time. Config: layout (Go time layout).</p></div>
+<div class="builtin" id="plugin-tool_websearch"><div class="bhead"><code>tool_websearch</code><span class="bsum">adds 1 tool (web_search) · permissions net</span></div><p>Web search for the model: a web_search tool returning titles, URLs and snippets. Pair it with tool_fetch to read the pages it finds.</p><details><summary>Config and details</summary><pre>Web search for the model: a web_search tool returning titles, URLs and
+snippets. Pair it with tool_fetch to read the pages it finds.
+
+Config:
+
+	backend:         duckduckgo (default, no key) | tavily | brave | searxng
+	api_key:         literal or secret://NAME (tavily: secret://TAVILY_API_KEY,
+	                 brave: secret://BRAVE_API_KEY by default)
+	base_url:        override the backend URL (required for searxng)
+	max_results:     default 5 (the model may ask for up to 20)
+	timeout_seconds: default 20</pre></details></div>
 </div>
 <!-- /gen:builtins -->
   <h2>Write your own</h2>
@@ -1474,6 +1489,17 @@ Config:
 	               &#34;*&#34; matches every tool
 	non_readonly:  true = also every tool not marked Meta.readonly
 	risk:          [&#34;high&#34;] = also tools whose Meta.risk is listed</pre></details></div>
+<div class="builtin" id="plugin-hook_cache"><div class="bhead"><code>hook_cache</code><span class="bsum">rewrites each step · no permissions</span></div><p>Prompt caching: reuses the unchanged prefix of each request (tools, system prompt, earlier messages) so long agent runs cost less and answer faster. It sets ModelRequest.Extra[&#34;eip.cache&#34;]; model plugins map it:</p><details><summary>Config and details</summary><pre>Prompt caching: reuses the unchanged prefix of each request (tools,
+system prompt, earlier messages) so long agent runs cost less and
+answer faster. It sets ModelRequest.Extra[&#34;eip.cache&#34;]; model plugins
+map it:
+
+	anthropic: cache_control breakpoints on the system prompt and on the
+	           conversation so far
+	openai:    prompt_cache_key = the thread (caching itself is automatic)
+	gemini:    nothing to do (implicit caching)
+
+Config: ttl (5m | 1h, default 5m).</pre></details></div>
 <div class="builtin" id="plugin-hook_fallback"><div class="bhead"><code>hook_fallback</code><span class="bsum">wraps model calls · no permissions</span></div><p>Falls back to other models when a model call fails.</p><details><summary>Config and details</summary><pre>Falls back to other models when a model call fails.
 
 Config: models ([&#34;anthropic:claude-...&#34;, &#34;openai:gpt-...&#34;]), tried in
@@ -1490,6 +1516,14 @@ Config:
 	exit_behavior:  &#34;end&#34; (default: finish politely) | &#34;error&#34; (fail the run)</pre></details></div>
 <div class="builtin" id="plugin-hook_log"><div class="bhead"><code>hook_log</code><span class="bsum">wraps model calls · wraps tool calls · no permissions</span></div><p>Logs every model and tool call with timing. Config: args (log tool arguments, default true), results (log tool results, default false).</p><details><summary>Config and details</summary><pre>Logs every model and tool call with timing. Config: args (log tool
 arguments, default true), results (log tool results, default false).</pre></details></div>
+<div class="builtin" id="plugin-hook_output_validate"><div class="bhead"><code>hook_output_validate</code><span class="bsum">rewrites each step · checks model replies · runs at run end · no permissions</span></div><p>Checks structured output (runs with a ResponseSchema) against the schema. When the final reply is not valid JSON or does not match, the model is asked again with the errors, up to max_retries times.</p><details><summary>Config and details</summary><pre>Checks structured output (runs with a ResponseSchema) against the
+schema. When the final reply is not valid JSON or does not match, the
+model is asked again with the errors, up to max_retries times.
+
+Validates type, required, properties, additionalProperties: false,
+items, enum, minItems/maxItems and minLength/maxLength.
+
+Config: max_retries (2), on_fail (error | accept, default error).</pre></details></div>
 <div class="builtin" id="plugin-hook_pii"><div class="bhead"><code>hook_pii</code><span class="bsum">wraps model calls · wraps tool calls · requires ?secrets · no permissions</span></div><p>Detects PII and redacts, masks, hashes or blocks it.</p><details><summary>Config and details</summary><pre>Detects PII and redacts, masks, hashes or blocks it.
 
 Config:
@@ -1532,6 +1566,22 @@ Config:
 	keep_messages:    recent messages kept verbatim (default 10)
 	model:            model for the summary (default: the run&#39;s model)
 	prompt:           summary instruction</pre></details></div>
+<div class="builtin" id="plugin-hook_thinking"><div class="bhead"><code>hook_thinking</code><span class="bsum">rewrites each step · no permissions</span></div><p>Turns on model reasoning (thinking) with one provider-neutral setting. It sets ModelRequest.Extra[&#34;eip.thinking&#34;]; each model plugin maps it:</p><details><summary>Config and details</summary><pre>Turns on model reasoning (thinking) with one provider-neutral setting.
+It sets ModelRequest.Extra[&#34;eip.thinking&#34;]; each model plugin maps it:
+
+	anthropic: thinking {type: adaptive} + output_config.effort
+	           (budget_tokens &gt; 0: {type: enabled, budget_tokens}, older models)
+	openai:    reasoning_effort
+	gemini:    generationConfig.thinkingConfig (thinkingLevel / thinkingBudget)
+
+Config:
+
+	effort:        low | medium | high | xhigh | max (&#34;&#34; = provider default)
+	budget_tokens: fixed thinking budget, for models that need one (0 = off)
+	display:       anthropic only: summarized | omitted
+	models:        only for these models, globs like &#34;anthropic:*&#34; (default all)
+
+A run can override the effort with RunState.Values[&#34;thinking_effort&#34;].</pre></details></div>
 <div class="builtin" id="plugin-hook_tool_errors"><div class="bhead"><code>hook_tool_errors</code><span class="bsum">wraps tool calls · no permissions</span></div><p>Controls what happens when a tool fails.</p><details><summary>Config and details</summary><pre>Controls what happens when a tool fails.
 
 Config:
