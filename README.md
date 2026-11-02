@@ -270,6 +270,15 @@ eipagent.WithPlugin("tool_mcp", map[string]any{"servers": []any{
 }}) // tools appear as github__create_issue, docs__search, ...
 eipagent.WithPlugin("tool_skills", map[string]any{"dirs": []any{"./skills"}})       // folders with SKILL.md
 eipagent.WithPlugin("tool_fetch", map[string]any{"allow_hosts": []any{"*.wikipedia.org"}})
+eipagent.WithWebSearch("duckduckgo")                                                 // tool_websearch; also tavily, brave, searxng
+```
+
+### Reasoning, caching and structured output
+
+```go
+eipagent.WithThinking("high")                                       // hook_thinking: Anthropic adaptive thinking, OpenAI reasoning_effort, Gemini thinkingConfig
+eipagent.WithPlugin("hook_cache", map[string]any{"ttl": "1h"})      // prompt caching (Anthropic cache_control, OpenAI prompt_cache_key)
+eipagent.WithPlugin("hook_output_validate", map[string]any{"max_retries": 2}) // re-ask when GenerateObject output doesn't match the schema
 ```
 
 ### Scheduled jobs and webhooks
@@ -547,8 +556,8 @@ Named by what they do. The prefix is a convention for the plugins we ship, not a
 
 | Kind | Plugins |
 |---|---|
-| [Tools](https://eipagent-docs.vercel.app/#kind-tools): the model can call them | `tool_shell`, `tool_fs`, `tool_fetch`, `tool_time`, `tool_memory`, `tool_mcp`, `tool_subagents`, `tool_skills`, `tool_sandbox` |
-| [Hooks](https://eipagent-docs.vercel.app/#kind-hooks): run around calls | `hook_retry`, `hook_fallback`, `hook_limits`, `hook_summarize`, `hook_approval`, `hook_review`, `hook_pii`, `hook_tool_errors`, `hook_log`, `hook_guard`, `hook_stats` |
+| [Tools](https://eipagent-docs.vercel.app/#kind-tools): the model can call them | `tool_shell`, `tool_fs`, `tool_fetch`, `tool_websearch`, `tool_time`, `tool_memory`, `tool_mcp`, `tool_subagents`, `tool_skills`, `tool_sandbox` |
+| [Hooks](https://eipagent-docs.vercel.app/#kind-hooks): run around calls | `hook_retry`, `hook_fallback`, `hook_limits`, `hook_summarize`, `hook_thinking`, `hook_cache`, `hook_output_validate`, `hook_approval`, `hook_review`, `hook_pii`, `hook_tool_errors`, `hook_log`, `hook_guard`, `hook_stats` |
 | [Model providers](https://eipagent-docs.vercel.app/#kind-models) | `model_openai` (OpenAI, DeepSeek, Ollama, vLLM, OpenRouter, Groq), `model_anthropic`, `model_gemini`, `model_mock` |
 | [Threads and memory](https://eipagent-docs.vercel.app/#kind-threads-memory) | `threads_inmem` / `_file` / `_sql`, `memory_inmem` / `_file` / `_sql`, `db_sql` |
 | [Sandboxes and workspaces](https://eipagent-docs.vercel.app/#kind-sandboxes) | `sandbox_local`, `sandbox_docker`, `sandbox_microsandbox`, `workspace_local`, `workspace_sandbox` |

@@ -171,10 +171,57 @@ func buildBody(req *sdk.ModelRequest, maxTokens int) (map[string]any, string) {
 	case req.ToolChoice != "" && req.ToolChoice != "auto":
 		body["tool_choice"] = map[string]any{"type": "tool", "name": req.ToolChoice}
 	}
+	if t, ok := req.Extra["eip.thinking"].(map[string]any); ok {
+		applyThinking(body, t)
+	}
+	if cc, ok := req.Extra["eip.cache"].(map[string]any); ok {
+		applyCache(body, cc)
+	}
 	for k, v := range req.Extra {
+		if strings.HasPrefix(k, "eip.") {
+			continue
+		}
 		body[k] = v
 	}
 	return body, schemaTool
+}
+
+// applyThinking maps hook_thinking's neutral setting. Current models take
+// {type: adaptive} plus output_config.effort; budget_tokens is only for
+// older models that still accept {type: enabled}.
+func applyThinking(body, t map[string]any) {
+	th := map[string]any{"type": "adaptive"}
+	if b, ok := t["budget_tokens"].(int); ok && b > 0 {
+		th = map[string]any{"type": "enabled", "budget_tokens": b}
+		if mt, _ := body["max_tokens"].(int); mt <= b {
+			body["max_tokens"] = b + 4096
+		}
+	} else if d, _ := t["display"].(string); d != "" {
+		th["display"] = d
+	}
+	body["thinking"] = th
+	if e, _ := t["effort"].(string); e != "" {
+		body["output_config"] = map[string]any{"effort": e}
+	}
+	// Thinking can't be combined with a forced tool choice.
+	if tc, ok := body["tool_choice"].(map[string]any); ok && (tc["type"] == "tool" || tc["type"] == "any") {
+		delete(body, "tool_choice")
+	}
+	delete(body, "temperature")
+}
+
+// applyCache adds two cache breakpoints: the system prompt (which also
+// covers the tools rendered before it) and, via the top-level
+// cache_control, the last cacheable block of the conversation.
+func applyCache(body, cc map[string]any) {
+	ctl := map[string]any{"type": "ephemeral"}
+	if ttl, _ := cc["ttl"].(string); ttl == "1h" {
+		ctl["ttl"] = "1h"
+	}
+	if s, ok := body["system"].(string); ok {
+		body["system"] = []any{map[string]any{"type": "text", "text": s, "cache_control": ctl}}
+	}
+	body["cache_control"] = ctl
 }
 
 // unwrapSchemaTool turns a call to the structured-output tool into text.

@@ -177,7 +177,21 @@ func buildBody(req *sdk.ModelRequest, structured string) map[string]any {
 		body["stream"] = true
 		body["stream_options"] = map[string]any{"include_usage": true}
 	}
+	// hook_thinking / hook_cache settings (see those plugins).
+	if t, ok := req.Extra["eip.thinking"].(map[string]any); ok {
+		if e, _ := t["effort"].(string); e != "" {
+			body["reasoning_effort"] = e
+		}
+	}
+	if cc, ok := req.Extra["eip.cache"].(map[string]any); ok {
+		if k, _ := cc["key"].(string); k != "" {
+			body["prompt_cache_key"] = k
+		}
+	}
 	for k, v := range req.Extra {
+		if strings.HasPrefix(k, "eip.") {
+			continue
+		}
 		body[k] = v
 	}
 	return body

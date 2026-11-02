@@ -129,6 +129,26 @@ func WithMCP(name, target string, args ...string) Option {
 	}
 }
 
+// WithWebSearch gives the model a web_search tool. The backend is
+// "duckduckgo" (no key), "tavily" (secret://TAVILY_API_KEY), "brave"
+// (secret://BRAVE_API_KEY) or "searxng" (set base_url with WithPlugin).
+// Loads tool_websearch; add tool_fetch to let it read the pages.
+func WithWebSearch(backend string) Option {
+	return func(c *config) {
+		c.specs = replaceKinds(c.specs, []engine.PluginSpec{{Use: "tool_websearch", Config: map[string]any{"backend": backend}}}, "tool_websearch")
+	}
+}
+
+// WithThinking turns on model reasoning at the given effort: low,
+// medium, high, xhigh or max. Each provider gets its own setting
+// (Anthropic adaptive thinking, OpenAI reasoning_effort, Gemini
+// thinkingConfig). Loads hook_thinking.
+func WithThinking(effort string) Option {
+	return func(c *config) {
+		c.specs = replaceKinds(c.specs, []engine.PluginSpec{{Use: "hook_thinking", Config: map[string]any{"effort": effort}}}, "hook_thinking")
+	}
+}
+
 // replaceKinds drops rows whose plugin (current or old name) starts with
 // any of the prefixes, then appends add.
 func replaceKinds(specs, add []engine.PluginSpec, prefixes ...string) []engine.PluginSpec {
