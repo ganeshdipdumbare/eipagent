@@ -428,6 +428,7 @@ fmt.Println(res.Text)</code></pre></div></div></div>
   <h3>Next steps</h3>
   <ul>
     <li><a href="#quickstart">Quickstart</a>: your first agent with a tool, in one file.</li>
+    <li><a href="#concepts">Concepts</a>: the words used across these docs (plugin, service, hook, thread …), in one table.</li>
     <li><a href="#fullstack">Full-stack demo</a>: a support desk with approvals, redaction and an audit trail, and how its Go backend is written.</li>
     <li><a href="#lifecycles">Lifecycles</a>: exactly what happens, in what order, during a run.</li>
     <li><a href="#plugins">Writing a plugin</a>: one Go file, no compile step.</li>
@@ -514,6 +515,35 @@ func main() {
 	fmt.Println(res.Text)
 }</code></pre></div>
   <p>The model decides to call <code>weather</code>, the agent runs it, sends the result back, and returns the final answer. The argument schema comes from <code>WeatherIn</code>.</p>
+</section>
+
+<section id="concepts" class="page">
+  <h1>Concepts</h1>
+  <p class="lede">The words used across these docs, in one place. Each links to the page that covers it in depth.</p>
+  <div class="table"><table>
+    <thead><tr><th>Term</th><th>What it is</th></tr></thead>
+    <tbody>
+      <tr><td><b>Agent</b></td><td>What <code>eipagent.New(...)</code> returns: a set of loaded plugins plus a default model and instructions. <code>Close</code> unloads the plugins. <a href="#lifecycles">Lifecycles</a></td></tr>
+      <tr><td><b>Run</b></td><td>One <code>Generate</code>, <code>Stream</code> or <code>Resume</code> call. It ends with a <code>Result</code>: the text, every step, usage and why it stopped. <a href="#reference-run">Run options</a></td></tr>
+      <tr><td><b>Step</b></td><td>One model call inside a run, plus the tool calls it asked for. A run takes up to <code>MaxSteps</code> steps. <a href="#agent-loop">The agent loop</a></td></tr>
+      <tr><td><b>Thread</b></td><td>A conversation saved across runs under an ID (<code>agent.Thread(id)</code>), including runs paused for approval. Stored by the <code>threads</code> service. <a href="#threads">Threads</a></td></tr>
+      <tr><td><b>Model string</b></td><td><code>provider:model</code>, for example <code>anthropic:claude-sonnet-5-5</code>. The part before the colon picks the provider plugin, which loads by itself. <a href="#providers">Providers</a></td></tr>
+      <tr><td><b>Plugin</b></td><td>A unit of behaviour: a Go file with <code>func Apply(p *sdk.Plugin) error</code>, either interpreted from source or compiled in. The loop, providers, tools, memory, sandboxes and policy are all plugins. <a href="#plugins">Plugins</a></td></tr>
+      <tr><td><b><code>*sdk.Plugin</code></b></td><td>The handle every <code>Apply</code> receives, compiled or interpreted. Through it a plugin adds tools and hooks, provides and uses services, reads its config and secrets. (<code>eipagent.PluginAPI</code>, <code>eipagent.PluginContext</code> and <code>sdk.Context</code> are older names for the same type.) <a href="#plugin-api">Plugin API</a></td></tr>
+      <tr><td><b>Service</b></td><td>A named value one plugin provides (<code>p.Provide</code>) and others use (<code>p.Service</code>): <code>loop</code>, <code>model/&lt;name&gt;</code>, <code>threads</code>, <code>memory</code>, <code>secrets</code>, <code>workspace</code> … A plugin lists the services it needs in <code>var Requires</code>; that is how plugins depend on each other without knowing each other.</td></tr>
+      <tr><td><b>Hook</b></td><td>Code a plugin runs at a fixed point of every run: before a step, around a model call, after a model reply, around a tool call, at start and end. Retries, approvals, redaction and limits are hooks. <a href="#kind-hooks">Hooks</a></td></tr>
+      <tr><td><b>Tool</b></td><td>A function the model can call: a name, a JSON Schema for its arguments and a <code>Run</code> func. Pass your own with <code>WithTools</code>, or load tool plugins. <a href="#tools">Tools</a></td></tr>
+      <tr><td><b>Skill</b></td><td>A block of instructions added to the system prompt, from a plugin or a <code>SKILL.md</code> folder (<code>tool_skills</code>).</td></tr>
+      <tr><td><b>Interrupt</b> and <b>decision</b></td><td>A run pauses with an interrupt (for example, a tool call waiting for approval); a person answers with a decision (approve, edit, reject, respond) and the run resumes. <a href="#human-in-the-loop">Human in the loop</a></td></tr>
+      <tr><td><b>Permission</b></td><td>A capability a plugin declares in <code>var Permissions</code>: <code>net</code>, <code>exec</code>, <code>fs:read</code>, <code>fs:write</code>, <code>env</code>, <code>env:secrets</code>, <code>db</code>. An interpreted plugin can't use what it didn't declare. <a href="#plugin-permissions">Permissions</a></td></tr>
+      <tr><td><b>Grant</b></td><td>Which secrets a plugin may read. A secret reference looks like <code>secret://NAME</code>; each plugin sees only the names granted to it. <a href="#kind-secrets">Secrets</a></td></tr>
+      <tr><td><b>Profile</b></td><td>A JSON file (<code>eip.json</code>) listing the model, instructions and plugins with their config, instead of Go options. <a href="#runtime-plugins">Runtime plugins</a></td></tr>
+      <tr><td><b>Policy</b></td><td>The admin's file: plugins that are required, allowed or denied, locked plugins that always run first, and rules on every model and tool call. <a href="#kind-policy">Policy</a></td></tr>
+      <tr><td><b>Snapshot</b></td><td>The plugins' tools, hooks and services, frozen at the start of each run. Loading or unloading a plugin mid-run affects the next run, not the current one.</td></tr>
+      <tr><td><b>Workspace</b> and <b>sandbox</b></td><td>Where shell and file tools act: the host folder (<code>workspace_local</code>) or a container or microVM per thread (<code>workspace_sandbox</code> with a <code>sandbox_*</code> plugin). <a href="#kind-sandboxes">Sandboxes</a></td></tr>
+    </tbody>
+  </table></div>
+  <div class="note"><b>Old names</b><div><p>Plugins and services were renamed in v0.4 (<code>llm_*</code> → <code>model_*</code>, <code>mw_*</code> → <code>hook_*</code>, <code>llm/</code> → <code>model/</code>, <code>checkpointer</code> → <code>threads</code>). The old names still load until v1.0, but these docs use only the new ones. <code>eip plugin fix</code> rewrites a plugin's source.</p></div></div>
 </section>
 
 <section id="ollama" class="page">
@@ -630,7 +660,7 @@ refund := eipagent.WithMeta(eipagent.Tool("issue_refund", "Refund money to the c
 // supervisor approves, edits or rejects it. The pause is durable: it is
 // stored with the thread and survives a server restart.
 func RefundPolicy(limit float64) eipagent.Plugin {
-	return eipagent.Plugin{Name: "refund_policy", Apply: func(p *eipagent.PluginAPI) error {
+	return eipagent.Plugin{Name: "refund_policy", Apply: func(p *sdk.Plugin) error {
 		p.WrapTool(func(c context.Context, req *sdk.ToolRequest, next sdk.ToolHandler) (*sdk.ToolResult, error) {
 			if req.Call.Name != "issue_refund" || req.Decision != nil {
 				return next(c, req) // other tools, or a supervisor already decided
@@ -778,7 +808,7 @@ for (;;) {
   <h3>A secret only one plugin can read</h3>
   <p>Emails go out through a mail relay that needs a token. Instead of a global variable, a small <code>mailer</code> plugin owns the <code>send_email</code> tool and asks the <code>secrets</code> service for the token each time it sends. <code>secrets_env</code> grants <code>MAIL_RELAY_TOKEN</code> to <code>mailer</code> and nobody else. The core tells the provider which plugin is asking, so another plugin can't claim to be <code>mailer</code>.</p>
   <div class="code" data-title="app/tools.go"><pre><code class="language-go">func Mailer(shop *Shop) eipagent.Plugin {
-	return eipagent.Plugin{Name: "mailer", Requires: []string{"secrets"}, Apply: func(p *eipagent.PluginAPI) error {
+	return eipagent.Plugin{Name: "mailer", Requires: []string{"secrets"}, Apply: func(p *sdk.Plugin) error {
 		p.AddTool(eipagent.Tool("send_email", "Email the customer",
 			func(c context.Context, in EmailIn) (string, error) {
 				if _, err := p.Secret("secret://MAIL_RELAY_TOKEN"); err != nil {
@@ -1285,6 +1315,7 @@ office: VALIDATED
       <tr><td>run the whole agent inside a sandbox</td><td><code>WithRunIn(…)</code></td><td><code>sandbox_*</code></td><td><a href="#kind-sandboxes">Sandboxes</a></td></tr>
       <tr><td>use tools from an MCP server</td><td><code>WithMCP(name, …)</code></td><td><code>tool_mcp</code></td><td><a href="#kind-tools">Tools</a></td></tr>
       <tr><td>let the model fetch web pages from allowed hosts</td><td></td><td><code>tool_fetch</code></td><td><a href="#kind-tools">Tools</a></td></tr>
+      <tr><td>let the model search the web</td><td><code>WithWebSearch("duckduckgo")</code></td><td><code>tool_websearch</code></td><td><a href="#kind-tools">Tools</a></td></tr>
       <tr><td>delegate to specialised subagents</td><td></td><td><code>tool_subagents</code></td><td><a href="#multi-agent">Subagents</a></td></tr>
       <tr><td>load instructions on demand (SKILL.md folders)</td><td></td><td><code>tool_skills</code></td><td><a href="#kind-tools">Tools</a></td></tr>
       <tr><td>ask a person before a tool runs</td><td><code>WithApprovals("tool", …)</code></td><td><code>hook_approval</code></td><td><a href="#human-in-the-loop">Human in the loop</a></td></tr>
@@ -1292,6 +1323,9 @@ office: VALIDATED
       <tr><td>keep card numbers and emails away from the model</td><td></td><td><code>hook_pii</code></td><td><a href="#kind-hooks">Hooks</a></td></tr>
       <tr><td>cap model calls, tool calls or tokens</td><td></td><td><code>hook_limits</code>, <code>policy</code></td><td><a href="#kind-hooks">Hooks</a></td></tr>
       <tr><td>keep long conversations within the context window</td><td></td><td><code>hook_summarize</code></td><td><a href="#kind-hooks">Hooks</a></td></tr>
+      <tr><td>turn on model reasoning (thinking) with one setting</td><td><code>WithThinking("high")</code></td><td><code>hook_thinking</code></td><td><a href="#kind-hooks">Hooks</a></td></tr>
+      <tr><td>cut cost and latency with prompt caching</td><td></td><td><code>hook_cache</code></td><td><a href="#kind-hooks">Hooks</a></td></tr>
+      <tr><td>retry when structured output doesn't match the schema</td><td></td><td><code>hook_output_validate</code></td><td><a href="#kind-hooks">Hooks</a></td></tr>
       <tr><td>keep conversations (and paused approvals) across restarts</td><td><code>WithPersistence("file" | "postgres", …)</code></td><td><code>threads_file</code> / <code>threads_sql</code></td><td><a href="#kind-threads-memory">Threads and memory</a></td></tr>
       <tr><td>let the agent remember facts between conversations</td><td><code>WithPersistence(…)</code> + <code>WithPlugins("tool_memory")</code></td><td><code>memory_*</code>, <code>tool_memory</code></td><td><a href="#kind-threads-memory">Threads and memory</a></td></tr>
       <tr><td>run several replicas that share state</td><td><code>WithPersistence("postgres", …)</code></td><td><code>threads_sql</code>, <code>memory_sql</code>, <code>db_sql</code></td><td><a href="#kind-threads-memory">Threads and memory</a></td></tr>
@@ -1376,6 +1410,17 @@ Config:
 
 Policy and audit hooks follow subagents (they run in the same snapshot).</pre></details></div>
 <div class="builtin" id="plugin-tool_time"><div class="bhead"><code>tool_time</code><span class="bsum">adds 1 tool (current_time) · no permissions</span></div><p>Returns the current time. Config: layout (Go time layout).</p></div>
+<div class="builtin" id="plugin-tool_websearch"><div class="bhead"><code>tool_websearch</code><span class="bsum">adds 1 tool (web_search) · permissions net</span></div><p>Web search for the model: a web_search tool returning titles, URLs and snippets. Pair it with tool_fetch to read the pages it finds.</p><details><summary>Config and details</summary><pre>Web search for the model: a web_search tool returning titles, URLs and
+snippets. Pair it with tool_fetch to read the pages it finds.
+
+Config:
+
+	backend:         duckduckgo (default, no key) | tavily | brave | searxng
+	api_key:         literal or secret://NAME (tavily: secret://TAVILY_API_KEY,
+	                 brave: secret://BRAVE_API_KEY by default)
+	base_url:        override the backend URL (required for searxng)
+	max_results:     default 5 (the model may ask for up to 20)
+	timeout_seconds: default 20</pre></details></div>
 </div>
 <!-- /gen:builtins -->
   <h2>Write your own</h2>
@@ -1481,6 +1526,17 @@ Config:
 	               &#34;*&#34; matches every tool
 	non_readonly:  true = also every tool not marked Meta.readonly
 	risk:          [&#34;high&#34;] = also tools whose Meta.risk is listed</pre></details></div>
+<div class="builtin" id="plugin-hook_cache"><div class="bhead"><code>hook_cache</code><span class="bsum">rewrites each step · no permissions</span></div><p>Prompt caching: reuses the unchanged prefix of each request (tools, system prompt, earlier messages) so long agent runs cost less and answer faster. It sets ModelRequest.Extra[&#34;eip.cache&#34;]; model plugins map it:</p><details><summary>Config and details</summary><pre>Prompt caching: reuses the unchanged prefix of each request (tools,
+system prompt, earlier messages) so long agent runs cost less and
+answer faster. It sets ModelRequest.Extra[&#34;eip.cache&#34;]; model plugins
+map it:
+
+	anthropic: cache_control breakpoints on the system prompt and on the
+	           conversation so far
+	openai:    prompt_cache_key = the thread (caching itself is automatic)
+	gemini:    nothing to do (implicit caching)
+
+Config: ttl (5m | 1h, default 5m).</pre></details></div>
 <div class="builtin" id="plugin-hook_fallback"><div class="bhead"><code>hook_fallback</code><span class="bsum">wraps model calls · no permissions</span></div><p>Falls back to other models when a model call fails.</p><details><summary>Config and details</summary><pre>Falls back to other models when a model call fails.
 
 Config: models ([&#34;anthropic:claude-...&#34;, &#34;openai:gpt-...&#34;]), tried in
@@ -1497,6 +1553,14 @@ Config:
 	exit_behavior:  &#34;end&#34; (default: finish politely) | &#34;error&#34; (fail the run)</pre></details></div>
 <div class="builtin" id="plugin-hook_log"><div class="bhead"><code>hook_log</code><span class="bsum">wraps model calls · wraps tool calls · no permissions</span></div><p>Logs every model and tool call with timing. Config: args (log tool arguments, default true), results (log tool results, default false).</p><details><summary>Config and details</summary><pre>Logs every model and tool call with timing. Config: args (log tool
 arguments, default true), results (log tool results, default false).</pre></details></div>
+<div class="builtin" id="plugin-hook_output_validate"><div class="bhead"><code>hook_output_validate</code><span class="bsum">rewrites each step · checks model replies · runs at run end · no permissions</span></div><p>Checks structured output (runs with a ResponseSchema) against the schema. When the final reply is not valid JSON or does not match, the model is asked again with the errors, up to max_retries times.</p><details><summary>Config and details</summary><pre>Checks structured output (runs with a ResponseSchema) against the
+schema. When the final reply is not valid JSON or does not match, the
+model is asked again with the errors, up to max_retries times.
+
+Validates type, required, properties, additionalProperties: false,
+items, enum, minItems/maxItems and minLength/maxLength.
+
+Config: max_retries (2), on_fail (error | accept, default error).</pre></details></div>
 <div class="builtin" id="plugin-hook_pii"><div class="bhead"><code>hook_pii</code><span class="bsum">wraps model calls · wraps tool calls · requires ?secrets · no permissions</span></div><p>Detects PII and redacts, masks, hashes or blocks it.</p><details><summary>Config and details</summary><pre>Detects PII and redacts, masks, hashes or blocks it.
 
 Config:
@@ -1539,6 +1603,22 @@ Config:
 	keep_messages:    recent messages kept verbatim (default 10)
 	model:            model for the summary (default: the run&#39;s model)
 	prompt:           summary instruction</pre></details></div>
+<div class="builtin" id="plugin-hook_thinking"><div class="bhead"><code>hook_thinking</code><span class="bsum">rewrites each step · no permissions</span></div><p>Turns on model reasoning (thinking) with one provider-neutral setting. It sets ModelRequest.Extra[&#34;eip.thinking&#34;]; each model plugin maps it:</p><details><summary>Config and details</summary><pre>Turns on model reasoning (thinking) with one provider-neutral setting.
+It sets ModelRequest.Extra[&#34;eip.thinking&#34;]; each model plugin maps it:
+
+	anthropic: thinking {type: adaptive} + output_config.effort
+	           (budget_tokens &gt; 0: {type: enabled, budget_tokens}, older models)
+	openai:    reasoning_effort
+	gemini:    generationConfig.thinkingConfig (thinkingLevel / thinkingBudget)
+
+Config:
+
+	effort:        low | medium | high | xhigh | max (&#34;&#34; = provider default)
+	budget_tokens: fixed thinking budget, for models that need one (0 = off)
+	display:       anthropic only: summarized | omitted
+	models:        only for these models, globs like &#34;anthropic:*&#34; (default all)
+
+A run can override the effort with RunState.Values[&#34;thinking_effort&#34;].</pre></details></div>
 <div class="builtin" id="plugin-hook_tool_errors"><div class="bhead"><code>hook_tool_errors</code><span class="bsum">wraps tool calls · no permissions</span></div><p>Controls what happens when a tool fails.</p><details><summary>Config and details</summary><pre>Controls what happens when a tool fails.
 
 Config:
@@ -1687,7 +1767,7 @@ import (
 
 // acme is a model provider for an OpenAI-compatible chat API,
 // registered as &#34;model/acme&#34;: use models as &#34;acme:&lt;model&gt;&#34;.
-// Text only; see llm_openai for tools and streaming.
+// Text only; see model_openai for tools and streaming.
 //
 // Config: base_url (required), api_key (&#34;secret://acme_API_KEY&#34;).
 var Permissions = []string{&#34;net&#34;}
@@ -1750,6 +1830,41 @@ func Apply(p *sdk.Plugin) error {
 }</code></pre></div>
 <!-- /gen:template -->
   <p>Then <code>WithModel("acme:their-model")</code> routes to it. A provider returns <code>sdk.ModelResponse{Message, Usage, FinishReason}</code>. To stream, call <code>req.Stream(chunk)</code> for each delta when it isn't nil. To support tools, map <code>req.Tools</code> to the API's format and the reply's calls to <code>Message.ToolCalls</code>. <code>model_openai</code> is a complete example.</p>
+  <h2>What a provider receives</h2>
+  <p>Every call gets one <code>*sdk.ModelRequest</code>. Hooks may have changed it before your <code>Generate</code> sees it.</p>
+  <div class="table"><table>
+    <thead><tr><th>Field</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><code>ModelID</code></td><td>The part after the colon in the model string; send it as the API's model name. (<code>Model</code> is the full string, <code>Provider</code> the part before the colon.)</td></tr>
+      <tr><td><code>System</code></td><td>Instructions plus every skill's prompt, already joined.</td></tr>
+      <tr><td><code>Messages</code></td><td>The conversation: <code>user</code>, <code>assistant</code> (with <code>ToolCalls</code>, <code>Reasoning</code>) and <code>tool</code> results (<code>ToolCallID</code>, <code>IsError</code>). Never <code>system</code> in practice; skip it if you see one.</td></tr>
+      <tr><td><code>Tools</code>, <code>ToolChoice</code></td><td>Tool definitions (name, description, JSON Schema) and <code>""</code>/<code>auto</code>, <code>none</code>, <code>required</code> or a tool name.</td></tr>
+      <tr><td><code>ResponseSchema</code>, <code>ResponseName</code></td><td>Set for structured output (<code>GenerateObject</code>): use the API's native JSON-schema mode if it has one.</td></tr>
+      <tr><td><code>Temperature</code>, <code>MaxTokens</code></td><td>Optional; <code>nil</code> / <code>0</code> mean the API's default.</td></tr>
+      <tr><td><code>Stream</code></td><td>Non-nil when the caller streams: call it with each <code>text</code>, <code>reasoning</code> or <code>tool_call</code> chunk, and still return the whole response.</td></tr>
+      <tr><td><code>Extra</code></td><td>Provider-specific fields, set by config or hooks. See below.</td></tr>
+      <tr><td><code>Thread</code>, <code>User</code>, <code>Step</code>, <code>Run</code></td><td>Who and where: for headers, cache keys and logging. Don't change the run from a provider.</td></tr>
+    </tbody>
+  </table></div>
+  <p><b><code>Extra</code></b> is copied into the API request body as it is, so a user can set any field your API takes. Keys that start with <code>eip.</code> are different: they are settings from standard hooks, in a provider-neutral form. Translate the ones you support and never copy an <code>eip.</code> key into the body.</p>
+  <div class="table"><table>
+    <thead><tr><th>Key</th><th>Set by</th><th>Value</th></tr></thead>
+    <tbody>
+      <tr><td><code>eip.thinking</code></td><td><code>hook_thinking</code></td><td><code>{"effort": "low|medium|high|xhigh|max", "budget_tokens": int, "display": "summarized|omitted"}</code>, each key optional</td></tr>
+      <tr><td><code>eip.cache</code></td><td><code>hook_cache</code></td><td><code>{"ttl": "5m|1h", "key": "&lt;thread id&gt;"}</code></td></tr>
+    </tbody>
+  </table></div>
+  <div class="code" data-title="go"><pre><code class="language-go">if t, ok := req.Extra["eip.thinking"].(map[string]any); ok {
+	if e, _ := t["effort"].(string); e != "" {
+		body["reasoning_effort"] = e // this API's name for it
+	}
+}
+for k, v := range req.Extra {
+	if strings.HasPrefix(k, "eip.") {
+		continue // handled above, or not supported here
+	}
+	body[k] = v
+}</code></pre></div>
   <h2>Gotchas</h2>
   <ul>
     <li><b>Resolve the key per call</b> (<code>p.Secret</code> inside <code>Generate</code>), so rotated keys are picked up.</li>
@@ -2386,7 +2501,7 @@ max_queue (5000).</pre></details></div>
 <!-- /gen:builtins -->
   <h2>Write your own</h2>
   <p>To export audit records somewhere new (Kafka, S3, a database), provide an audit sink. <code>audit_file</code> hands every record to each <code>"audit/sink/&lt;name&gt;"</code> service, already redacted and hash-chained:</p>
-  <div class="code" data-title="go"><pre><code class="language-go">kafka := eipagent.Plugin{Name: "audit_kafka", Requires: []string{"audit"}, Apply: func(p *eipagent.PluginAPI) error {
+  <div class="code" data-title="go"><pre><code class="language-go">kafka := eipagent.Plugin{Name: "audit_kafka", Requires: []string{"audit"}, Apply: func(p *sdk.Plugin) error {
 	w := newKafkaWriter() // your client
 	p.OnUnload(func() { w.Close() })
 	return p.Provide("audit/sink/kafka", &amp;sdk.AuditSink{Send: func(line []byte) {
@@ -2471,7 +2586,7 @@ Config:
 <!-- /gen:builtins -->
   <h2>Write your own</h2>
   <p>A provider for AWS Secrets Manager, GCP Secret Manager, a KMS or your own store provides <code>"secrets"</code>. The core passes the calling plugin as <code>caller</code>, so you can enforce grants. Values you return are redacted and audited for you.</p>
-  <div class="code" data-title="go"><pre><code class="language-go">aws := eipagent.Plugin{Name: "secrets_aws", Apply: func(p *eipagent.PluginAPI) error {
+  <div class="code" data-title="go"><pre><code class="language-go">aws := eipagent.Plugin{Name: "secrets_aws", Apply: func(p *sdk.Plugin) error {
 	sm := newSecretsManagerClient() // your client
 	grants := map[string][]string{"model_openai": {"OPENAI_API_KEY"}}
 	return p.Provide("secrets", &amp;sdk.Secrets{Get: func(c context.Context, caller, name string) (string, error) {
@@ -2569,7 +2684,7 @@ rules:
 
 <section id="plugin-api" class="page" data-nav="Plugin API">
   <h1>Plugin API</h1>
-  <p>Methods on <code>*sdk.Plugin</code>, what every <code>Apply</code> receives. Compiled plugins get the same type as <code>*eipagent.PluginAPI</code>.</p>
+  <p>Methods on <code>*sdk.Plugin</code>, what every <code>Apply</code> receives. Compiled plugins get the same type, so one name covers both.</p>
   <div class="table"><table>
     <thead><tr><th>Method</th><th>Use it to</th></tr></thead>
     <tbody>
@@ -2865,7 +2980,7 @@ eip plugin list</code></pre></div>
 (function () {
   var NAV = [
     { pages: ["introduction"] },
-    { title: "Getting Started", pages: ["installation", "quickstart", "ollama"] },
+    { title: "Getting Started", pages: ["installation", "quickstart", "concepts", "ollama"] },
     { title: "Examples", pages: ["fullstack", "production-examples"] },
     { title: "Foundations", pages: ["providers", "generating-text", "streaming", "tools", "structured-output", "threads", "human-in-the-loop"] },
     { title: "Agents", pages: ["agent-loop", "multi-agent", "lifecycles"] },

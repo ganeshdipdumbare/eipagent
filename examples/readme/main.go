@@ -206,7 +206,7 @@ func middleware(string) {
 // ---- 7. Your own middleware (a compiled plugin) ----
 
 func customMiddleware(string) {
-	timing := eipagent.Plugin{Name: "timing", Apply: func(p *eipagent.PluginAPI) error {
+	timing := eipagent.Plugin{Name: "timing", Apply: func(p *sdk.Plugin) error {
 		p.WrapModel(func(c context.Context, req *eipagent.ModelRequest, next eipagent.ModelHandler) (*eipagent.ModelResponse, error) {
 			resp, err := next(c, req) // call the model (and inner middleware)
 			if err == nil {
@@ -309,7 +309,7 @@ func sandboxedTools(dir string) {
 // ---- 11. Lifecycle hooks ----
 
 func lifecycleHooks(string) {
-	observer := eipagent.Plugin{Name: "observer", Apply: func(p *eipagent.PluginAPI) error {
+	observer := eipagent.Plugin{Name: "observer", Apply: func(p *sdk.Plugin) error {
 		p.OnAgentStart(func(c context.Context, st *sdk.RunState) error {
 			fmt.Println("run start, user:", st.User)
 			return nil // returning an error refuses the run

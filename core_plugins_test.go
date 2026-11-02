@@ -16,7 +16,7 @@ import (
 // searcher is a compiled provider that calls web_search once, then
 // answers with the tool's result.
 func searcher(query string) eipagent.Plugin {
-	return eipagent.Plugin{Name: "searcher", Apply: func(ctx *eipagent.PluginContext) error {
+	return eipagent.Plugin{Name: "searcher", Apply: func(ctx *sdk.Plugin) error {
 		return ctx.Provide("model/searcher", &sdk.Provider{Name: "searcher", Generate: func(c context.Context, req *sdk.ModelRequest) (*sdk.ModelResponse, error) {
 			last := req.Messages[len(req.Messages)-1]
 			if last.Role == sdk.RoleTool {
@@ -31,7 +31,7 @@ func searcher(query string) eipagent.Plugin {
 // capture is a compiled provider that records each request and answers
 // with the replies in turn (the last one repeats).
 func capture(name string, got *[]*sdk.ModelRequest, replies ...string) eipagent.Plugin {
-	return eipagent.Plugin{Name: "capture_" + name, Apply: func(ctx *eipagent.PluginContext) error {
+	return eipagent.Plugin{Name: "capture_" + name, Apply: func(ctx *sdk.Plugin) error {
 		return ctx.Provide("model/"+name, &sdk.Provider{Name: name, Generate: func(c context.Context, req *sdk.ModelRequest) (*sdk.ModelResponse, error) {
 			cp := *req
 			cp.Messages = append([]sdk.Message(nil), req.Messages...)

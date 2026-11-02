@@ -2,7 +2,7 @@
   "schema": 1,
   "name": "hello_mcp",
   "version": "0.1.0",
-  "description": "hello_mcp exposes a remote tool API as tools. At load it GETs <url>/tools ([{name, description, schema}]) and registers each as hello_mcp__<name>; calls POST <url>/tools/<name> with the JSON args. For real MCP servers use the built-in mcp_client plugin; this template shows how to adapt any HTTP tool API the same way.",
+  "description": "hello_mcp exposes a remote tool API as tools. At load it GETs <url>/tools ([{name, description, schema}]) and registers each as hello_mcp__<name>; calls POST <url>/tools/<name> with the JSON args. For real MCP servers use the built-in tool_mcp plugin; this template shows how to adapt any HTTP tool API the same way.",
   "permissions": [
     "net"
   ],

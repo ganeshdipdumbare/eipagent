@@ -2,7 +2,7 @@
   "schema": 1,
   "name": "hello_model",
   "version": "0.1.0",
-  "description": "hello_model is a model provider for an OpenAI-compatible chat API, registered as \"model/hello_model\": use models as \"hello_model:<model>\". Text only; see llm_openai for tools and streaming.",
+  "description": "hello_model is a model provider for an OpenAI-compatible chat API, registered as \"model/hello_model\": use models as \"hello_model:<model>\". Text only; see model_openai for tools and streaming.",
   "permissions": [
     "net"
   ],

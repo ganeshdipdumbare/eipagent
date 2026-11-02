@@ -16,7 +16,7 @@ func TestWriteOnlyPluginCantRead(t *testing.T) {
 	os.WriteFile(secret, []byte("s3cret"), 0o600)
 	writePlugin(t, dir, "writer", pluginHead+`var Permissions = []string{"fs:write"}
 
-func Apply(ctx *sdk.Context) error {
+func Apply(ctx *sdk.Plugin) error {
 	path := ctx.ConfigString("path", "")
 	if f, err := os.OpenFile(path, os.O_RDONLY, 0); err == nil {
 		f.Close()
@@ -52,7 +52,7 @@ func TestEnvPermissionHidesSecrets(t *testing.T) {
 		}
 		return pluginHead + `var Permissions = []string{` + perms + `}
 
-func Apply(ctx *sdk.Context) error {
+func Apply(ctx *sdk.Plugin) error {
 	if os.Getenv("ZZ_REGION") == "" {
 		return fmt.Errorf("plain variable hidden")
 	}
@@ -84,7 +84,7 @@ func TestPluginsCantAddRedactions(t *testing.T) {
 	writePlugin(t, dir, "poison", pluginHead+`var _ = fmt.Sprint
 var _ = os.ErrNotExist
 
-func Apply(ctx *sdk.Context) error {
+func Apply(ctx *sdk.Plugin) error {
 	sdk.AddRedaction("user")
 	return nil
 }
@@ -103,7 +103,7 @@ func TestThirdPartyPluginsCantRedact(t *testing.T) {
 	writePlugin(t, dir, "oracle", pluginHead+`var _ = fmt.Sprint
 var _ = os.ErrNotExist
 
-func Apply(ctx *sdk.Context) error {
+func Apply(ctx *sdk.Plugin) error {
 	_ = sdk.Redact("guess")
 	return nil
 }
@@ -125,7 +125,7 @@ func TestCheckDoesNotExecute(t *testing.T) {
 
 var ran = func() error { return os.WriteFile("` + marker + `", []byte("x"), 0o600) }()
 
-func Apply(ctx *sdk.Context) error { return fmt.Errorf("%v", ran) }
+func Apply(ctx *sdk.Plugin) error { return fmt.Errorf("%v", ran) }
 `
 	if err := Check("evil", []byte(src)); err != nil {
 		t.Fatalf("check: %v", err)
@@ -145,7 +145,7 @@ func TestMorePermissionHoles(t *testing.T) {
 
 var Permissions = []string{}
 
-func Apply(ctx *sdk.Context) error { _, err := textproto.Dial("tcp", "127.0.0.1:1"); return err }
+func Apply(ctx *sdk.Plugin) error { _, err := textproto.Dial("tcp", "127.0.0.1:1"); return err }
 `,
 		"ioutil writes with fs:read": `import (
 	"io/ioutil"
@@ -155,7 +155,7 @@ func Apply(ctx *sdk.Context) error { _, err := textproto.Dial("tcp", "127.0.0.1:
 
 var Permissions = []string{"fs:read"}
 
-func Apply(ctx *sdk.Context) error { return ioutil.WriteFile("/tmp/x", nil, 0o600) }
+func Apply(ctx *sdk.Plugin) error { return ioutil.WriteFile("/tmp/x", nil, 0o600) }
 `,
 		"NewFile wraps descriptors": `import (
 	"os"
@@ -163,7 +163,7 @@ func Apply(ctx *sdk.Context) error { return ioutil.WriteFile("/tmp/x", nil, 0o60
 	"eipagent/sdk"
 )
 
-func Apply(ctx *sdk.Context) error { _ = os.NewFile(3, "x"); return nil }
+func Apply(ctx *sdk.Plugin) error { _ = os.NewFile(3, "x"); return nil }
 `,
 		"http.Dir reads files with net": `import (
 	"net/http"
@@ -173,7 +173,7 @@ func Apply(ctx *sdk.Context) error { _ = os.NewFile(3, "x"); return nil }
 
 var Permissions = []string{"net"}
 
-func Apply(ctx *sdk.Context) error { _, err := http.Dir("/").Open("/etc/hosts"); return err }
+func Apply(ctx *sdk.Plugin) error { _, err := http.Dir("/").Open("/etc/hosts"); return err }
 `,
 		"tls key files with net": `import (
 	"crypto/tls"
@@ -183,7 +183,7 @@ func Apply(ctx *sdk.Context) error { _, err := http.Dir("/").Open("/etc/hosts");
 
 var Permissions = []string{"net"}
 
-func Apply(ctx *sdk.Context) error { _, err := tls.LoadX509KeyPair("/a", "/b"); return err }
+func Apply(ctx *sdk.Plugin) error { _, err := tls.LoadX509KeyPair("/a", "/b"); return err }
 `,
 		"Stdin is the RPC channel": `import (
 	"os"
@@ -191,7 +191,7 @@ func Apply(ctx *sdk.Context) error { _, err := tls.LoadX509KeyPair("/a", "/b"); 
 	"eipagent/sdk"
 )
 
-func Apply(ctx *sdk.Context) error { _ = os.Stdin; return nil }
+func Apply(ctx *sdk.Plugin) error { _ = os.Stdin; return nil }
 `,
 	}
 	for name, body := range cases {
@@ -199,7 +199,7 @@ func Apply(ctx *sdk.Context) error { _ = os.Stdin; return nil }
 			t.Errorf("%s: accepted", name)
 		}
 	}
-	ok := "//go:build ignore\n\npackage plugin\n\nimport (\n\t\"io/ioutil\"\n\n\t\"eipagent/sdk\"\n)\n\nvar Permissions = []string{\"fs:read\"}\n\nfunc Apply(ctx *sdk.Context) error { _, err := ioutil.ReadFile(\"/etc/hosts\"); return err }\n"
+	ok := "//go:build ignore\n\npackage plugin\n\nimport (\n\t\"io/ioutil\"\n\n\t\"eipagent/sdk\"\n)\n\nvar Permissions = []string{\"fs:read\"}\n\nfunc Apply(ctx *sdk.Plugin) error { _, err := ioutil.ReadFile(\"/etc/hosts\"); return err }\n"
 	if err := Check("p", []byte(ok)); err != nil {
 		t.Fatalf("ioutil.ReadFile with fs:read: %v", err)
 	}
@@ -220,10 +220,10 @@ func TestPluginNamesAndProfileLocks(t *testing.T) {
 // running version.
 func TestPendingUpdateKeepsOldVersion(t *testing.T) {
 	dir := t.TempDir()
-	writePlugin(t, dir, "svc", "//go:build ignore\n\npackage plugin\n\nimport \"eipagent/sdk\"\n\nfunc Apply(ctx *sdk.Context) error { ctx.AddTool(sdk.Tool{Name: \"v1\"}); return nil }\n")
+	writePlugin(t, dir, "svc", "//go:build ignore\n\npackage plugin\n\nimport \"eipagent/sdk\"\n\nfunc Apply(ctx *sdk.Plugin) error { ctx.AddTool(sdk.Tool{Name: \"v1\"}); return nil }\n")
 	e := newTest(t, DevPolicy(), dir)
 	load(t, e, "svc", nil)
-	writePlugin(t, dir, "svc", "//go:build ignore\n\npackage plugin\n\nimport \"eipagent/sdk\"\n\nvar Inject = []string{\"nowhere\"}\n\nfunc Apply(ctx *sdk.Context) error { ctx.AddTool(sdk.Tool{Name: \"v2\"}); return nil }\n")
+	writePlugin(t, dir, "svc", "//go:build ignore\n\npackage plugin\n\nimport \"eipagent/sdk\"\n\nvar Requires = []string{\"nowhere\"}\n\nfunc Apply(ctx *sdk.Plugin) error { ctx.AddTool(sdk.Tool{Name: \"v2\"}); return nil }\n")
 	if err := e.Reload("svc"); err == nil {
 		t.Fatal("pending update reported success")
 	}
@@ -235,7 +235,7 @@ func TestPendingUpdateKeepsOldVersion(t *testing.T) {
 // Plugins import the SDK through the stable alias or the module path.
 func TestSDKImportAliasAndModulePath(t *testing.T) {
 	for _, imp := range []string{SDKImport, sdkModulePath} {
-		src := "//go:build ignore\n\npackage plugin\n\nimport \"" + imp + "\"\n\nfunc Apply(ctx *sdk.Context) error { ctx.AddTool(sdk.Tool{Name: \"t\"}); return nil }\n"
+		src := "//go:build ignore\n\npackage plugin\n\nimport \"" + imp + "\"\n\nfunc Apply(ctx *sdk.Plugin) error { ctx.AddTool(sdk.Tool{Name: \"t\"}); return nil }\n"
 		if err := Check("p", []byte(src)); err != nil {
 			t.Errorf("import %q: %v", imp, err)
 		}

@@ -169,7 +169,7 @@ var callSeq atomic.Int64
 // bridgeLLM provides model/<p> for every provider the host offers; calls
 // run on the host, through the host's own middleware and policy.
 func bridgeLLM(conn *rpc.Conn, chunks *chunkRouter, providers []string) engine.Plugin {
-	return engine.Plugin{Name: "bridge_llm", Apply: func(ctx *sdk.Context) error {
+	return engine.Plugin{Name: "bridge_llm", Apply: func(ctx *sdk.Plugin) error {
 		for _, p := range providers {
 			name := p
 			err := ctx.Provide("model/"+name, &sdk.Provider{Name: "bridge:" + name, Capabilities: map[string]bool{"streaming": true, "tools": true, "structured_output": true},
@@ -198,7 +198,7 @@ func bridgeLLM(conn *rpc.Conn, chunks *chunkRouter, providers []string) engine.P
 
 // bridgeTools exposes host-only tools (inline Go tools) inside the box.
 func bridgeTools(conn *rpc.Conn, tools []wireTool) engine.Plugin {
-	return engine.Plugin{Name: "bridge_tools", Apply: func(ctx *sdk.Context) error {
+	return engine.Plugin{Name: "bridge_tools", Apply: func(ctx *sdk.Plugin) error {
 		for _, t := range tools {
 			name := t.Name
 			ctx.AddTool(sdk.Tool{Name: name, Description: t.Description, Schema: t.Schema, Meta: t.Meta,
@@ -218,7 +218,7 @@ func bridgeTools(conn *rpc.Conn, tools []wireTool) engine.Plugin {
 // bridgeSecrets provides "secrets" in the box: each lookup returns a
 // placeholder from the host, never a value.
 func bridgeSecrets(conn *rpc.Conn) engine.Plugin {
-	return engine.Plugin{Name: "bridge_secrets", Apply: func(ctx *sdk.Context) error {
+	return engine.Plugin{Name: "bridge_secrets", Apply: func(ctx *sdk.Plugin) error {
 		return ctx.Provide("secrets", &sdk.Secrets{Get: func(c context.Context, caller, name string) (string, error) {
 			var ph string
 			err := conn.Call(c, "host.secret", wireSecretReq{Caller: caller, Name: name}, &ph)

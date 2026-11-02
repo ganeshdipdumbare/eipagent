@@ -17,7 +17,7 @@ import (
 
 // hello_model is a model provider for an OpenAI-compatible chat API,
 // registered as "model/hello_model": use models as "hello_model:<model>".
-// Text only; see llm_openai for tools and streaming.
+// Text only; see model_openai for tools and streaming.
 //
 // Config: base_url (required), api_key ("secret://hello_model_API_KEY").
 var Permissions = []string{"net"}

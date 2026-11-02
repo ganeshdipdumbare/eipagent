@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/ganeshdipdumbare/eipagent"
+	"github.com/ganeshdipdumbare/eipagent/sdk"
 )
 
 // Tools turns the shop's operations into typed tools. The argument
@@ -64,7 +65,7 @@ type EmailIn struct {
 // every read lands in the audit log as secret.access, and the value is
 // redacted from logs, traces and audit records.
 func Mailer(shop *Shop) eipagent.Plugin {
-	return eipagent.Plugin{Name: "mailer", Requires: []string{"secrets"}, Apply: func(p *eipagent.PluginAPI) error {
+	return eipagent.Plugin{Name: "mailer", Requires: []string{"secrets"}, Apply: func(p *sdk.Plugin) error {
 		p.AddTool(eipagent.Tool("send_email", "Email the customer",
 			func(c context.Context, in EmailIn) (string, error) {
 				if _, err := p.Secret("secret://MAIL_RELAY_TOKEN"); err != nil {
