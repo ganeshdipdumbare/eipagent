@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -86,5 +88,43 @@ func TestPluginSandboxesHaveNoHostTransfer(t *testing.T) {
 	host, _ := root.Service("sandbox/x").(*SandboxProvider).Create(context.Background(), SandboxSpec{})
 	if host.Upload == nil {
 		t.Fatal("the host lost Upload")
+	}
+}
+
+func TestPluginSandboxesRefuseMounts(t *testing.T) {
+	root := NewRoot()
+	root.Provide("sandbox/x", &SandboxProvider{Name: "x", Create: func(ctx context.Context, s SandboxSpec) (*Sandbox, error) { return &Sandbox{ID: "1"}, nil }})
+	spec := SandboxSpec{Mounts: []Mount{{Host: t.TempDir(), Box: "/m"}}}
+	if _, err := root.Fork("tools").Service("sandbox/x").(*SandboxProvider).Create(context.Background(), spec); err == nil {
+		t.Fatal("a plugin mounted a host path")
+	}
+	if _, err := root.Service("sandbox/x").(*SandboxProvider).Create(context.Background(), spec); err != nil {
+		t.Fatalf("the host can't mount: %v", err)
+	}
+}
+
+func TestSandboxSpecMountsResolveSymlinks(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "r")
+	if err := os.Symlink("/", root); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckSandboxSpec(SandboxSpec{Mounts: []Mount{{Host: root, Box: "/h"}}}); err == nil {
+		t.Fatal("a symlink to / passed the mount check")
+	}
+	// A directory that holds a runtime socket (like /var/run).
+	run := filepath.Join(dir, "run")
+	os.Mkdir(run, 0o700)
+	if err := os.WriteFile(filepath.Join(run, "docker.sock"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckSandboxSpec(SandboxSpec{Mounts: []Mount{{Host: run, Box: "/r"}}}); err == nil {
+		t.Fatal("a directory holding docker.sock passed the mount check")
+	}
+	if err := CheckSandboxSpec(SandboxSpec{Image: "-v/:/host"}); err == nil {
+		t.Fatal("an image name starting with - passed")
+	}
+	if err := CheckSandboxSpec(SandboxSpec{Image: "alpine:3", Mounts: []Mount{{Host: t.TempDir(), Box: "/w"}}}); err != nil {
+		t.Fatalf("a plain mount was refused: %v", err)
 	}
 }
