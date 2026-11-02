@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -95,11 +96,11 @@ type ExecWorld struct {
 }
 
 // pluginSandboxes is what Service("sandbox/<name>") hands a plugin: the
-// same provider, but its sandboxes have no Upload / Download. Those copy
-// between a host path and the box, so a plugin without fs permissions
-// could use them to read or write anywhere on the host. Only the host
-// application (WithRunIn) moves files across that boundary; plugins use
-// ReadFile / WriteFile inside the box.
+// same provider, but its sandboxes have no Upload / Download and it
+// refuses host mounts. Both move files between a host path and the box,
+// so a plugin without fs permissions could use them to read or write
+// anywhere on the host. Only the host application (WithRunIn) moves files
+// across that boundary; plugins use ReadFile / WriteFile inside the box.
 func pluginSandboxes(p *SandboxProvider) *SandboxProvider {
 	strip := func(b *Sandbox, err error) (*Sandbox, error) {
 		if b == nil {
@@ -112,6 +113,9 @@ func pluginSandboxes(p *SandboxProvider) *SandboxProvider {
 	cp := *p
 	if p.Create != nil {
 		cp.Create = func(ctx context.Context, spec SandboxSpec) (*Sandbox, error) {
+			if len(spec.Mounts) > 0 {
+				return nil, fmt.Errorf("sandbox mounts are set by the host application, not by plugins")
+			}
 			if err := CheckSandboxSpec(spec); err != nil {
 				return nil, err
 			}
@@ -166,19 +170,49 @@ func CheckSandboxEnv(env map[string]string) error {
 	return nil
 }
 
-// CheckSandboxSpec applies CheckSandboxEnv and refuses mounts that would
-// hand the box the host itself: "/" or a container runtime socket (with
-// it a box could start containers outside every rule here).
+// CheckSandboxSpec applies CheckSandboxEnv, refuses an image name a
+// runtime CLI would read as a flag, and refuses mounts that would hand the
+// box the host itself: "/" or a container runtime socket (with it a box
+// could start containers outside every rule here). Mount sources are
+// checked after resolving symlinks, and a directory is refused when it
+// directly holds a runtime socket (/var/run, /run ...).
 func CheckSandboxSpec(spec SandboxSpec) error {
 	if err := CheckSandboxEnv(spec.Env); err != nil {
 		return err
 	}
+	if strings.HasPrefix(spec.Image, "-") || strings.ContainsAny(spec.Image, " \t\r\n") {
+		return fmt.Errorf("sandbox image %q is not a valid image name", spec.Image)
+	}
 	for _, m := range spec.Mounts {
 		h := filepath.Clean(m.Host)
-		base := filepath.Base(h)
-		if h == "/" || (strings.HasSuffix(base, ".sock") && (strings.Contains(base, "docker") || strings.Contains(base, "podman") || strings.Contains(base, "containerd"))) {
+		if r, err := filepath.EvalSymlinks(h); err == nil {
+			h = r
+		}
+		if h == "/" || runtimeSocket(h) {
 			return fmt.Errorf("sandbox mount %s is not allowed (host root or container runtime socket)", m.Host)
+		}
+		if entries, err := os.ReadDir(h); err == nil {
+			for _, e := range entries {
+				if runtimeSocket(filepath.Join(h, e.Name())) {
+					return fmt.Errorf("sandbox mount %s is not allowed (it holds the container runtime socket %s)", m.Host, e.Name())
+				}
+			}
 		}
 	}
 	return nil
+}
+
+// runtimeSocket reports whether path names a docker/podman/containerd
+// socket, by name or (for a renamed link target) by being a socket file
+// in one of their directories.
+func runtimeSocket(path string) bool {
+	base := filepath.Base(path)
+	if strings.HasSuffix(base, ".sock") && (strings.Contains(base, "docker") || strings.Contains(base, "podman") || strings.Contains(base, "containerd")) {
+		return true
+	}
+	if fi, err := os.Stat(path); err == nil && fi.Mode()&os.ModeSocket != 0 {
+		dir := filepath.Base(filepath.Dir(path))
+		return dir == "docker" || dir == "podman" || dir == "containerd"
+	}
+	return false
 }

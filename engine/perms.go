@@ -62,6 +62,9 @@ var permPkgs = map[string][]string{
 // symbol is only in a plugin's table when it holds the permission.
 var symPerms = map[string]map[string]string{
 	"io/ioutil/ioutil": {"ReadFile": PermFSRead, "ReadDir": PermFSRead, "WriteFile": PermFSWrite, "TempFile": PermFSWrite, "TempDir": PermFSWrite},
+	// net gives the network, not the disk: these open host files by path.
+	"net/http/http":  {"Dir": PermFSRead, "ServeFile": PermFSRead},
+	"crypto/tls/tls": {"LoadX509KeyPair": PermFSRead},
 }
 
 // os is split per symbol.

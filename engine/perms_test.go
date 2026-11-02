@@ -165,6 +165,26 @@ func Apply(ctx *sdk.Context) error { return ioutil.WriteFile("/tmp/x", nil, 0o60
 
 func Apply(ctx *sdk.Context) error { _ = os.NewFile(3, "x"); return nil }
 `,
+		"http.Dir reads files with net": `import (
+	"net/http"
+
+	"eipagent/sdk"
+)
+
+var Permissions = []string{"net"}
+
+func Apply(ctx *sdk.Context) error { _, err := http.Dir("/").Open("/etc/hosts"); return err }
+`,
+		"tls key files with net": `import (
+	"crypto/tls"
+
+	"eipagent/sdk"
+)
+
+var Permissions = []string{"net"}
+
+func Apply(ctx *sdk.Context) error { _, err := tls.LoadX509KeyPair("/a", "/b"); return err }
+`,
 		"Stdin is the RPC channel": `import (
 	"os"
 
