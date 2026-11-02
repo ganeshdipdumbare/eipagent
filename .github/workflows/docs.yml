@@ -1,0 +1,67 @@
+name: Docs
+
+# Builds docs/public (the site, the demo UI and a fresh demo recording) and
+# deploys it to Vercel, the same as running docs/build.sh and then
+# `vercel deploy --prod` from docs/public.
+#
+# Needs three repository secrets:
+#   VERCEL_TOKEN       a token from https://vercel.com/account/tokens
+#   VERCEL_ORG_ID      "orgId" in docs/public/.vercel/project.json
+#   VERCEL_PROJECT_ID  "projectId" in the same file
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - docs/**
+      - plugins/**
+      - pluginpkg/templates.go
+      - examples/fullstack/**
+      - .github/workflows/docs.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deploy at a time; a newer push replaces a queued one.
+concurrency:
+  group: docs-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: docs
+      url: https://eipagent-docs.vercel.app
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+    steps:
+      - name: Check secrets
+        run: |
+          for s in VERCEL_TOKEN VERCEL_ORG_ID VERCEL_PROJECT_ID; do
+            if [ -z "${!s}" ]; then
+              echo "::error::Repository secret $s is not set (see the comment at the top of docs.yml)."
+              exit 1
+            fi
+          done
+
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 22
+
+      - name: Build docs/public
+        run: docs/build.sh
+
+      - name: Deploy to Vercel
+        working-directory: docs/public
+        run: npx --yes vercel@64.7.0 deploy --prod --yes --token "$VERCEL_TOKEN"

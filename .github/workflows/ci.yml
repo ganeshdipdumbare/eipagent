@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Format
+        run: |
+          # Plugin sources under plugins/ are formatted too; gofmt ignores build tags.
+          unformatted=$(gofmt -l $(git ls-files '*.go'))
+          if [ -n "$unformatted" ]; then
+            echo "::error::Run gofmt -w on these files:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Generated docs are up to date
+        run: |
+          # The plugin reference and templates in docs/site.html are generated
+          # from the plugin sources.
+          go run ./docs/gen
+          if ! git diff --quiet docs/site.html; then
+            echo "::error::docs/site.html is out of date. Run: go run ./docs/gen"
+            git diff --stat docs/site.html
+            exit 1
+          fi
+
+      - name: Test
+        # Docker is available on the runner, so the docker sandbox test runs;
+        # the Postgres and microsandbox tests skip themselves.
+        run: go test -count=1 ./...
