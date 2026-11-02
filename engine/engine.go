@@ -56,8 +56,8 @@ type record struct {
 	inject  []string
 	perms   []string
 	config  map[string]any
-	apply   func(*sdk.Context) error
-	ctx     *sdk.Context
+	apply   func(*sdk.Plugin) error
+	ctx     *sdk.Plugin
 	state   State
 	err     error
 	order   int
@@ -77,7 +77,7 @@ type Engine struct {
 	mu       sync.Mutex
 	opts     Options
 	pol      *Policy
-	root     *sdk.Context
+	root     *sdk.Plugin
 	compiled map[string]Plugin
 	recs     map[string]*record
 	nextOrd  int
@@ -99,8 +99,8 @@ func New(opts Options) *Engine {
 	return &Engine{opts: opts, pol: pol, root: root, compiled: map[string]Plugin{}, recs: map[string]*record{}, warned: map[string]bool{}}
 }
 
-func (e *Engine) Root() *sdk.Context { return e.root }
-func (e *Engine) Policy() *Policy    { return e.pol }
+func (e *Engine) Root() *sdk.Plugin { return e.root }
+func (e *Engine) Policy() *Policy   { return e.pol }
 
 func (e *Engine) logf(format string, args ...any) {
 	e.root.Logf(format, args...)
@@ -291,9 +291,9 @@ func (e *Engine) compile(spec PluginSpec) (*record, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", use, err)
 	}
-	apply, ok := v.Interface().(func(*sdk.Context) error)
+	apply, ok := v.Interface().(func(*sdk.Plugin) error)
 	if !ok {
-		return nil, fmt.Errorf("%s: Apply must be func(*sdk.Context) error", use)
+		return nil, fmt.Errorf("%s: Apply must be func(*sdk.Plugin) error", use)
 	}
 	rec.apply = apply
 	return rec, nil

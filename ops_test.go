@@ -48,11 +48,11 @@ func waitFor(t *testing.T, cond func() bool) {
 
 func TestScheduledJob(t *testing.T) {
 	when := time.Now().Add(3 * time.Second).UTC().Format(time.RFC3339Nano)
-	a := mockAgent(t, []any{map[string]any{"text": "report sent"}}, eipagent.WithPlugin("jobs", map[string]any{
+	a := mockAgent(t, []any{map[string]any{"text": "report sent"}}, eipagent.WithPlugin("trigger_schedule", map[string]any{
 		"tick_seconds": 1, "jobs": []any{map[string]any{"name": "report", "schedule": "once " + when, "prompt": "send the report", "user": "ops"}},
 	}))
 	waitFor(t, func() bool {
-		ids, _ := a.Engine().Root().Snapshot().Services["checkpointer"].(*eipagent.Checkpointer).List(bg, "job-")
+		ids, _ := a.Engine().Root().Snapshot().Services["threads"].(*eipagent.Checkpointer).List(bg, "job-")
 		return len(ids) == 1
 	})
 }

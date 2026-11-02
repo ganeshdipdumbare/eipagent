@@ -21,7 +21,7 @@ func TestExecSandboxShellAndFiles(t *testing.T) {
 		map[string]any{"tool": "grep", "args": map[string]any{"pattern": "the.e"}},
 		map[string]any{"text": "done"},
 	}, eipagent.WithPlugin("sandbox_local", map[string]any{"root": root}),
-		eipagent.WithPlugin("exec_sandbox", map[string]any{"provider": "local"}),
+		eipagent.WithPlugin("workspace_sandbox", map[string]any{"provider": "local"}),
 		eipagent.WithPlugins("tool_shell", "tool_fs"))
 	t.Setenv("SECRET_X", "leaked")
 	res, err := a.Generate(bg, "go")

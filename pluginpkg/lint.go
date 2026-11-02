@@ -18,7 +18,7 @@ import (
 // Facts is what static analysis learns from a plugin source.
 type Facts struct {
 	Package         string
-	HasApply        bool     // func Apply(ctx *sdk.Context) error
+	HasApply        bool     // func Apply(p *sdk.Plugin) error (or the pre-v0.4 *sdk.Context)
 	Doc             string   // first comment paragraph, used as a default description
 	Imports         []string //
 	Inject          []string // var Requires (or the pre-v0.4 var Inject)
