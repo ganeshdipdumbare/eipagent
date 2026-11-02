@@ -13,8 +13,8 @@ import (
 
 // flaky is a compiled provider that fails n times with the given status.
 func flaky(name string, fails int, status int, calls *int32) eipagent.Plugin {
-	return eipagent.Plugin{Name: "flaky_" + name, Apply: func(ctx *eipagent.PluginContext) error {
-		return ctx.Provide("llm/"+name, &sdk.Provider{Name: name, Generate: func(c context.Context, req *sdk.ModelRequest) (*sdk.ModelResponse, error) {
+	return eipagent.Plugin{Name: "flaky_" + name, Apply: func(ctx *sdk.Plugin) error {
+		return ctx.Provide("model/"+name, &sdk.Provider{Name: name, Generate: func(c context.Context, req *sdk.ModelRequest) (*sdk.ModelResponse, error) {
 			n := atomic.AddInt32(calls, 1)
 			if int(n) <= fails {
 				return nil, sdk.NewProviderError(name, status, "boom")
@@ -27,7 +27,7 @@ func flaky(name string, fails int, status int, calls *int32) eipagent.Plugin {
 func TestRetryAndFallback(t *testing.T) {
 	var calls int32
 	a, err := eipagent.New(eipagent.WithModel("flaky:m"), eipagent.WithCompiledPlugin(flaky("flaky", 2, 503, &calls)),
-		eipagent.WithPlugin("mw_retry", map[string]any{"initial_delay_ms": 1}))
+		eipagent.WithPlugin("hook_retry", map[string]any{"initial_delay_ms": 1}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,8 +40,8 @@ func TestRetryAndFallback(t *testing.T) {
 	var bad, good int32
 	b, err := eipagent.New(eipagent.WithModel("bad:m"),
 		eipagent.WithCompiledPlugin(flaky("bad", 100, 400, &bad)), eipagent.WithCompiledPlugin(flaky("good", 0, 0, &good)),
-		eipagent.WithPlugin("mw_retry", map[string]any{"initial_delay_ms": 1}),
-		eipagent.WithPlugin("mw_fallback", map[string]any{"models": []any{"good:m"}}))
+		eipagent.WithPlugin("hook_retry", map[string]any{"initial_delay_ms": 1}),
+		eipagent.WithPlugin("hook_fallback", map[string]any{"models": []any{"good:m"}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestHITLThreadResume(t *testing.T) {
 		map[string]any{"text": "done"},
 		map[string]any{"tool": "delete_file", "args": map[string]any{"path": "/etc/passwd"}},
 		map[string]any{"text": "ok, I won't"},
-	}, eipagent.WithTools(deleteTool(&deleted)), eipagent.WithPlugin("mw_hitl", map[string]any{"interrupt_on": map[string]any{"delete_file": true}}))
+	}, eipagent.WithTools(deleteTool(&deleted)), eipagent.WithPlugin("hook_approval", map[string]any{"interrupt_on": map[string]any{"delete_file": true}}))
 
 	th := a.Thread("hitl")
 	res, err := th.Generate(bg, "clean up")
@@ -107,7 +107,7 @@ func TestHITLStatelessResumeAndApprover(t *testing.T) {
 	a := mockAgent(t, []any{
 		map[string]any{"tool": "delete_file", "args": map[string]any{"path": "a"}},
 		map[string]any{"text": "edited"},
-	}, eipagent.WithTools(deleteTool(&deleted)), eipagent.WithPlugin("mw_hitl", map[string]any{"non_readonly": true}))
+	}, eipagent.WithTools(deleteTool(&deleted)), eipagent.WithPlugin("hook_approval", map[string]any{"non_readonly": true}))
 	res, _ := a.Generate(bg, "go")
 	res, err := a.Resume(bg, res, []eipagent.Decision{eipagent.Edit(res.Interrupts[0].ID, map[string]any{"path": "b"})})
 	if err != nil || res.Text != "edited" || len(deleted) != 1 || deleted[0] != "b" {
@@ -118,7 +118,7 @@ func TestHITLStatelessResumeAndApprover(t *testing.T) {
 	b := mockAgent(t, []any{
 		map[string]any{"tool": "delete_file", "args": map[string]any{"path": "x"}},
 		map[string]any{"text": "fine"},
-	}, eipagent.WithTools(deleteTool(&deleted)), eipagent.WithPlugin("mw_hitl", map[string]any{"interrupt_on": map[string]any{"*": true}}),
+	}, eipagent.WithTools(deleteTool(&deleted)), eipagent.WithPlugin("hook_approval", map[string]any{"interrupt_on": map[string]any{"*": true}}),
 		eipagent.WithApprover(func(ctx context.Context, in eipagent.Interrupt) (*eipagent.Decision, error) {
 			d := eipagent.Approve(in.ID)
 			return &d, nil
@@ -142,8 +142,8 @@ func TestLimitsPIIAndToolErrors(t *testing.T) {
 		script = append(script, map[string]any{"tool": "lookup", "args": map[string]any{"q": "x"}})
 	}
 	a := mockAgent(t, script, eipagent.WithTools(echo),
-		eipagent.WithPlugin("mw_limits", map[string]any{"tools": map[string]any{"lookup": 2}, "model_calls_run": 4}),
-		eipagent.WithPlugin("mw_pii", nil))
+		eipagent.WithPlugin("hook_limits", map[string]any{"tools": map[string]any{"lookup": 2}, "model_calls_run": 4}),
+		eipagent.WithPlugin("hook_pii", nil))
 	res, err := a.Generate(bg, "my email is me@corp.com")
 	if err != nil {
 		t.Fatal(err)
@@ -158,14 +158,14 @@ func TestLimitsPIIAndToolErrors(t *testing.T) {
 
 	failing := eipagent.Tool("fail", "f", func(ctx context.Context, in struct{}) (string, error) { return "", context.DeadlineExceeded })
 	b := mockAgent(t, []any{map[string]any{"tool": "fail"}}, eipagent.WithTools(failing),
-		eipagent.WithPlugin("mw_tool_errors", map[string]any{"on_error": "raise"}))
+		eipagent.WithPlugin("hook_tool_errors", map[string]any{"on_error": "raise"}))
 	if _, err := b.Generate(bg, "go"); err == nil {
 		t.Fatal("raise should abort the run")
 	}
 }
 
 func TestSummarize(t *testing.T) {
-	a := mockAgent(t, nil, eipagent.WithPlugin("mw_summarize", map[string]any{"trigger_messages": 6, "keep_messages": 2}))
+	a := mockAgent(t, nil, eipagent.WithPlugin("hook_summarize", map[string]any{"trigger_messages": 6, "keep_messages": 2}))
 	th := a.Thread("long")
 	for i := 0; i < 5; i++ {
 		if _, err := th.Generate(bg, "message"); err != nil {
@@ -186,8 +186,8 @@ func TestAutoReview(t *testing.T) {
 	}, eipagent.WithTools(deleteTool(&deleted)),
 		eipagent.WithPluginSpec(eipagent.PluginSpec{Use: "llm_mock", As: "reviewer", Config: map[string]any{"name": "reviewer",
 			"script": []any{map[string]any{"json": map[string]any{"decision": "deny", "reason": "deleting / is destructive"}}}}}),
-		eipagent.WithPlugin("mw_auto_review", map[string]any{"model": "reviewer:r"}),
-		eipagent.WithPlugin("mw_hitl", map[string]any{"non_readonly": true}))
+		eipagent.WithPlugin("hook_review", map[string]any{"model": "reviewer:r"}),
+		eipagent.WithPlugin("hook_approval", map[string]any{"non_readonly": true}))
 	res, err := a.Generate(bg, "wipe it")
 	if err != nil || len(deleted) != 0 || res.Interrupted() {
 		t.Fatalf("reviewer should deny without escalating: %v %+v", err, res)
@@ -202,7 +202,7 @@ func TestResumeStreamAndThreads(t *testing.T) {
 	a := mockAgent(t, []any{
 		map[string]any{"tool": "delete_file", "args": map[string]any{"path": "x"}},
 		map[string]any{"text": "all done now"},
-	}, eipagent.WithTools(deleteTool(&deleted)), eipagent.WithPlugin("mw_hitl", map[string]any{"interrupt_on": map[string]any{"delete_file": true}}))
+	}, eipagent.WithTools(deleteTool(&deleted)), eipagent.WithPlugin("hook_approval", map[string]any{"interrupt_on": map[string]any{"delete_file": true}}))
 	th := a.Thread("support/7")
 	res, err := th.Generate(bg, "delete x")
 	if err != nil || !res.Interrupted() {
@@ -235,9 +235,9 @@ func TestPartialResume(t *testing.T) {
 	var deleted []string
 	email := eipagent.Tool("send_email", "e", func(ctx context.Context, in struct{}) (string, error) { return "sent", nil })
 	// One model step asks for two tools that both need approval.
-	twoCalls := eipagent.Plugin{Name: "two_calls", Apply: func(ctx *eipagent.PluginContext) error {
+	twoCalls := eipagent.Plugin{Name: "two_calls", Apply: func(ctx *sdk.Plugin) error {
 		n := 0
-		return ctx.Provide("llm/two", &sdk.Provider{Name: "two", Generate: func(c context.Context, req *sdk.ModelRequest) (*sdk.ModelResponse, error) {
+		return ctx.Provide("model/two", &sdk.Provider{Name: "two", Generate: func(c context.Context, req *sdk.ModelRequest) (*sdk.ModelResponse, error) {
 			n++
 			if n == 1 {
 				return &sdk.ModelResponse{Message: sdk.Message{Role: "assistant", ToolCalls: []sdk.ToolCall{
@@ -247,7 +247,7 @@ func TestPartialResume(t *testing.T) {
 		}})
 	}}
 	a, err := eipagent.New(eipagent.WithModel("two:m"), eipagent.WithCompiledPlugin(twoCalls),
-		eipagent.WithTools(deleteTool(&deleted), email), eipagent.WithPlugin("mw_hitl", map[string]any{"interrupt_on": map[string]any{"*": true}}))
+		eipagent.WithTools(deleteTool(&deleted), email), eipagent.WithPlugin("hook_approval", map[string]any{"interrupt_on": map[string]any{"*": true}}))
 	if err != nil {
 		t.Fatal(err)
 	}

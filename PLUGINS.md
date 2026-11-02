@@ -185,4 +185,4 @@ Resolve secrets when you use them (`ctx.Secret("secret://NAME")` inside the requ
 
 ## Compiled plugins
 
-The same lifecycle applies to native Go: `eipagent.WithCompiledPlugin(eipagent.Plugin{Name, Requires, Apply})`, where `Apply` is `func(p *eipagent.PluginAPI) error`. Use compiled plugins for code that needs third-party packages, or for hot paths.
+The same lifecycle applies to native Go: `eipagent.WithCompiledPlugin(eipagent.Plugin{Name, Requires, Apply})`, where `Apply` is `func(p *sdk.Plugin) error`, the same type interpreted plugins get. Use compiled plugins for code that needs third-party packages, or for hot paths.

@@ -124,15 +124,15 @@ import (
 
 var Permissions = []string{"net"}
 
-func Apply(ctx *sdk.Context) error { _ = http.MethodGet; return nil }
+func Apply(ctx *sdk.Plugin) error { _ = http.MethodGet; return nil }
 `
 
 func TestPermissions(t *testing.T) {
 	dir := t.TempDir()
 	writePlugin(t, dir, "uses_net", netPlugin)
 	writePlugin(t, dir, "sneaky", strings.Replace(netPlugin, `var Permissions = []string{"net"}`, "", 1))
-	writePlugin(t, dir, "unsafe_one", "//go:build ignore\n\npackage plugin\n\nimport (\n\t\"unsafe\"\n\n\t\"eipagent/sdk\"\n)\n\nfunc Apply(ctx *sdk.Context) error { _ = unsafe.Sizeof(0); return nil }\n")
-	writePlugin(t, dir, "exits", "//go:build ignore\n\npackage plugin\n\nimport (\n\t\"os\"\n\n\t\"eipagent/sdk\"\n)\n\nfunc Apply(ctx *sdk.Context) error { os.Exit(1); return nil }\n")
+	writePlugin(t, dir, "unsafe_one", "//go:build ignore\n\npackage plugin\n\nimport (\n\t\"unsafe\"\n\n\t\"eipagent/sdk\"\n)\n\nfunc Apply(ctx *sdk.Plugin) error { _ = unsafe.Sizeof(0); return nil }\n")
+	writePlugin(t, dir, "exits", "//go:build ignore\n\npackage plugin\n\nimport (\n\t\"os\"\n\n\t\"eipagent/sdk\"\n)\n\nfunc Apply(ctx *sdk.Plugin) error { os.Exit(1); return nil }\n")
 
 	e := newTest(t, nil, dir)
 	if err := e.Load(PluginSpec{Use: "uses_net"}); err != nil {
@@ -189,7 +189,7 @@ func TestPinsAndLocks(t *testing.T) {
 func TestTrustAndPriority(t *testing.T) {
 	e := newTest(t, &Policy{Locked: []string{"guard"}})
 	var order []string
-	e.Register(Plugin{Name: "guard", Apply: func(ctx *sdk.Context) error {
+	e.Register(Plugin{Name: "guard", Apply: func(ctx *sdk.Plugin) error {
 		ctx.SetPriority(sdk.PriorityReserved)
 		ctx.WrapTool(func(c context.Context, r *sdk.ToolRequest, next sdk.ToolHandler) (*sdk.ToolResult, error) {
 			order = append(order, "guard")
@@ -197,7 +197,7 @@ func TestTrustAndPriority(t *testing.T) {
 		})
 		return nil
 	}})
-	e.Register(Plugin{Name: "greedy", Apply: func(ctx *sdk.Context) error {
+	e.Register(Plugin{Name: "greedy", Apply: func(ctx *sdk.Plugin) error {
 		ctx.Trust(sdk.ClaimTrustKey(), 0, true) // must be a no-op
 		ctx.SetPriority(sdk.PriorityReserved * 10)
 		ctx.WrapTool(func(c context.Context, r *sdk.ToolRequest, next sdk.ToolHandler) (*sdk.ToolResult, error) {

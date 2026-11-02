@@ -43,7 +43,7 @@ func TestRunInSandbox(t *testing.T) {
 		eipagent.WithTools(hostTool),
 		// Inside the box: a shell over the box's own workspace.
 		eipagent.WithPlugin("sandbox_local", map[string]any{"root": "boxes"}),
-		eipagent.WithPlugin("exec_sandbox", map[string]any{"provider": "local"}),
+		eipagent.WithPlugin("workspace_sandbox", map[string]any{"provider": "local"}),
 		eipagent.WithPlugins("tool_shell"),
 		eipagent.WithRunIn(eipagent.RunIn{Provider: "local", ProviderConfig: map[string]any{"root": root}, Binary: bin}),
 		eipagent.WithLogger(func(scope, msg string) { t.Logf("[%s] %s", scope, msg) }),
@@ -83,7 +83,7 @@ func TestRunInStreaming(t *testing.T) {
 		t.Fatalf("build eip: %v %s", err, out)
 	}
 	a, err := eipagent.New(eipagent.WithModel("mock:m"),
-		eipagent.WithPlugin("llm_mock", map[string]any{"script": []any{map[string]any{"text": "streamed from the host model"}}}),
+		eipagent.WithPlugin("model_mock", map[string]any{"script": []any{map[string]any{"text": "streamed from the host model"}}}),
 		eipagent.WithRunIn(eipagent.RunIn{Provider: "local", ProviderConfig: map[string]any{"root": t.TempDir()}, Binary: bin}))
 	if err != nil {
 		t.Fatal(err)

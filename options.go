@@ -162,7 +162,7 @@ func CaptureResult(dst **Result) RunOption { return func(r *runOptions) { r.resu
 // WithApprover decides human-in-the-loop interrupts synchronously (for
 // example by prompting in a CLI). Return nil to leave one pending.
 func WithApprover(fn func(ctx context.Context, in Interrupt) (*Decision, error)) Option {
-	return WithCompiledPlugin(engine.Plugin{Name: "approver_inline", Apply: func(ctx *sdk.Context) error {
+	return WithCompiledPlugin(engine.Plugin{Name: "approver_inline", Apply: func(ctx *sdk.Plugin) error {
 		return ctx.Provide("approver", &sdk.Approver{Decide: fn})
 	}})
 }

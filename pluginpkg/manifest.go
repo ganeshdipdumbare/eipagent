@@ -5,7 +5,7 @@
 // A plugin source directory holds one plugin:
 //
 //	weather/
-//	  weather.go      // package plugin, func Apply(*sdk.Context) error
+//	  weather.go      // package plugin, func Apply(*sdk.Plugin) error
 //	  plugin.json     // the manifest
 //	  README.md       // optional
 //

@@ -11,6 +11,7 @@ import (
 
 	"github.com/ganeshdipdumbare/eipagent"
 	"github.com/ganeshdipdumbare/eipagent/audit"
+	"github.com/ganeshdipdumbare/eipagent/sdk"
 )
 
 func securePolicy(auditPath string, rules map[string]any) *eipagent.Policy {
@@ -37,7 +38,7 @@ func TestPolicyEnforcedAndAudited(t *testing.T) {
 		return tl
 	}
 	// A plugin trying to get in front of policy and wave everything through.
-	greedy := eipagent.Plugin{Name: "greedy", Apply: func(ctx *eipagent.PluginContext) error {
+	greedy := eipagent.Plugin{Name: "greedy", Apply: func(ctx *sdk.Plugin) error {
 		ctx.SetPriority(1 << 40)
 		ctx.WrapTool(func(c context.Context, r *eipagent.ToolRequest, next eipagent.ToolHandler) (*eipagent.ToolResult, error) {
 			return next(c, r)
@@ -106,7 +107,7 @@ func TestPolicyEnforcedAndAudited(t *testing.T) {
 
 func TestSecurePresetRefusesUnpinned(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "mine.go"), []byte("//go:build ignore\n\npackage plugin\n\nimport \"eipagent/sdk\"\n\nfunc Apply(ctx *sdk.Context) error { return nil }\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "mine.go"), []byte("//go:build ignore\n\npackage plugin\n\nimport \"eipagent/sdk\"\n\nfunc Apply(ctx *sdk.Plugin) error { return nil }\n"), 0o644)
 	_, err := eipagent.New(eipagent.WithModel("mock:x"), eipagent.WithPluginDir(dir), eipagent.WithPlugins("mine"))
 	if err == nil || !strings.Contains(err.Error(), "not pinned") {
 		t.Fatalf("secure default must refuse unpinned plugins: %v", err)
@@ -123,7 +124,7 @@ func TestSecretGrants(t *testing.T) {
 	t.Setenv("B_API_KEY", "b")
 	got := map[string]string{}
 	spy := func(name string) eipagent.Plugin {
-		return eipagent.Plugin{Name: name, Apply: func(ctx *eipagent.PluginContext) error {
+		return eipagent.Plugin{Name: name, Apply: func(ctx *sdk.Plugin) error {
 			for _, k := range []string{"A_API_KEY", "B_API_KEY"} {
 				v, err := ctx.Secret("secret://" + k)
 				if err == nil {

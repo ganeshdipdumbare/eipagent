@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/ganeshdipdumbare/eipagent"
+	"github.com/ganeshdipdumbare/eipagent/sdk"
 )
 
 func TestSubagentAsTool(t *testing.T) {
@@ -23,7 +24,7 @@ func TestSubagentAsTool(t *testing.T) {
 		map[string]any{"tool": "lookup_secret"},
 		map[string]any{"text": "the number is 42"},
 		map[string]any{"text": "Researcher says 42."},
-	}, eipagent.WithTools(secret, other), eipagent.WithPlugin("agents", map[string]any{"agents": []any{
+	}, eipagent.WithTools(secret, other), eipagent.WithPlugin("tool_subagents", map[string]any{"agents": []any{
 		map[string]any{"name": "researcher", "description": "finds facts", "instructions": "You research.", "tools": []any{"lookup_secret"}},
 	}}))
 	res, err := a.Generate(bg, "what is the number?")
@@ -37,7 +38,7 @@ func TestSubagentAsTool(t *testing.T) {
 
 func TestHandoff(t *testing.T) {
 	var sysSeen []string
-	spy := eipagent.Plugin{Name: "spy", Apply: func(ctx *eipagent.PluginContext) error {
+	spy := eipagent.Plugin{Name: "spy", Apply: func(ctx *sdk.Plugin) error {
 		ctx.WrapModel(func(c context.Context, req *eipagent.ModelRequest, next eipagent.ModelHandler) (*eipagent.ModelResponse, error) {
 			sysSeen = append(sysSeen, req.System)
 			return next(c, req)
@@ -48,7 +49,7 @@ func TestHandoff(t *testing.T) {
 		map[string]any{"tool": "transfer_to_billing"},
 		map[string]any{"text": "Billing here."},
 		map[string]any{"text": "still billing"},
-	}, eipagent.WithCompiledPlugin(spy), eipagent.WithPlugin("agents", map[string]any{"agents": []any{
+	}, eipagent.WithCompiledPlugin(spy), eipagent.WithPlugin("tool_subagents", map[string]any{"agents": []any{
 		map[string]any{"name": "billing", "description": "invoices", "instructions": "You are billing.", "mode": "handoff"},
 	}}))
 	th := a.Thread("h")
@@ -80,7 +81,7 @@ func TestSkills(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "pdf", "ref.md"), []byte("reference"), 0o644)
 	os.WriteFile(filepath.Join(dir, "secret.txt"), []byte("nope"), 0o644)
 	var sys string
-	spy := eipagent.Plugin{Name: "spy", Apply: func(ctx *eipagent.PluginContext) error {
+	spy := eipagent.Plugin{Name: "spy", Apply: func(ctx *sdk.Plugin) error {
 		ctx.WrapModel(func(c context.Context, req *eipagent.ModelRequest, next eipagent.ModelHandler) (*eipagent.ModelResponse, error) {
 			sys = req.System
 			return next(c, req)
@@ -92,7 +93,7 @@ func TestSkills(t *testing.T) {
 		map[string]any{"tool": "read_skill_file", "args": map[string]any{"name": "pdf", "path": "ref.md"}},
 		map[string]any{"tool": "read_skill_file", "args": map[string]any{"name": "pdf", "path": "../secret.txt"}},
 		map[string]any{"text": "done"},
-	}, eipagent.WithCompiledPlugin(spy), eipagent.WithPlugin("skills_dir", map[string]any{"dirs": []any{dir}}))
+	}, eipagent.WithCompiledPlugin(spy), eipagent.WithPlugin("tool_skills", map[string]any{"dirs": []any{dir}}))
 	res, err := a.Generate(bg, "read a pdf")
 	if err != nil {
 		t.Fatal(err)

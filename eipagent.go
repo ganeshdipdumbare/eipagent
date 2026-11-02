@@ -41,10 +41,12 @@ type (
 	Policy       = engine.Policy
 	PluginStatus = engine.PluginStatus
 
-	// For writing compiled plugins and middleware. PluginAPI is what a
-	// plugin's Apply receives (sdk.Plugin).
+	// For writing compiled plugins and middleware. A plugin's Apply
+	// receives a *sdk.Plugin, in compiled and interpreted plugins alike.
+	//
+	// Deprecated: use sdk.Plugin (the same type). Kept until v1.0.
 	PluginAPI = sdk.Plugin
-	// Deprecated: use PluginAPI. Kept until v1.0.
+	// Deprecated: use sdk.Plugin (the same type). Kept until v1.0.
 	PluginContext = sdk.Plugin
 	ModelRequest  = sdk.ModelRequest
 	ModelResponse = sdk.ModelResponse
@@ -104,7 +106,7 @@ func newLocal(cfg *config) (*Agent, error) {
 	}
 	if len(cfg.tools) > 0 {
 		tools := cfg.tools
-		eng.Register(engine.Plugin{Name: "inline_tools", Apply: func(ctx *sdk.Context) error {
+		eng.Register(engine.Plugin{Name: "inline_tools", Apply: func(ctx *sdk.Plugin) error {
 			for _, t := range tools {
 				ctx.AddTool(t)
 			}
@@ -120,7 +122,7 @@ func newLocal(cfg *config) (*Agent, error) {
 		a.instructions = "You are a helpful assistant."
 	}
 	self := a
-	eng.Register(engine.Plugin{Name: "agent_service", Apply: func(ctx *sdk.Context) error {
+	eng.Register(engine.Plugin{Name: "agent_service", Apply: func(ctx *sdk.Plugin) error {
 		return ctx.Provide("agent", &sdk.AgentService{Run: func(c context.Context, thread, user, prompt string) (*sdk.RunResult, error) {
 			var res *Result
 			var err error

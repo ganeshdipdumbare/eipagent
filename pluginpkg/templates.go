@@ -185,7 +185,7 @@ import (
 
 // {{.Name}} is a model provider for an OpenAI-compatible chat API,
 // registered as "model/{{.Name}}": use models as "{{.Name}}:<model>".
-// Text only; see llm_openai for tools and streaming.
+// Text only; see model_openai for tools and streaming.
 //
 // Config: base_url (required), api_key ("secret://{{.Name}}_API_KEY").
 var Permissions = []string{"net"}
@@ -328,7 +328,7 @@ import (
 // {{.Name}} exposes a remote tool API as tools. At load it GETs
 // <url>/tools ([{name, description, schema}]) and registers each as
 // {{.Name}}__<name>; calls POST <url>/tools/<name> with the JSON args.
-// For real MCP servers use the built-in mcp_client plugin; this template
+// For real MCP servers use the built-in tool_mcp plugin; this template
 // shows how to adapt any HTTP tool API the same way.
 //
 // Config: url (required), token ("secret://{{.Name}}_TOKEN").

@@ -22,7 +22,7 @@ func mcpScript() []any {
 
 func checkMCP(t *testing.T, server map[string]any) {
 	t.Helper()
-	a := mockAgent(t, mcpScript(), eipagent.WithPlugin("mcp_client", map[string]any{"servers": []any{server}}))
+	a := mockAgent(t, mcpScript(), eipagent.WithPlugin("tool_mcp", map[string]any{"servers": []any{server}}))
 	res, err := a.Generate(bg, "use mcp")
 	if err != nil {
 		t.Fatal(err)
