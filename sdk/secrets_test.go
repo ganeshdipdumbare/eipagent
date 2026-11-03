@@ -188,3 +188,16 @@ func TestSandboxSpecMountsResolveSymlinks(t *testing.T) {
 		t.Fatalf("a plain mount was refused: %v", err)
 	}
 }
+
+func TestSandboxSpecWorkdir(t *testing.T) {
+	for _, wd := range []string{"relative/dir", "-v/:/host", "/work\nnext", "/work/../etc", "/work/\x00x"} {
+		if err := CheckSandboxSpec(SandboxSpec{Workdir: wd}); err == nil {
+			t.Errorf("workdir %q accepted", wd)
+		}
+	}
+	for _, wd := range []string{"", "/workspace", "/a/b-c_d"} {
+		if err := CheckSandboxSpec(SandboxSpec{Workdir: wd}); err != nil {
+			t.Errorf("workdir %q refused: %v", wd, err)
+		}
+	}
+}

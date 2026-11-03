@@ -111,7 +111,7 @@ func Apply(p *sdk.Plugin) error {
 			}
 			args = append(args, "-w", wd)
 			args = append(args, extra...)
-			args = append(args, img, "sh", "-c", "mkdir -p "+wd+" && exec sleep infinity")
+			args = append(args, img, "sh", "-c", `mkdir -p -- "$1" && exec sleep infinity`, "_", wd)
 			out, errs, code, err := run(c, nil, args...)
 			if err != nil || code != 0 {
 				return nil, fmt.Errorf("sandbox_docker: %v %s", err, strings.TrimSpace(errs))

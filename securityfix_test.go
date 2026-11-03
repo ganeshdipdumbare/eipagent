@@ -548,3 +548,41 @@ func TestWebhookTimestampDefaultAndOptOut(t *testing.T) {
 		t.Fatalf("opt-out failed: %d %s", code, out)
 	}
 }
+
+func TestSandboxLocalRefusesSecretEnvAllow(t *testing.T) {
+	t.Setenv("ZZ_API_KEY", "secret-value")
+	_, err := eipagent.New(eipagent.WithModel("mock:x"),
+		eipagent.WithPlugin("model_mock", map[string]any{"script": []any{}}),
+		eipagent.WithPlugin("sandbox_local", map[string]any{"root": t.TempDir(), "env_allow": []any{"ZZ_API_KEY"}}),
+		eipagent.WithLogger(func(string, string) {}))
+	if err == nil || !strings.Contains(err.Error(), "credential") {
+		t.Fatalf("secret-like env_allow accepted: %v", err)
+	}
+}
+
+func TestSandboxLocalFixedWorkdirRemove(t *testing.T) {
+	dir := t.TempDir()
+	a := mockAgent(t, nil, eipagent.WithPlugin("sandbox_local", map[string]any{"workdir": dir}))
+	prov := a.Engine().Root().Service("sandbox/local").(*sdk.SandboxProvider)
+	box, err := prov.Create(bg, sdk.SandboxSpec{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := box.WriteFile(bg, "sub/file.txt", []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{".", "sub/..", ""} {
+		if err := box.Remove(bg, p); err == nil {
+			t.Fatalf("removed the shared root through %q", p)
+		}
+	}
+	if _, err := box.Exec(bg, sdk.ExecRequest{Shell: "ln -s " + dir + " link"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := box.Remove(bg, "link"); err == nil {
+		t.Fatal("removed the shared root through a symlink")
+	}
+	if err := box.Remove(bg, "sub/file.txt"); err != nil {
+		t.Fatalf("ordinary file: %v", err)
+	}
+}

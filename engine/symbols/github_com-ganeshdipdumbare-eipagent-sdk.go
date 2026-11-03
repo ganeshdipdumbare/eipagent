@@ -55,6 +55,7 @@ func init() {
 		"RoleTool":           reflect.ValueOf(constant.MakeFromLiteral("\"tool\"", token.STRING, 0)),
 		"RoleUser":           reflect.ValueOf(constant.MakeFromLiteral("\"user\"", token.STRING, 0)),
 		"RunInfoFrom":        reflect.ValueOf(sdk.RunInfoFrom),
+		"SecretLike":         reflect.ValueOf(sdk.SecretLike),
 		"SplitModel":         reflect.ValueOf(sdk.SplitModel),
 		"Str":                reflect.ValueOf(sdk.Str),
 		"ThreadFrom":         reflect.ValueOf(sdk.ThreadFrom),

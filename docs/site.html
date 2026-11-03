@@ -2522,7 +2522,7 @@ Config: root (default &#34;.eipagent/sandboxes&#34;), workdir (use one fixed
 directory instead of one per sandbox: every thread then shares it and
 its files outlive sandbox_destroy, so use it only for a single user&#39;s
 own workspace), env_allow ([&#34;PATH&#34;,&#34;HOME&#34;,&#34;LANG&#34;]; secret-looking
-names are never passed without the env:secrets permission).</pre></details></div>
+names are refused unless env_secrets: true is set explicitly).</pre></details></div>
 <div class="builtin" id="plugin-sandbox_microsandbox"><div class="bhead"><code>sandbox_microsandbox</code><span class="bsum">provides sandbox/&lt;name&gt; · permissions exec</span></div><p>MicroVM sandboxes through the microsandbox CLI (msb), provided as &#34;sandbox/microsandbox&#34;. Each sandbox is its own lightweight VM with its own kernel, so it is a stronger boundary than a container. Sandboxes have no network by default; allowlist mode turns hosts into msb network rules.</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugin(&#34;sandbox_microsandbox&#34;, map[string]any{&#34;image&#34;: &#34;python&#34;})
 eipagent.WithPlugin(&#34;workspace_sandbox&#34;, map[string]any{&#34;provider&#34;: &#34;microsandbox&#34;})
 eipagent.WithPlugins(&#34;tool_shell&#34;, &#34;tool_fs&#34;)</code></pre></div><details><summary>Config and details</summary><pre>MicroVM sandboxes through the microsandbox CLI (msb), provided as
