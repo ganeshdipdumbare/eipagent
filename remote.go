@@ -121,6 +121,7 @@ func newRemote(cfg *config) (*Agent, error) {
 	}
 	r := &remote{host: host, box: box, subs: map[string]func(sdk.Event){}}
 	r.broker, _ = newBroker(host, ri) // rules checked above
+	r.broker.setCallers(append(append([]engine.PluginSpec{}, prof.Plugins...), pol.Require...))
 	fail = func(err error) (*Agent, error) { r.close(); return nil, err }
 
 	tmp, err := os.MkdirTemp("", "eip-runin-")

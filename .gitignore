@@ -5,3 +5,4 @@
 *.test
 .vercel
 .DS_Store
+release-notes.md

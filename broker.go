@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ganeshdipdumbare/eipagent/engine"
 	"github.com/ganeshdipdumbare/eipagent/sdk"
 )
 
@@ -25,7 +26,12 @@ type broker struct {
 	host   *Agent
 	hosts  map[string][]egressRule // secret name -> where its placeholder may go (RunIn.SecretHosts)
 	egress []egressRule            // where the box may go without secrets (RunIn.Egress)
-	client *http.Client
+	// callers are the plugin names the box may ask for secrets as: the
+	// ones the host put in its profile, plus the plugins it loads on its
+	// own. The box names the caller itself, so this keeps a box from
+	// claiming another plugin's grants. nil: any (not yet set).
+	callers map[string]bool
+	client  *http.Client
 
 	mu    sync.Mutex
 	byKey map[string]string       // caller \x00 name -> placeholder
@@ -138,6 +144,21 @@ func newBroker(host *Agent, ri *RunIn) (*broker, error) {
 	return b, nil
 }
 
+// setCallers records the plugins the box was started with (see callers).
+func (b *broker) setCallers(specs []engine.PluginSpec) {
+	b.callers = map[string]bool{}
+	for _, s := range specs {
+		b.callers[sdk.CanonicalPlugin(s.Name())] = true
+	}
+	for _, use := range autoPlugins {
+		b.callers[sdk.CanonicalPlugin(use)] = true
+	}
+}
+
+func (b *broker) knownCaller(name string) bool {
+	return b.callers == nil || b.callers[sdk.CanonicalPlugin(name)]
+}
+
 func (b *broker) services() (*sdk.Secrets, *sdk.Audit) {
 	snap := b.host.eng.Root().Snapshot()
 	s, _ := snap.Services["secrets"].(*sdk.Secrets)
@@ -169,7 +190,12 @@ func (b *broker) resolve(ctx context.Context, caller, name string) (string, erro
 // placeholder answers host.secret. The value is resolved on the host (so
 // grants and "not set" errors surface in the box) but never sent.
 func (b *broker) placeholder(ctx context.Context, caller, name string) (string, error) {
-	_, err := b.resolve(ctx, caller, name)
+	var err error
+	if b.knownCaller(caller) {
+		_, err = b.resolve(ctx, caller, name)
+	} else {
+		err = fmt.Errorf("sandbox: secret %s asked for as %q, which is not a plugin in the box", name, caller)
+	}
 	d := map[string]any{"plugin": caller, "secret": name, "outcome": "granted", "value": "placeholder"}
 	if err != nil {
 		d["outcome"], d["error"] = "denied", sdk.Redact(err.Error())

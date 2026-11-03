@@ -1,0 +1,106 @@
+name: Release
+
+# Run from the Actions tab. It picks the next version from the latest
+# vX.Y.Z tag (or takes one), runs scripts/release.sh (sdk.Version, the
+# install lines in README.md and the docs, the CHANGELOG heading), checks
+# the build, commits "Release vX.Y.Z" to main, tags it, publishes a GitHub
+# release with that version's changelog section, and deploys the docs.
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Part of the version to raise (ignored when version is set)
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+      version:
+        description: Exact version instead, e.g. v0.5.0
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Only from main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Run Release from main, not ${GITHUB_REF}."
+          exit 1
+
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Next version
+        id: version
+        env:
+          BUMP: ${{ inputs.bump }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          if [ -n "$VERSION" ]; then
+            v=$VERSION
+          else
+            last=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)
+            last=${last:-v0.0.0}
+            IFS=. read -r major minor patch <<< "${last#v}"
+            case $BUMP in
+              major) v="v$((major + 1)).0.0" ;;
+              minor) v="v${major}.$((minor + 1)).0" ;;
+              *)     v="v${major}.${minor}.$((patch + 1))" ;;
+            esac
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Releasing $v"
+
+      - name: Prepare
+        run: scripts/release.sh "${{ steps.version.outputs.version }}"
+
+      - name: Check
+        run: |
+          go run ./docs/gen
+          go build ./...
+          go vet ./...
+          go test -count=1 ./...
+
+      - name: Commit, tag and push
+        env:
+          V: ${{ steps.version.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md README.md docs/site.html sdk/secrets.go
+          git commit -m "Release $V"
+          git tag -a "$V" -m "$V"
+          git push --atomic origin HEAD:main "refs/tags/$V"
+
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          V: ${{ steps.version.outputs.version }}
+        run: gh release create "$V" --title "$V" --notes-file release-notes.md --verify-tag
+
+  docs:
+    # Pushes made with GITHUB_TOKEN don't start other workflows, so the
+    # docs deploy is called here for the release commit.
+    needs: release
+    uses: ./.github/workflows/docs.yml
+    with:
+      ref: ${{ needs.release.outputs.version }}
+    secrets: inherit

@@ -1,6 +1,10 @@
 package eipagent
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/ganeshdipdumbare/eipagent/engine"
+)
 
 func TestEgressRules(t *testing.T) {
 	for _, c := range []struct {
@@ -28,6 +32,28 @@ func TestEgressRules(t *testing.T) {
 	for _, bad := range []string{"get api.github.com", "api.github.com/[", "", "GET /path"} {
 		if _, err := parseRule(bad); err == nil {
 			t.Errorf("%q should be refused", bad)
+		}
+	}
+}
+
+func TestBrokerKnownCallers(t *testing.T) {
+	b := &broker{}
+	if !b.knownCaller("anything") {
+		t.Fatal("before setCallers every caller is accepted")
+	}
+	b.setCallers([]engine.PluginSpec{{Use: "probe"}, {Use: "tool_fetch", As: "gh"}, {Use: "llm_mock"}})
+	for name, ok := range map[string]bool{
+		"probe":       true,
+		"gh":          true,  // instance name
+		"tool_fetch":  false, // only loaded as "gh"
+		"model_mock":  true,  // current name of llm_mock
+		"llm_mock":    true,
+		"loop":        true, // loaded by the box on its own
+		"secrets_env": false,
+		"":            false,
+	} {
+		if got := b.knownCaller(name); got != ok {
+			t.Errorf("knownCaller(%q) = %v, want %v", name, got, ok)
 		}
 	}
 }
