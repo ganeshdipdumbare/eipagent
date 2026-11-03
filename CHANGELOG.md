@@ -4,6 +4,8 @@ All notable changes to eipagent. Versions follow [semantic versioning](https://s
 
 ## Unreleased
 
+## v0.4.4 — 2026-11-03
+
 ### Changed
 
 - **Behavior change:** `trigger_webhook` now requires a timestamp by default. Senders sign `METHOD\nPATH\n<timestamp>\n<body>` and send the timestamp in `X-Signature-Timestamp` (override with `timestamp_header`, or set it to `""` together with `allow_replay_after_window: true` for senders that cannot send one). Binding the signature to the method and path also stops a delivery for one route being replayed against another that shares the secret. The trigger template and `hello_trigger` example use the same format and require a secret of at least 32 bytes.
