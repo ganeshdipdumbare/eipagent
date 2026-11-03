@@ -66,11 +66,17 @@ jobs:
               *)     v="v${major}.${minor}.$((patch + 1))" ;;
             esac
           fi
+          if [[ ! "$v" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Version '$v' is not vMAJOR.MINOR.PATCH"
+            exit 1
+          fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "Releasing $v"
 
       - name: Prepare
-        run: scripts/release.sh "${{ steps.version.outputs.version }}"
+        env:
+          V: ${{ steps.version.outputs.version }}
+        run: scripts/release.sh "$V"
 
       - name: Check
         run: |

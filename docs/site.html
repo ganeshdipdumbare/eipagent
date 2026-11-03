@@ -3522,7 +3522,7 @@ eip plugin list</code></pre></div>
     term: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m5 8 4 4-4 4M12 17h7"/></svg>'
   };
 
-  var pages = {}, order = [], groupOf = {};
+  var pages = Object.create(null), order = [], groupOf = Object.create(null);
   document.querySelectorAll("section.page").forEach(function (s) { pages[s.id] = s; });
   NAV.forEach(function (g) { g.pages.forEach(function (id) { if (pages[id]) { order.push(id); groupOf[id] = g.title || ""; } }); });
   function title(id) { var p = pages[id]; if (p.dataset.nav) return p.dataset.nav; var h = p.querySelector("h1"); return h ? h.textContent.trim() : id; }
@@ -3614,9 +3614,9 @@ eip plugin list</code></pre></div>
   var crumbs = document.getElementById("crumbs"), pager = document.getElementById("pager"), toc = document.getElementById("toc");
   var current = null;
   // Pages merged into the Plugins section in v0.4; old links keep working.
-  var MOVED = { "writing-plugins": "plugins", "middleware": "kind-hooks", "sandboxes": "kind-sandboxes", "persistence": "kind-threads-memory",
+  var MOVED = Object.assign(Object.create(null), { "writing-plugins": "plugins", "middleware": "kind-hooks", "sandboxes": "kind-sandboxes", "persistence": "kind-threads-memory",
     "integrations": "kind-tools", "automation": "kind-triggers", "observability": "kind-telemetry", "secrets": "kind-secrets",
-    "policy": "kind-policy", "reference-hooks": "plugin-api", "reference-plugins": "plugins-choose" };
+    "policy": "kind-policy", "reference-hooks": "plugin-api", "reference-plugins": "plugins-choose" });
   function pageFor(hash) {
     if (MOVED[hash]) hash = MOVED[hash];
     if (pages[hash]) return { page: hash };
