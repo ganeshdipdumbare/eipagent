@@ -17,7 +17,7 @@
 Requires **Go 1.27**.
 
 ```bash
-go get github.com/ganeshdipdumbare/eipagent@v0.4.5
+go get github.com/ganeshdipdumbare/eipagent@v0.4.6
 ```
 
 The repository is private: run `go env -w GOPRIVATE=github.com/ganeshdipdumbare/*` once, and `gh auth setup-git` (or an SSH key) so `git` can fetch it.
