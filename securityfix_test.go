@@ -16,6 +16,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -247,6 +249,128 @@ func TestVaultNamesAndDefaults(t *testing.T) {
 	for _, p := range paths {
 		if strings.Contains(p, "..") || strings.Contains(p, "/sys/") {
 			t.Fatalf("request escaped the prefix: %s", p)
+		}
+	}
+}
+
+func TestAuditHTTPRejectsCredentialsOverPlainHTTP(t *testing.T) {
+	t.Setenv("AUDIT_SINK_TOKEN", "tok-1234567890")
+	_, err := eipagent.New(eipagent.WithModel("mock:x"),
+		eipagent.WithPlugin("model_mock", map[string]any{"script": []any{}}),
+		eipagent.WithPlugin("secrets_env", nil),
+		eipagent.WithPlugin("audit_file", map[string]any{"path": "-"}),
+		eipagent.WithPlugin("audit_http", map[string]any{"url": "http://example.com/ingest", "hmac_key": "secret://AUDIT_SINK_TOKEN"}),
+		eipagent.WithLogger(func(string, string) {}))
+	if err == nil {
+		t.Fatal("plain-http sink with an HMAC key was accepted")
+	}
+}
+
+func TestAuditHTTPRejectsUserInfo(t *testing.T) {
+	_, err := eipagent.New(eipagent.WithModel("mock:x"),
+		eipagent.WithPlugin("model_mock", map[string]any{"script": []any{}}),
+		eipagent.WithPlugin("audit_file", map[string]any{"path": "-"}),
+		eipagent.WithPlugin("audit_http", map[string]any{"url": "http://user:pass@127.0.0.1:1/"}),
+		eipagent.WithLogger(func(string, string) {}))
+	if err == nil {
+		t.Fatal("a sink URL with userinfo was accepted")
+	}
+}
+
+func TestAuditHTTPDoesNotFollowRedirects(t *testing.T) {
+	var hits int32
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+	}))
+	defer target.Close()
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusFound)
+	}))
+	defer redirect.Close()
+	a := mockAgent(t, []any{map[string]any{"text": "ok"}},
+		eipagent.WithPlugin("audit_file", map[string]any{"path": "-"}),
+		eipagent.WithPlugin("audit_http", map[string]any{"url": redirect.URL, "batch_size": 1, "retries": 0, "flush_seconds": 60}))
+	if _, err := a.Generate(bg, "hi"); err != nil {
+		t.Fatal(err)
+	}
+	a.Close()
+	if n := atomic.LoadInt32(&hits); n != 0 {
+		t.Fatalf("redirect target was contacted %d times", n)
+	}
+}
+
+func TestMCPCall202IsAnErrorNotAPanic(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "DELETE" {
+			return
+		}
+		var req map[string]any
+		json.NewDecoder(r.Body).Decode(&req)
+		if req["method"] == "tools/call" {
+			w.WriteHeader(202)
+			return
+		}
+		resp := mcptest.Handle(req)
+		if resp == nil {
+			w.WriteHeader(202)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+	a := mockAgent(t, []any{
+		map[string]any{"tool": "srv__echo", "args": map[string]any{"text": "hi"}},
+		map[string]any{"text": "done"},
+	}, eipagent.WithPlugin("tool_mcp", map[string]any{"servers": []any{map[string]any{"name": "srv", "url": srv.URL}}}))
+	res, err := a.Generate(bg, "go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := res.Steps[0].ToolResults[0]
+	if !tr.IsError || !strings.Contains(tr.Content, "no response") {
+		t.Fatalf("202 call: %+v", tr)
+	}
+}
+
+func TestTraceHidesToolErrorTextWithoutContent(t *testing.T) {
+	var mu sync.Mutex
+	var spans []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var p struct {
+			ResourceSpans []struct {
+				ScopeSpans []struct {
+					Spans []map[string]any `json:"spans"`
+				} `json:"scopeSpans"`
+			} `json:"resourceSpans"`
+		}
+		json.NewDecoder(r.Body).Decode(&p)
+		mu.Lock()
+		for _, rs := range p.ResourceSpans {
+			for _, ss := range rs.ScopeSpans {
+				spans = append(spans, ss.Spans...)
+			}
+		}
+		mu.Unlock()
+	}))
+	defer srv.Close()
+	tool := eipagent.Tool("leaky", "leaky", func(c context.Context, in struct{}) (string, error) {
+		return "", fmt.Errorf("SECRET-FILE-CONTENT")
+	})
+	a := mockAgent(t, []any{
+		map[string]any{"tool": "leaky", "args": map[string]any{}},
+		map[string]any{"text": "done"},
+	}, eipagent.WithTools(tool), eipagent.WithPlugin("trace_otlp", map[string]any{"endpoint": srv.URL, "flush_seconds": 60}))
+	if _, err := a.Generate(bg, "go"); err != nil {
+		t.Fatal(err)
+	}
+	a.Close()
+	mu.Lock()
+	defer mu.Unlock()
+	for _, s := range spans {
+		b, _ := json.Marshal(s)
+		if strings.Contains(string(b), "SECRET-FILE-CONTENT") {
+			t.Fatalf("trace leaked tool error text: %s", b)
 		}
 	}
 }

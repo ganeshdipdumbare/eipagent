@@ -236,7 +236,7 @@ func Apply(p *sdk.Plugin) error {
 		}
 		s := span{TraceID: r.trace, SpanID: randHex(8), ParentSpanID: r.id, Name: "chat " + model, Kind: 3, Start: nanos(t), End: nanos(time.Now())}
 		if err != nil {
-			s.Status = map[string]any{"code": 2, "message": sdk.Redact(err.Error())}
+			s.Status = map[string]any{"code": 2, "message": statusMessage(err.Error(), "model error", content)}
 		} else {
 			attrs = append(attrs, attr("gen_ai.usage.input_tokens", resp.Usage.InputTokens), attr("gen_ai.usage.output_tokens", resp.Usage.OutputTokens),
 				attr("eip.tool_calls", len(resp.Message.ToolCalls)))
@@ -265,11 +265,11 @@ func Apply(p *sdk.Plugin) error {
 		s := span{TraceID: r.trace, SpanID: randHex(8), ParentSpanID: r.id, Name: "execute_tool " + req.Call.Name, Kind: 1, Start: nanos(t), End: nanos(time.Now())}
 		switch {
 		case err != nil:
-			s.Status = map[string]any{"code": 2, "message": sdk.Redact(err.Error())}
+			s.Status = map[string]any{"code": 2, "message": statusMessage(err.Error(), "tool error", content)}
 		case res.Interrupt != nil:
 			attrs = append(attrs, attr("eip.interrupted", true))
 		case res.IsError:
-			s.Status = map[string]any{"code": 2, "message": sdk.Redact(res.Content)}
+			s.Status = map[string]any{"code": 2, "message": statusMessage(res.Content, "tool error", content)}
 		case content:
 			attrs = append(attrs, attr("eip.output", res.Content))
 		}
@@ -278,4 +278,16 @@ func Apply(p *sdk.Plugin) error {
 		return res, err
 	})
 	return nil
+}
+
+// statusMessage keeps error text out of spans unless content is on.
+func statusMessage(s, fallback string, content bool) string {
+	if !content {
+		return fallback
+	}
+	s = sdk.Redact(s)
+	if len(s) > 1024 {
+		s = s[:1024] + "..."
+	}
+	return s
 }

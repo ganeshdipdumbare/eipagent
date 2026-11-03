@@ -49,6 +49,7 @@ func init() {
 		"Redact":             reflect.ValueOf(sdk.Redact),
 		"RedactMap":          reflect.ValueOf(sdk.RedactMap),
 		"RedactValue":        reflect.ValueOf(sdk.RedactValue),
+		"RefuseRedirect":     reflect.ValueOf(sdk.RefuseRedirect),
 		"RoleAssistant":      reflect.ValueOf(constant.MakeFromLiteral("\"assistant\"", token.STRING, 0)),
 		"RoleSystem":         reflect.ValueOf(constant.MakeFromLiteral("\"system\"", token.STRING, 0)),
 		"RoleTool":           reflect.ValueOf(constant.MakeFromLiteral("\"tool\"", token.STRING, 0)),

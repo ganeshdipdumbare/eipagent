@@ -147,7 +147,9 @@ func connect(p *sdk.Plugin, s map[string]any) (*client, error) {
 		cl.close()
 		return nil, fmt.Errorf("tool_mcp %s: initialize: %w", name, err)
 	}
-	cl.notify("notifications/initialized", map[string]any{})
+	if err := cl.notify("notifications/initialized", map[string]any{}); err != nil {
+		p.Logf("tool_mcp %s: notifications/initialized: %v", name, err)
+	}
 	return cl, nil
 }
 
@@ -259,7 +261,11 @@ func httpClient(p *sdk.Plugin, name string, s map[string]any) (*client, error) {
 	if err != nil {
 		return nil, err
 	}
-	hc := &http.Client{}
+	timeout := 60 * time.Second
+	if t, ok := s["timeout_seconds"].(float64); ok {
+		timeout = time.Duration(t) * time.Second
+	}
+	hc := &http.Client{CheckRedirect: sdk.RefuseRedirect}
 	var mu sync.Mutex
 	var seq int64
 	session := ""
@@ -291,8 +297,15 @@ func httpClient(p *sdk.Plugin, name string, s map[string]any) (*client, error) {
 			mu.Unlock()
 		}
 		wantID, isCall := m["id"].(int64)
-		if resp.StatusCode == 202 || !isCall {
+		if !isCall {
+			if resp.StatusCode >= 300 {
+				raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+				return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, raw)
+			}
 			return nil, nil
+		}
+		if resp.StatusCode == 202 {
+			return nil, errors.New("mcp: no response")
 		}
 		if resp.StatusCode >= 300 {
 			raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
@@ -314,13 +327,16 @@ func httpClient(p *sdk.Plugin, name string, s map[string]any) (*client, error) {
 		} else {
 			var r rpcMsg
 			err = json.NewDecoder(resp.Body).Decode(&r)
+			if err == nil && (r.ID == nil || *r.ID != wantID || r.Method != "") {
+				return nil, errors.New("mcp: no response")
+			}
 			out = &r
 		}
 		if err != nil {
 			return nil, err
 		}
 		if out == nil {
-			return nil, errors.New("no response")
+			return nil, errors.New("mcp: no response")
 		}
 		return out, nil
 	}
@@ -334,13 +350,18 @@ func httpClient(p *sdk.Plugin, name string, s map[string]any) (*client, error) {
 			if err != nil {
 				return nil, err
 			}
+			if r == nil {
+				return nil, errors.New("mcp: no response")
+			}
 			if r.Error != nil {
 				return nil, fmt.Errorf("%s: %s", method, r.Error.Message)
 			}
 			return r.Result, nil
 		},
 		notify: func(method string, params map[string]any) error {
-			_, err := post(context.Background(), request(nil, method, params))
+			c, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+			_, err := post(c, request(nil, method, params))
 			return err
 		},
 		close: func() {
