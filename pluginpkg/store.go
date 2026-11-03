@@ -166,6 +166,7 @@ func (s *Store) SetAudit(fn func(string, map[string]any)) {
 
 func (s *Store) ActiveDir() string { return filepath.Join(s.dir, "active") }
 func (s *Store) LockPath() string  { return filepath.Join(s.dir, "eip.lock") }
+func (s *Store) Dir() string       { return s.dir }
 
 // Pins returns the sha256 of every active source (name -> hash).
 func (s *Store) Pins() map[string]string {

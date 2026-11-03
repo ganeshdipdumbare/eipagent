@@ -54,7 +54,7 @@ func Check(name string, src []byte) error {
 		return fmt.Errorf("%s: missing func Apply(p *sdk.Plugin) error", name)
 	}
 	i := newInterp([]string{})
-	if err := i.Use(buildSymbols(m.permissions, false)); err != nil {
+	if err := i.Use(buildSymbols(m.permissions, false, nil)); err != nil {
 		return err
 	}
 	if _, err := i.Compile(string(src)); err != nil {

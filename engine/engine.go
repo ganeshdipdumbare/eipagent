@@ -71,6 +71,9 @@ type Options struct {
 	Policy   *Policy  // nil = DevPolicy
 	Lock     *Lock
 	Logger   func(scope, msg string)
+	// WriteDeny lists files and directories fs:write plugins may not
+	// modify (the agent's configuration and plugin store).
+	WriteDeny []string
 }
 
 type Engine struct {
@@ -239,18 +242,31 @@ func (e *Engine) compile(spec PluginSpec) (*record, error) {
 	if !e.pol.allowed(use) {
 		return nil, fmt.Errorf("plugin %s: not allowed by policy", use)
 	}
-	cfg := map[string]any{}
-	if spec.Config != nil {
-		cfg = interpolate(spec.Config).(map[string]any)
-	}
-	if e.pol.locked(name) {
-		if rules := e.pol.Rules; rules != nil && use == "policy" {
-			cfg["rules"] = rules
+	rec := &record{spec: spec, name: name, state: Pending, locked: e.pol.locked(name)}
+	// Config is expanded once the plugin's permissions are known: ${ENV}
+	// with a secret-looking name needs env:secrets.
+	config := func() error {
+		cfg := map[string]any{}
+		if spec.Config != nil {
+			v, err := interpolate(spec.Config, rec.perms)
+			if err != nil {
+				return fmt.Errorf("plugin %s: %w", name, err)
+			}
+			cfg = v.(map[string]any)
 		}
+		if rec.locked {
+			if rules := e.pol.Rules; rules != nil && use == "policy" {
+				cfg["rules"] = rules
+			}
+		}
+		rec.config = cfg
+		return nil
 	}
-	rec := &record{spec: spec, name: name, config: cfg, state: Pending, locked: e.pol.locked(name)}
 	if p, ok := e.compiled[use]; ok {
 		rec.kind, rec.path, rec.inject, rec.perms, rec.apply = "compiled", "compiled:"+use, append(append([]string(nil), p.Requires...), p.Inject...), p.Permissions, p.Apply
+		if err := config(); err != nil {
+			return nil, err
+		}
 		return rec, nil
 	}
 	src, err := e.find(use)
@@ -280,8 +296,11 @@ func (e *Engine) compile(spec PluginSpec) (*record, error) {
 		}
 		return nil, err
 	}
+	if err := config(); err != nil {
+		return nil, err
+	}
 	i := newInterp(pluginEnv(rec.perms))
-	if err := i.Use(buildSymbols(rec.perms, src.kind == "embedded")); err != nil {
+	if err := i.Use(buildSymbols(rec.perms, src.kind == "embedded", e.opts.WriteDeny)); err != nil {
 		return nil, err
 	}
 	if _, err := i.Eval(string(src.src)); err != nil {

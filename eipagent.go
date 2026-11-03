@@ -101,7 +101,17 @@ func newLocal(cfg *config) (*Agent, error) {
 	if cfg.store != nil {
 		dirs = append(append([]string{}, dirs...), cfg.store.ActiveDir())
 	}
-	eng := engine.New(engine.Options{Dirs: dirs, Embedded: plugins.FS, Policy: pol, Lock: lock, Logger: cfg.logger})
+	deny := append([]string{}, cfg.profiles...)
+	if cfg.policyPath != "" {
+		deny = append(deny, cfg.policyPath)
+	}
+	if cfg.lockPath != "" {
+		deny = append(deny, cfg.lockPath)
+	}
+	if cfg.store != nil {
+		deny = append(deny, cfg.store.Dir())
+	}
+	eng := engine.New(engine.Options{Dirs: dirs, Embedded: plugins.FS, Policy: pol, Lock: lock, Logger: cfg.logger, WriteDeny: deny})
 	for _, p := range cfg.compiled {
 		eng.Register(p)
 	}
@@ -423,6 +433,7 @@ func (c *config) resolve() (*engine.Profile, *engine.Policy, *engine.Lock, error
 		}
 	}
 	if lockPath != "" {
+		c.lockPath = lockPath
 		if err := engine.ReadJSON(lockPath, lock); err != nil {
 			return nil, nil, nil, err
 		}
