@@ -374,3 +374,53 @@ func TestTraceHidesToolErrorTextWithoutContent(t *testing.T) {
 		}
 	}
 }
+
+func TestPIIRecursiveScrub(t *testing.T) {
+	var mu sync.Mutex
+	var seen []sdk.Message
+	inject := eipagent.Plugin{Name: "inject", Apply: func(ctx *sdk.Plugin) error {
+		ctx.SetPriority(100)
+		ctx.WrapModel(func(c context.Context, req *sdk.ModelRequest, next sdk.ModelHandler) (*sdk.ModelResponse, error) {
+			r := *req
+			r.Messages = append([]sdk.Message{
+				{Role: sdk.RoleSystem, Content: "contact sys@example.com"},
+				{Role: sdk.RoleAssistant, Content: "note", Reasoning: "thinking about a@b.com"},
+			}, req.Messages...)
+			return next(c, &r)
+		})
+		return nil
+	}}
+	spy := eipagent.Plugin{Name: "spy", Apply: func(ctx *sdk.Plugin) error {
+		ctx.SetPriority(-100)
+		ctx.WrapModel(func(c context.Context, req *sdk.ModelRequest, next sdk.ModelHandler) (*sdk.ModelResponse, error) {
+			mu.Lock()
+			seen = append([]sdk.Message(nil), req.Messages...)
+			mu.Unlock()
+			return next(c, req)
+		})
+		return nil
+	}}
+	leak := eipagent.Tool("leak", "leak", func(c context.Context, in struct{}) (string, error) {
+		return "", fmt.Errorf("bad address leak@example.com")
+	})
+	a := mockAgent(t, []any{
+		map[string]any{"tool": "leak", "args": map[string]any{
+			"nested": map[string]any{"email": "a@b.com"},
+			"list":   []any{"c@d.com"},
+		}},
+		map[string]any{"text": "done"},
+	}, eipagent.WithTools(leak),
+		eipagent.WithPlugin("hook_pii", map[string]any{"types": []any{"email"}, "system": true}),
+		eipagent.WithCompiledPlugin(inject), eipagent.WithCompiledPlugin(spy))
+	if _, err := a.Generate(bg, "hi"); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	b, _ := json.Marshal(seen)
+	for _, raw := range []string{"a@b.com", "c@d.com", "sys@example.com", "leak@example.com"} {
+		if strings.Contains(string(b), raw) {
+			t.Fatalf("%s reached the model: %s", raw, b)
+		}
+	}
+}

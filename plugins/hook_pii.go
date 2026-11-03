@@ -158,30 +158,33 @@ func Apply(p *sdk.Plugin) error {
 		if onIn {
 			msgs := make([]sdk.Message, len(req.Messages))
 			for i, m := range req.Messages {
-				if m.Role == sdk.RoleUser || m.Role == sdk.RoleAssistant || (m.Role == sdk.RoleTool && onTools) {
+				if m.Role == sdk.RoleUser || m.Role == sdk.RoleAssistant || (m.Role == sdk.RoleTool && onTools) || (m.Role == sdk.RoleSystem && onSystem) {
 					clean, found := scrub(m.Content)
 					if len(found) > 0 && strategy == "block" {
 						return nil, fmt.Errorf("blocked: message contains %s", strings.Join(found, ", "))
 					}
 					m.Content = clean
+					if m.Reasoning != "" {
+						clean, found = scrub(m.Reasoning)
+						if len(found) > 0 && strategy == "block" {
+							return nil, fmt.Errorf("blocked: reasoning contains %s", strings.Join(found, ", "))
+						}
+						m.Reasoning = clean
+					}
 				}
 				if len(m.ToolCalls) > 0 {
 					// Earlier tool calls in the history carry arguments too.
 					calls := make([]sdk.ToolCall, len(m.ToolCalls))
 					for j, tc := range m.ToolCalls {
-						args := map[string]any{}
-						for k, v := range tc.Args {
-							if sv, ok := v.(string); ok {
-								clean, found := scrub(sv)
-								if len(found) > 0 && strategy == "block" {
-									return nil, fmt.Errorf("blocked: tool call arguments contain %s", strings.Join(found, ", "))
-								}
-								args[k] = clean
-							} else {
-								args[k] = v
+						if tc.Args != nil {
+							clean, found := scrubAny(tc.Args, scrub)
+							if len(found) > 0 && strategy == "block" {
+								return nil, fmt.Errorf("blocked: tool call arguments contain %s", strings.Join(found, ", "))
+							}
+							if args, ok := clean.(map[string]any); ok {
+								tc.Args = args
 							}
 						}
-						tc.Args = args
 						calls[j] = tc
 					}
 					m.ToolCalls = calls
@@ -212,7 +215,14 @@ func Apply(p *sdk.Plugin) error {
 	if onTools {
 		p.WrapTool(func(c context.Context, req *sdk.ToolRequest, next sdk.ToolHandler) (*sdk.ToolResult, error) {
 			r, err := next(c, req)
-			if err == nil && r != nil && r.Interrupt == nil {
+			if err != nil {
+				clean, found := scrub(err.Error())
+				if len(found) > 0 && strategy == "block" {
+					return &sdk.ToolResult{Content: "blocked: tool error contained " + strings.Join(found, ", "), IsError: true}, nil
+				}
+				err = fmt.Errorf("%s", clean)
+			}
+			if r != nil && r.Interrupt == nil {
 				clean, found := scrub(r.Content)
 				if len(found) > 0 && strategy == "block" {
 					return &sdk.ToolResult{Content: "blocked: tool result contained " + strings.Join(found, ", "), IsError: true}, nil
@@ -223,4 +233,33 @@ func Apply(p *sdk.Plugin) error {
 		})
 	}
 	return nil
+}
+
+// scrubAny walks maps, slices and strings, returning a cleaned copy and
+// the PII types found.
+func scrubAny(v any, scrub func(string) (string, []string)) (any, []string) {
+	switch x := v.(type) {
+	case string:
+		clean, found := scrub(x)
+		return clean, found
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		var found []string
+		for k, e := range x {
+			clean, f := scrubAny(e, scrub)
+			out[k] = clean
+			found = append(found, f...)
+		}
+		return out, found
+	case []any:
+		out := make([]any, len(x))
+		var found []string
+		for i, e := range x {
+			clean, f := scrubAny(e, scrub)
+			out[i] = clean
+			found = append(found, f...)
+		}
+		return out, found
+	}
+	return v, nil
 }
