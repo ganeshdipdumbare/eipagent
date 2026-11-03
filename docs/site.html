@@ -222,7 +222,7 @@ a.card:hover { border-color: var(--line-2); background: var(--bg-2); }
 .dg .life { stroke: var(--line-2); stroke-dasharray: 4 4; }
 .dg .sep { stroke: var(--line-2); }
 .dg .x { stroke-width: 2.2; }
-.dg .mk { fill: var(--fg-3); } .dg .mk-ok { fill: var(--ok); } .dg .mk-wait { fill: var(--wait); } .dg .mk-bad { fill: var(--bad); }
+.dg .mk { fill: var(--fg-3); } .dg .mk-acc { fill: var(--accent); } .dg .l-acc { stroke: var(--accent); } .dg .mk-ok { fill: var(--ok); } .dg .mk-wait { fill: var(--wait); } .dg .mk-bad { fill: var(--bad); }
 .dg .l-ok { stroke: var(--ok); } .dg .l-wait { stroke: var(--wait); } .dg .l-bad { stroke: var(--bad); }
 .dg .c-ok, .diagram .c-ok { fill: var(--ok); color: var(--ok); }
 .dg .c-wait, .diagram .c-wait { fill: var(--wait); color: var(--wait); }
@@ -2304,7 +2304,7 @@ func Apply(p *sdk.Plugin) error {
   <figure class="diagram">
     <div class="dg-scroll"><svg class="dg" viewBox="0 0 720 392" role="img" aria-labelledby="dg1-t dg1-d">
       <title id="dg1-t">Where secrets live with WithRunIn</title>
-      <desc id="dg1-d">The sandbox runs the agent and its plugins and holds only placeholders. It has no network and one stdio stream to the host. The host holds secrets and model keys, checks every request against its rules, swaps placeholders for real values only toward allowed destinations, refuses the rest and audits all of it.</desc>
+      <desc id="dg1-d">The sandbox runs the agent and its plugins and holds only placeholders. It has no network and one stdio stream to the host, which the host opened by connecting out to the sandbox service over TLS with its own key for that service. The host holds secrets and model keys, checks every request against its rules, swaps placeholders for real values only toward allowed destinations, refuses the rest and audits all of it.</desc>
       <defs>
         <marker id="dg1-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk" d="M0 0 10 5 0 10z"/></marker>
         <marker id="dg1-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="mk-ok" d="M0 0 10 5 0 10z"/></marker>
@@ -2340,8 +2340,8 @@ func Apply(p *sdk.Plugin) error {
 
       <rect class="box" x="284" y="92" width="220" height="66" rx="9"/>
       <text class="t" x="298" y="116">Bridge</text>
-      <text class="s" x="298" y="134">the box's process, started by</text>
-      <text class="s" x="298" y="150">the host; listens on no port</text>
+      <text class="s" x="298" y="134">host connects out (TLS, its own</text>
+      <text class="s" x="298" y="150">key for the service); no port</text>
       <path class="ln" d="M394 158v18" marker-end="url(#dg1-a)"/>
 
       <rect class="box em" x="284" y="178" width="220" height="92" rx="9"/>
@@ -2415,13 +2415,14 @@ func Apply(p *sdk.Plugin) error {
   <p>The same holds when the box runs on someone else's machines, in a hosted sandbox service, through a sandbox plugin with <code>Isolation: "remote"</code>. That plugin's <code>Start</code> opens the box's stdin and stdout through the service's own API: the host connects out, over TLS, authenticated with the host's key for that service. Nothing connects in to the host, so the stream the host opened is the only way to reach it.</p>
   <p>The host never has to trust the service or the code in the box with a secret. A secret is redeemed only on the host:</p>
   <figure class="diagram">
-    <div class="dg-scroll"><svg class="dg" viewBox="0 0 720 588" role="img" aria-labelledby="dg2-t dg2-d">
+    <div class="dg-scroll"><svg class="dg" viewBox="0 0 720 646" role="img" aria-labelledby="dg2-t dg2-d">
       <title id="dg2-t">One request from a third-party sandbox, end to end</title>
-      <desc id="dg2-d">The plugin in the sandbox asks the host for GH_TOKEN and gets a placeholder. It sends a GET with the placeholder to the host, which matches the SecretHosts rule, swaps in the real token and calls api.github.com. The reply comes back with the token redacted. A DELETE, or a request to another host, with the same placeholder is refused and never sent.</desc>
+      <desc id="dg2-d">First the host connects out to the sandbox service over TLS with its own key for that service and starts the agent there; nothing connects in to the host. Then the plugin in the sandbox asks the host for GH_TOKEN and gets a placeholder. It sends a GET with the placeholder to the host, which matches the SecretHosts rule, swaps in the real token and calls api.github.com. The reply comes back with the token redacted. A DELETE, or a request to another host, with the same placeholder is refused and never sent.</desc>
       <defs>
         <marker id="dg2-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="mk" d="M0 0 10 5 0 10z"/></marker>
         <marker id="dg2-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="mk-ok" d="M0 0 10 5 0 10z"/></marker>
         <marker id="dg2-wait" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="mk-wait" d="M0 0 10 5 0 10z"/></marker>
+        <marker id="dg2-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="mk-acc" d="M0 0 10 5 0 10z"/></marker>
         <marker id="dg2-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="mk-bad" d="M0 0 10 5 0 10z"/></marker>
       </defs>
       <rect class="box" x="20" y="8" width="180" height="44" rx="9"/>
@@ -2433,8 +2434,14 @@ func Apply(p *sdk.Plugin) error {
       <rect class="box" x="520" y="8" width="180" height="44" rx="9"/>
       <text class="t" x="610" y="28" text-anchor="middle">api.github.com</text>
       <text class="s" x="610" y="44" text-anchor="middle">the real destination</text>
-      <path class="life" d="M110 52V580M360 52V580M610 52V580"/>
+      <path class="life" d="M110 52V638M360 52V638M610 52V638"/>
 
+      <text class="n" x="12" y="100">0</text>
+      <text class="m" x="235" y="76" text-anchor="middle">connect out: TLS, host's own key</text>
+      <text class="m" x="235" y="90" text-anchor="middle">start eip serve --stdio, open stdio</text>
+      <path class="ln l-acc" d="M360 100H114" marker-end="url(#dg2-acc)"/>
+      <text class="s" x="235" y="118" text-anchor="middle">nothing connects in to the host</text>
+      <g transform="translate(0 58)">
       <text class="n" x="12" y="84">1</text>
       <text class="m" x="235" y="80" text-anchor="middle">host.secret secret://GH_TOKEN</text>
       <path class="ln" d="M110 90H356" marker-end="url(#dg2-a)"/>
@@ -2478,8 +2485,9 @@ func Apply(p *sdk.Plugin) error {
       <text class="n" x="12" y="572">8</text>
       <text class="m c-bad" x="235" y="562" text-anchor="middle">refused · sandbox.egress denied</text>
       <path class="ln l-bad" d="M360 572H114" marker-end="url(#dg2-bad)"/>
+      </g>
     </svg></div>
-    <figcaption>The real token exists only in step 4, between the host and the API. The sandbox, and the service running it, only ever see the placeholder and the redacted reply.</figcaption>
+    <figcaption>Step 0 is the only connection, and the host makes it: outbound, over TLS, with the host's own key for the service. The real token exists only in step 4, between the host and the API. The sandbox, and the service running it, only ever see the placeholder and the redacted reply.</figcaption>
   </figure>
   <ol>
     <li>A plugin in the box asks for <code>secret://GITHUB_TOKEN</code> and gets a placeholder: 128 random bits that mean something only to this host's agent, held in its memory for as long as it runs.</li>
