@@ -35,6 +35,7 @@ All notable changes to eipagent. Versions follow [semantic versioning](https://s
 - `WithRunIn`: secrets never enter the sandbox. `secrets_*` providers stay on the host. The box's `secrets` service returns placeholders (`eipsec_...`), and the box's HTTP is made by the host, which swaps a placeholder for its value only on requests that match that secret's `RunIn.SecretHosts` rules. Responses come back redacted. Requests without secrets may reach only `RunIn.Egress`, which is empty by default.
 - Sandbox env and mounts are checked by the core (`sdk.CheckSandboxSpec`, `sdk.CheckSandboxEnv`): resolved secret values, credential-looking names without a placeholder, and mounts of `/` or a container runtime socket are refused.
 - `eip serve --stdio` refuses to start when its environment holds a credential.
+- `WithRunIn`: the host answers a box's secret lookup only for a plugin the box was started with (its profile, the policy's `require`, and the plugins it loads on its own). The box names the asking plugin itself, so before this it could claim another plugin's grants. A refusal is audited as a denied `secret.access`.
 - **Behavior change:** HTTP from plugins inside a `WithRunIn` box goes through the host and is refused unless the host is listed in `RunIn.Egress` or `RunIn.SecretHosts`.
 
 ## v0.4.0 — 2026-11-01

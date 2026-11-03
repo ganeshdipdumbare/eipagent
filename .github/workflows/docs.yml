@@ -19,6 +19,13 @@ on:
       - examples/fullstack/**
       - .github/workflows/docs.yml
   workflow_dispatch:
+  # Called by release.yml after it tags a release.
+  workflow_call:
+    inputs:
+      ref:
+        description: Commit, branch or tag to build
+        type: string
+        required: false
 
 permissions:
   contents: read
@@ -50,6 +57,8 @@ jobs:
           done
 
       - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.sha }}
 
       - uses: actions/setup-go@v7.0.0
         with:
