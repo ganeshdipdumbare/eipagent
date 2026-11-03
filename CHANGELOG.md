@@ -4,6 +4,8 @@ All notable changes to eipagent. Versions follow [semantic versioning](https://s
 
 ## Unreleased
 
+## v0.4.5 — 2026-11-03
+
 ### Added
 
 - `examples/firecracker`: a complete self-hosted [Firecracker](https://firecracker-microvm.github.io/) sandbox provider. It creates a tap device, boots a microVM through the Firecracker API, connects to it over SSH, and runs the agent with `WithRunIn`. A setup script fetches the kernel, rootfs, SSH key and Firecracker binary, and the README shows how to run it inside Lima on Apple Silicon. The example keeps model and secret values on the host and shows the same placeholder, host-swap, redaction and `sandbox.egress` guarantees as the local microsandbox example.
