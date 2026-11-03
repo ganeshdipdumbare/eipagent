@@ -99,3 +99,43 @@ func TestRunInStreaming(t *testing.T) {
 		t.Fatalf("%v %q %q", err, parts, res.Text)
 	}
 }
+
+// When the agent in the sandbox exits mid-run, that run fails with a
+// clear error and the next run starts a new sandbox.
+func TestRunInRestartsExitedBox(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "eip")
+	if out, err := exec.Command("go", "build", "-o", bin, "./cmd/eip").CombinedOutput(); err != nil {
+		t.Fatalf("build eip: %v %s", err, out)
+	}
+	t.Setenv("OPENAI_API_KEY", "sk-test")
+	srv := fakeOpenAI(t, func(body map[string]any) (int, string, []string) {
+		msgs := body["messages"].([]any)
+		last := msgs[len(msgs)-1].(map[string]any)
+		if last["role"] == "user" && strings.Contains(last["content"].(string), "die") {
+			// The shell's parent is the agent in the box.
+			return 200, `{"choices":[{"message":{"tool_calls":[{"id":"k1","type":"function","function":{"name":"bash","arguments":"{\"command\":\"kill -9 $PPID\"}"}}]},"finish_reason":"tool_calls"}]}`, nil
+		}
+		return 200, `{"choices":[{"message":{"content":"alive"},"finish_reason":"stop"}]}`, nil
+	})
+	a, err := eipagent.New(
+		eipagent.WithModel("openai:gpt-test"),
+		eipagent.WithPluginSpec(eipagent.PluginSpec{Use: "model_openai", As: "model_openai", Config: map[string]any{"base_url": srv.URL}}),
+		eipagent.WithPlugin("sandbox_local", map[string]any{"root": "boxes"}),
+		eipagent.WithPlugin("workspace_sandbox", map[string]any{"provider": "local"}),
+		eipagent.WithPlugins("tool_shell"),
+		eipagent.WithRunIn(eipagent.RunIn{Provider: "local", ProviderConfig: map[string]any{"root": t.TempDir()}, Binary: bin}),
+		eipagent.WithLogger(func(scope, msg string) { t.Logf("[%s] %s", scope, msg) }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+
+	if _, err := a.Generate(bg, "die"); err == nil || !strings.Contains(err.Error(), "next run starts a new sandbox") {
+		t.Fatalf("a run whose box exits should say so: %v", err)
+	}
+	res, err := a.Generate(bg, "hello")
+	if err != nil || res.Text != "alive" {
+		t.Fatalf("the next run should start a new box: %v %+v", err, res)
+	}
+}

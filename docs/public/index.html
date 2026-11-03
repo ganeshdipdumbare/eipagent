@@ -2405,6 +2405,7 @@ func Apply(p *sdk.Plugin) error {
     <li><b>No way out to the host.</b> Mounts of <code>/</code> or a docker, podman or containerd socket are refused, so a box can't start containers outside these rules.</li>
     <li><b>Fails closed.</b> <code>eip serve --stdio</code> refuses to start if its environment holds a credential.</li>
     <li><b>Nested sandboxes</b> created inside the box get placeholders too; only the host turns them back into values.</li>
+    <li><b>A box that exits is replaced.</b> The run waiting on it fails with an error that says so, and the next run starts a new sandbox. Threads kept in the old box go with it, so put them in a store outside the box (<code>threads_sql</code>) if they must survive.</li>
   </ul>
   <h3>How the host knows it's talking to its own box</h3>
   <p>There is no network channel to fake. The host starts the sandbox through its sandbox plugin, uploads <code>eip</code>, and runs <code>eip serve --stdio</code> in it. Every request from the box (model calls, secret lookups, HTTP, host tools) arrives on that process's stdout, and every answer goes back on its stdin. The host opens no port and listens on nothing, so no other process, and no fake sandbox, can reach the bridge: only the process the host itself started can send to it.</p>

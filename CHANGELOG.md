@@ -24,6 +24,8 @@ All notable changes to eipagent. Versions follow [semantic versioning](https://s
 
 ### Fixed
 
+- `WithRunIn`: when the agent in the sandbox exits, the run waiting on it fails with an error saying so (not `rpc: connection closed`), and the next run starts a new sandbox. Threads kept in the old sandbox are gone with it unless their store is outside the box.
+- `eip serve --stdio` keeps stdin and stdout for the host's messages only: a plugin that prints goes to the host's `[box]` log, and one that reads stdin gets EOF. The host also reads a message that has stray output in front of it on the same line, so a print without a newline no longer leaves a call waiting.
 - Several plugins read config with `x, _ := v.(T)` in a loop, which under Yaegi keeps the previous item's value when an item lacks the key: `tool_subagents` (an agent without `mode` or `name` took the previous agent's), `tool_memory` (a note without text showed the previous note's), `trigger_webhook` (nested field lookups), `audit_http` and `trace_otlp` (headers), `tool_mcp` (env), `hook_pii` (patterns) and `model_mock`.
 - `sandbox_microsandbox`: microVM sandboxes through the [microsandbox](https://microsandbox.dev) CLI (`msb`), with no network by default and allowlists as msb network rules. It works for `WithRunIn`, `WithSandbox` and `tool_sandbox`.
 - `examples/microsandbox`: the agent in a microVM, showing that the VM holds only a placeholder and the real token is used on the host.
