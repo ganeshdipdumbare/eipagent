@@ -8,6 +8,7 @@ All notable changes to eipagent. Versions follow [semantic versioning](https://s
 
 ### Added
 
+- `examples/tensorlake`: the agent runs inside a real Tensorlake cloud sandbox with `WithRunIn`. The host keeps the model provider, secrets and broker; Tensorlake runs the microVM. The example exercises the same placeholder, `host.http` swap, redaction and `sandbox.egress` flow, and cleans the sandbox up on exit.
 - `examples/firecracker` can run the host process and Firecracker on different machines with `FC_HOST` (for example, the host on macOS and Firecracker in Lima), so the host-to-sandbox link crosses a real machine boundary instead of sharing one host.
 - The sandbox docs add an SVG sequence diagram for the host/sandbox boundary: VM boot, SSH/stdio, `host.llm`, `host.secret`, `host.http`, placeholder swap, redaction, and teardown.
 

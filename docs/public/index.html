@@ -386,7 +386,7 @@ td code { white-space: nowrap; }
 <aside class="side" id="side" aria-label="Documentation">
   <div class="version">
     <span class="logo"><svg viewBox="0 0 32 32" aria-hidden="true"><rect x="3" y="3" width="11" height="11" rx="2.5" fill="var(--bg)"/><rect x="18" y="3" width="11" height="11" rx="2.5" fill="none" stroke="var(--bg)" stroke-width="2.4"/><rect x="3" y="18" width="11" height="11" rx="2.5" fill="none" stroke="var(--bg)" stroke-width="2.4"/><rect x="18" y="18" width="11" height="11" rx="2.5" fill="var(--accent)"/></svg></span>
-    <span><b>v0.4.4</b><small>Go 1.27 · latest</small></span>
+    <span><b>v0.4.5</b><small>Go 1.27 · latest</small></span>
   </div>
   <nav id="sidenav"></nav>
 </aside>
@@ -469,12 +469,12 @@ fmt.Println(res.Text)</code></pre></div></div></div>
 <section id="installation" class="page">
   <h1>Installation</h1>
   <p>eipagent needs Go 1.27 or newer. Add a tagged release to your module:</p>
-  <div class="code" data-title="terminal"><pre><code class="language-bash">go get github.com/ganeshdipdumbare/eipagent@v0.4.4</code></pre></div>
+  <div class="code" data-title="terminal"><pre><code class="language-bash">go get github.com/ganeshdipdumbare/eipagent@v0.4.5</code></pre></div>
   <p>The repository is private, so tell Go and give git access once:</p>
   <div class="code" data-title="terminal"><pre><code class="language-bash">go env -w GOPRIVATE=github.com/ganeshdipdumbare/*
 gh auth setup-git        # or use an SSH key for github.com</code></pre></div>
   <p>The CLI installs the same way:</p>
-  <div class="code" data-title="terminal"><pre><code class="language-bash">go install github.com/ganeshdipdumbare/eipagent/cmd/eip@v0.4.4</code></pre></div>
+  <div class="code" data-title="terminal"><pre><code class="language-bash">go install github.com/ganeshdipdumbare/eipagent/cmd/eip@v0.4.5</code></pre></div>
   <h2>Versions</h2>
   <p>Releases are git tags that follow semantic versioning. While the major version is 0, patch releases (<code>v0.4.x</code>) only fix bugs and security issues, and minor releases (<code>v0.x.0</code>) may break the API. Each break is listed with what to change in <a href="https://github.com/ganeshdipdumbare/eipagent/blob/main/CHANGELOG.md">CHANGELOG.md</a>. Interpreted plugins import the SDK as <code>"eipagent/sdk"</code>, an alias that stays the same across releases, so plugin files never change for it.</p>
   <p>Check that everything works from a checkout. The test suite runs offline, using a mock model that needs no API key.</p>
@@ -890,7 +890,7 @@ if len(ap.Approvals) != 1 {
 
 <section id="production-examples" class="page">
   <h1>Production examples</h1>
-  <p>Each of these is a small program that runs offline, with a mock model and in-process stand-ins for Vault, a SIEM and an OpenTelemetry collector. The exception is the Firecracker example, which needs a Linux host with KVM (or a Lima VM) and a one-time setup download. Run one, read the output, then read the code.</p>
+  <p>Each of these is a small program that runs offline, with a mock model and in-process stand-ins for Vault, a SIEM and an OpenTelemetry collector. The exceptions are the Firecracker example, which needs a Linux host with KVM (or a Lima VM) and a one-time setup download, and the Tensorlake example, which needs a Tensorlake API key. Run one, read the output, then read the code.</p>
 
   <h2>Secrets: Vault, grants, rotation, redaction</h2>
   <div class="code" data-title="terminal"><pre><code class="language-bash">go run ./examples/secrets</code></pre></div>
@@ -985,6 +985,35 @@ The host's record of every request from the microVM (sandbox.egress):
   denied DELETE 127.0.0.1/orders secrets=[ACME_API_TOKEN] (... may not be sent to DELETE 127.0.0.1/orders ...)
   denied GET localhost/steal secrets=[ACME_API_TOKEN] (... may not be sent to GET localhost/steal ...)</code></pre></div>
   <p>The provider creates a tap device, boots an Ubuntu rootfs with the Firecracker API, and connects to the guest over SSH. It is a self-hosted version of the hosted-service path: the agent, plugins and tools run in the microVM, while the model provider and every secret stay on the host. With <code>FC_HOST</code> the host process runs on macOS and Firecracker runs in Lima, so the host-to-sandbox link crosses a real machine boundary. The same placeholder, host-swap, redaction and <code>sandbox.egress</code> rules apply, and <code>Close</code> destroys the VM and its rootfs copy. <a href="https://github.com/ganeshdipdumbare/eipagent/blob/main/examples/firecracker/main.go">Source</a></p>
+
+  <h2>Run the agent in a real Tensorlake cloud sandbox</h2>
+  <div class="code" data-title="terminal"><pre><code class="language-bash">TENSORLAKE_API_KEY=... go run ./examples/tensorlake</code></pre></div>
+  <div class="code" data-title="output"><pre><code class="language-plaintext">Host process: darwin/... (model, secrets, broker live here)
+Creating a Tensorlake cloud sandbox and starting the agent in it...
+created Tensorlake sandbox dbyfgb07szwg9nvtgkl8o (image tensorlake/ubuntu-minimal)
+
+1. Inside the Tensorlake sandbox: no secret env vars
+  machine: x86_64 Linux 7.0.7
+  workspace: /home/tl-user/.eipagent/sandboxes/local-6f3efd872856
+
+2. A plugin in the sandbox calls the API (GET /orders is allowed for the token)
+  token in the sandbox: eipsec_e13ac6ee4a27daaaebdf27b1cdcca455
+  API replied: {"orders": 3, "you_sent": "Bearer [REDACTED]"}
+
+3. The same token on a DELETE (only GET is allowed)
+  request failed: ... secret ACME_API_TOKEN may not be sent to DELETE 127.0.0.1/orders ...
+
+4. The same token sent to a host that isn't listed
+  request failed: ... secret ACME_API_TOKEN may not be sent to GET localhost/steal ...
+
+On the host, the Acme API received:
+  GET 127.0.0.1:53830/orders Bearer acme_live_...
+
+The host's record of every request from the sandbox (sandbox.egress):
+  allowed GET 127.0.0.1/orders -&gt; 200 secrets=[ACME_API_TOKEN]
+  denied DELETE 127.0.0.1/orders secrets=[ACME_API_TOKEN] (...)
+  denied GET localhost/steal secrets=[ACME_API_TOKEN] (...)</code></pre></div>
+  <p>The host process runs on your machine; Tensorlake runs the cloud sandbox. eipagent creates an ephemeral sandbox, uploads <code>eip</code> and the plugins, starts <code>eip serve --stdio</code> through Tensorlake's process API, and deletes the sandbox when the run finishes. The host holds the model provider, secrets and broker; the sandbox only sees <code>eipsec_...</code> placeholders. <a href="https://github.com/ganeshdipdumbare/eipagent/blob/main/examples/tensorlake/main.go">Source</a></p>
 
   <h2>Audit to a SIEM, traces to OpenTelemetry</h2>
   <div class="code" data-title="terminal"><pre><code class="language-bash">go run ./examples/observability</code></pre></div>
