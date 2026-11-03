@@ -28,6 +28,11 @@ func Verify(path string) (int, error) {
 // under the key audit_jsonl was configured with, and the <log>.head
 // checkpoint, which catches a truncated tail. Without the key, a
 // rewritten log can't produce valid macs.
+//
+// The head lives beside the log, so someone who can rewrite both the log
+// and the head can still roll the tail back together. Keep a copy of the
+// last head (or pass an expected final hash from an external source) for
+// that threat.
 func VerifyKeyed(path string, key []byte) (int, error) {
 	if len(key) == 0 {
 		return 0, fmt.Errorf("audit: empty key")

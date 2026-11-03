@@ -127,13 +127,14 @@ func checkWriteTree(p string, deny []string) error {
 // the plugin a readable handle.
 
 func guardedCreate(name string, deny []string, readable bool) (*os.File, error) {
-	if err := checkWritePath(name, deny); err != nil {
+	target, err := writeTarget(name, deny, false)
+	if err != nil {
 		return nil, err
 	}
 	if readable {
-		return os.Create(name)
+		return os.Create(target)
 	}
-	return os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o666)
+	return os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o666)
 }
 
 func guardedCreateTemp(dir, pattern string, deny []string, readable bool) (*os.File, error) {
@@ -141,13 +142,14 @@ func guardedCreateTemp(dir, pattern string, deny []string, readable bool) (*os.F
 	if d == "" {
 		d = os.TempDir()
 	}
-	if err := checkWritePath(d, deny); err != nil {
+	target, err := writeTarget(d, deny, false)
+	if err != nil {
 		return nil, err
 	}
 	if readable {
-		return os.CreateTemp(dir, pattern)
+		return os.CreateTemp(target, pattern)
 	}
-	f, err := os.CreateTemp(dir, pattern)
+	f, err := os.CreateTemp(target, pattern)
 	if err != nil {
 		return nil, err
 	}
@@ -162,24 +164,27 @@ func guardedCreateTemp(dir, pattern string, deny []string, readable bool) (*os.F
 }
 
 func guardedWriteFile(name string, data []byte, perm os.FileMode, deny []string) error {
-	if err := checkWritePath(name, deny); err != nil {
+	target, err := writeTarget(name, deny, false)
+	if err != nil {
 		return err
 	}
-	return os.WriteFile(name, data, perm)
+	return os.WriteFile(target, data, perm)
 }
 
 func guardedMkdir(name string, perm os.FileMode, deny []string) error {
-	if err := checkWritePath(name, deny); err != nil {
+	target, err := writeTarget(name, deny, false)
+	if err != nil {
 		return err
 	}
-	return os.Mkdir(name, perm)
+	return os.Mkdir(target, perm)
 }
 
 func guardedMkdirAll(name string, perm os.FileMode, deny []string) error {
-	if err := checkWritePath(name, deny); err != nil {
+	target, err := writeTarget(name, deny, false)
+	if err != nil {
 		return err
 	}
-	return os.MkdirAll(name, perm)
+	return os.MkdirAll(target, perm)
 }
 
 func guardedMkdirTemp(dir, pattern string, deny []string) (string, error) {
@@ -187,10 +192,11 @@ func guardedMkdirTemp(dir, pattern string, deny []string) (string, error) {
 	if d == "" {
 		d = os.TempDir()
 	}
-	if err := checkWritePath(d, deny); err != nil {
+	target, err := writeTarget(d, deny, false)
+	if err != nil {
 		return "", err
 	}
-	return os.MkdirTemp(dir, pattern)
+	return os.MkdirTemp(target, pattern)
 }
 
 func guardedRemove(name string, deny []string) error {
@@ -218,38 +224,43 @@ func guardedRename(oldname, newname string, deny []string) error {
 }
 
 func guardedOpenFile(name string, flag int, perm os.FileMode, deny []string, readable bool) (*os.File, error) {
-	if err := checkWritePath(name, deny); err != nil {
+	target, err := writeTarget(name, deny, false)
+	if err != nil {
 		return nil, err
 	}
 	if !readable && flag&(os.O_WRONLY|os.O_RDWR) != os.O_WRONLY {
 		return nil, fmt.Errorf("open %s: reading files needs the fs:read permission (use os.O_WRONLY)", name)
 	}
-	return os.OpenFile(name, flag, perm)
+	return os.OpenFile(target, flag, perm)
 }
 
 func guardedChmod(name string, mode os.FileMode, deny []string) error {
-	if err := checkWritePath(name, deny); err != nil {
+	target, err := writeTarget(name, deny, false)
+	if err != nil {
 		return err
 	}
-	return os.Chmod(name, mode)
+	return os.Chmod(target, mode)
 }
 
 func guardedChtimes(name string, atime, mtime time.Time, deny []string) error {
-	if err := checkWritePath(name, deny); err != nil {
+	target, err := writeTarget(name, deny, false)
+	if err != nil {
 		return err
 	}
-	return os.Chtimes(name, atime, mtime)
+	return os.Chtimes(target, atime, mtime)
 }
 
 func guardedTruncate(name string, size int64, deny []string) error {
-	if err := checkWritePath(name, deny); err != nil {
+	target, err := writeTarget(name, deny, false)
+	if err != nil {
 		return err
 	}
-	return os.Truncate(name, size)
+	return os.Truncate(target, size)
 }
 
 func guardedCopyFS(dir string, fsys fs.FS, deny []string) error {
-	if err := checkWriteTree(dir, deny); err != nil {
+	target, err := writeTarget(dir, deny, true)
+	if err != nil {
 		return err
 	}
 	if err := fs.WalkDir(fsys, ".", func(p string, d fs.DirEntry, err error) error {
@@ -259,11 +270,11 @@ func guardedCopyFS(dir string, fsys fs.FS, deny []string) error {
 		if p == "." {
 			return nil
 		}
-		return checkWritePath(filepath.Join(dir, filepath.FromSlash(p)), deny)
+		return checkWritePath(filepath.Join(target, filepath.FromSlash(p)), deny)
 	}); err != nil {
 		return err
 	}
-	return os.CopyFS(dir, fsys)
+	return os.CopyFS(target, fsys)
 }
 
 func guardedIoutilWriteFile(name string, data []byte, perm os.FileMode, deny []string) error {
