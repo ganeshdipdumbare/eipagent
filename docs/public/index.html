@@ -208,6 +208,34 @@ a.card:hover { border-color: var(--line-2); background: var(--bg-2); }
 .timeline li.loop { background: var(--bg-2); }
 .timeline li.end .h { color: var(--ok); }
 
+/* diagrams: inline SVG drawn with the page's tokens, so they follow the theme; scroll sideways on phones */
+.diagram { margin: 22px 0 28px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.dg-scroll { overflow-x: auto; padding: 18px 16px 12px; }
+.dg { display: block; width: 100%; min-width: 600px; height: auto; }
+.diagram figcaption { padding: 12px 16px 14px; border-top: 1px solid var(--line); background: var(--bg-2); font-size: 13.5px; color: var(--fg-2); }
+.diagram .key { display: inline-flex; align-items: center; gap: 6px; margin-left: 10px; font: 500 12px var(--f-mono); white-space: nowrap; }
+.diagram .key::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.dg text { font-family: var(--f-sans); font-size: 11.5px; fill: var(--fg-2); }
+.dg .t { font-size: 13px; font-weight: 600; fill: var(--fg); }
+.dg .m { font-family: var(--f-mono); font-size: 11px; }
+.dg .cap { font: 600 10.5px var(--f-mono); letter-spacing: .08em; fill: var(--fg-3); }
+.dg .n { font: 600 11px var(--f-mono); fill: var(--fg-3); }
+.dg .box { fill: var(--bg-2); stroke: var(--line-2); }
+.dg .box.em { stroke: var(--accent); }
+.dg .nb { fill: var(--bg); stroke: var(--line-2); stroke-dasharray: 3 3; }
+.dg .zone { fill: none; stroke: var(--fg-3); stroke-dasharray: 5 4; }
+.dg .zone.host { stroke: var(--accent); stroke-dasharray: none; }
+.dg .ln { fill: none; stroke: var(--fg-3); stroke-width: 1.4; }
+.dg .life { stroke: var(--line-2); stroke-dasharray: 4 4; }
+.dg .sep { stroke: var(--line-2); }
+.dg .x { stroke-width: 2.2; }
+.dg .mk { fill: var(--fg-3); } .dg .mk-ok { fill: var(--ok); } .dg .mk-wait { fill: var(--wait); } .dg .mk-bad { fill: var(--bad); }
+.dg .l-ok { stroke: var(--ok); } .dg .l-wait { stroke: var(--wait); } .dg .l-bad { stroke: var(--bad); }
+.dg .c-ok, .diagram .c-ok { fill: var(--ok); color: var(--ok); }
+.dg .c-wait, .diagram .c-wait { fill: var(--wait); color: var(--wait); }
+.dg .c-bad, .diagram .c-bad { fill: var(--bad); color: var(--bad); }
+.dg .l-bad:not(.x) { stroke-dasharray: 4 3; }
+
 /* tables */
 .table { overflow-x: auto; margin: 20px 0 26px; border: 1px solid var(--line); border-radius: 12px; }
 table { border-collapse: collapse; width: 100%; font-size: 14px; }
@@ -2280,6 +2308,84 @@ func Apply(p *sdk.Plugin) error {
 )</code></pre></div>
   <h2 id="runin-secrets">Secrets in a sandboxed agent</h2>
   <p>With <code>WithRunIn</code>, no secret value enters the sandbox: not through env vars, not through plugins, and not through sandboxes the agent starts from inside it.</p>
+  <figure class="diagram">
+    <div class="dg-scroll"><svg class="dg" viewBox="0 0 720 392" role="img" aria-labelledby="dg1-t dg1-d">
+      <title id="dg1-t">Where secrets live with WithRunIn</title>
+      <desc id="dg1-d">The sandbox runs the agent and its plugins and holds only placeholders. It has no network and one stdio stream to the host. The host holds secrets and model keys, checks every request against its rules, swaps placeholders for real values only toward allowed destinations, refuses the rest and audits all of it.</desc>
+      <defs>
+        <marker id="dg1-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk" d="M0 0 10 5 0 10z"/></marker>
+        <marker id="dg1-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="mk-ok" d="M0 0 10 5 0 10z"/></marker>
+      </defs>
+      <text class="cap" x="8" y="22">SANDBOX</text>
+      <text class="cap" x="268" y="22">YOUR HOST</text>
+      <text class="cap" x="568" y="22">INTERNET</text>
+      <rect class="zone" x="8" y="34" width="220" height="350" rx="14"/>
+      <rect class="zone host" x="268" y="34" width="252" height="350" rx="14"/>
+      <text class="s" x="22" y="58">microVM, container, or a</text>
+      <text class="s" x="22" y="73">hosted service's machines</text>
+      <text class="s" x="284" y="58">the only place real values exist</text>
+
+      <rect class="box" x="22" y="92" width="190" height="66" rx="9"/>
+      <text class="t" x="36" y="116">Agent</text>
+      <text class="m" x="36" y="134">eip serve --stdio</text>
+      <text class="s" x="36" y="150">loop · plugins · tools</text>
+
+      <rect class="box" x="22" y="178" width="190" height="66" rx="9"/>
+      <text class="t" x="36" y="202">Plugin</text>
+      <text class="m" x="36" y="220">GH_TOKEN =</text>
+      <text class="m c-wait" x="36" y="236">eipsec_7f3c…</text>
+      <path class="ln" d="M117 158v20"/>
+
+      <rect class="box" x="22" y="264" width="190" height="56" rx="9"/>
+      <text class="t" x="36" y="287">Network: none</text>
+      <text class="s" x="36" y="306">its HTTP goes through the host</text>
+      <text class="s" x="22" y="348">No secret value, no API key,</text>
+      <text class="s" x="22" y="364">nothing that works elsewhere.</text>
+
+      <path class="ln" d="M214 125H282" marker-start="url(#dg1-a)" marker-end="url(#dg1-a)"/>
+      <text class="m" x="248" y="116" text-anchor="middle">stdio</text>
+
+      <rect class="box" x="284" y="92" width="220" height="66" rx="9"/>
+      <text class="t" x="298" y="116">Bridge</text>
+      <text class="s" x="298" y="134">the box's process, started by</text>
+      <text class="s" x="298" y="150">the host; listens on no port</text>
+      <path class="ln" d="M394 158v18" marker-end="url(#dg1-a)"/>
+
+      <rect class="box em" x="284" y="178" width="220" height="92" rx="9"/>
+      <text class="t" x="298" y="202">Secret broker</text>
+      <text class="s" x="298" y="221">1  plugin is in the box, granted</text>
+      <text class="s" x="298" y="239">2  request matches SecretHosts</text>
+      <text class="s" x="298" y="257">3  swap · send · redact reply</text>
+
+      <path class="ln" d="M332 270v16" marker-start="url(#dg1-a)"/>
+      <path class="ln" d="M446 270v16" marker-end="url(#dg1-a)"/>
+      <rect class="box" x="284" y="288" width="96" height="62" rx="9"/>
+      <text class="t" x="298" y="311">Secrets</text>
+      <text class="m c-ok" x="298" y="330">ghp_real…</text>
+      <rect class="box" x="388" y="288" width="116" height="62" rx="9"/>
+      <text class="t" x="400" y="311">Audit</text>
+      <text class="m" x="400" y="328">secret.access</text>
+      <text class="m" x="400" y="342">sandbox.egress</text>
+
+      <rect class="box" x="568" y="92" width="144" height="66" rx="9"/>
+      <text class="t" x="582" y="116">Model API</text>
+      <text class="s" x="582" y="134">key added on the</text>
+      <text class="s" x="582" y="150">host (host.llm)</text>
+      <path class="ln" d="M504 125H566" marker-end="url(#dg1-a)"/>
+
+      <rect class="box" x="568" y="190" width="144" height="56" rx="9"/>
+      <text class="t" x="582" y="213">api.github.com</text>
+      <text class="s c-ok" x="582" y="232">gets the real token</text>
+      <path class="ln l-ok" d="M504 218H566" marker-end="url(#dg1-ok)"/>
+
+      <rect class="box" x="568" y="270" width="144" height="56" rx="9"/>
+      <text class="t" x="582" y="293">Any other host</text>
+      <text class="s c-bad" x="582" y="312">never contacted</text>
+      <path class="ln l-bad" d="M504 250 C530 250 530 298 546 298"/>
+      <path class="ln l-bad x" d="M548 290l12 16M560 290l-12 16"/>
+    </svg></div>
+    <figcaption>The sandbox (here, or on a third party's machines) gets the agent and placeholders. Real values stay on the host and leave it only toward destinations the rules allow. <span class="key c-wait">placeholder</span> <span class="key c-ok">real value</span> <span class="key c-bad">refused</span></figcaption>
+  </figure>
   <ol class="timeline" aria-label="How a secret is used from the sandbox"><li><span class="n">01</span><span class="h">stays on the host</span><span class="d">Model providers and every <code>secrets_*</code> provider run on the host. Model calls are relayed from the box.</span></li><li><span class="n">02</span><span class="h">fake token</span><span class="d">A plugin in the box asks for <code>secret://GH_TOKEN</code>. The host checks its grants and returns a placeholder (<code>eipsec_</code> + 32 hex), never the value. The read is audited as <code>secret.access</code>.</span></li><li><span class="n">03</span><span class="h">request via host</span><span class="d">The plugin puts the placeholder in a header and sends the request. The box's HTTP goes to the host, not the network.</span></li><li><span class="n">04</span><span class="h">swap where allowed</span><span class="d">If the request matches a rule in <code>SecretHosts["GH_TOKEN"]</code> (host, and method and path when the rule names them), the host swaps in the real token and makes the call. Otherwise it refuses. Requests without a placeholder must match <code>Egress</code>. Every request, allowed or refused, is recorded as <code>sandbox.egress</code>.</span></li><li class="end"><span class="n">05</span><span class="h">redacted reply</span><span class="d">Secret values are replaced with <code>[REDACTED]</code> in the response before it goes back, so a reflected token never reaches the box. Redirects come back to the box, so every hop is checked again.</span></li></ol>
   <h3>Rules</h3>
   <div class="table"><table>
@@ -2307,7 +2413,7 @@ func Apply(p *sdk.Plugin) error {
     <thead><tr><th>Request from the box</th><th>What the host does</th></tr></thead>
     <tbody>
       <tr><td>model call (<code>host.llm</code>)</td><td>Runs it through the host's own model hooks and policy, then the host's provider. The box never sees an API key.</td></tr>
-      <tr><td>secret (<code>host.secret</code>)</td><td>Checks the grant on the host and returns only a placeholder, never the value.</td></tr>
+      <tr><td>secret (<code>host.secret</code>)</td><td>Refuses a plugin the box wasn't started with, checks the grant on the host, and returns only a placeholder, never the value.</td></tr>
       <tr><td>HTTP (<code>host.http</code>)</td><td>Checks method, host and path against <code>SecretHosts</code> and <code>Egress</code>, swaps placeholders only where allowed, redacts the response, records <code>sandbox.egress</code>.</td></tr>
       <tr><td>host tool (<code>host.tool</code>)</td><td>Runs only tools the host chose to expose; <code>RunIn.NoBridgeTools</code> exposes none.</td></tr>
     </tbody>
@@ -2315,6 +2421,73 @@ func Apply(p *sdk.Plugin) error {
   <h3>A sandbox run by a third party</h3>
   <p>The same holds when the box runs on someone else's machines, in a hosted sandbox service, through a sandbox plugin with <code>Isolation: "remote"</code>. That plugin's <code>Start</code> opens the box's stdin and stdout through the service's own API: the host connects out, over TLS, authenticated with the host's key for that service. Nothing connects in to the host, so the stream the host opened is the only way to reach it.</p>
   <p>The host never has to trust the service or the code in the box with a secret. A secret is redeemed only on the host:</p>
+  <figure class="diagram">
+    <div class="dg-scroll"><svg class="dg" viewBox="0 0 720 588" role="img" aria-labelledby="dg2-t dg2-d">
+      <title id="dg2-t">One request from a third-party sandbox, end to end</title>
+      <desc id="dg2-d">The plugin in the sandbox asks the host for GH_TOKEN and gets a placeholder. It sends a GET with the placeholder to the host, which matches the SecretHosts rule, swaps in the real token and calls api.github.com. The reply comes back with the token redacted. A DELETE, or a request to another host, with the same placeholder is refused and never sent.</desc>
+      <defs>
+        <marker id="dg2-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="mk" d="M0 0 10 5 0 10z"/></marker>
+        <marker id="dg2-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="mk-ok" d="M0 0 10 5 0 10z"/></marker>
+        <marker id="dg2-wait" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="mk-wait" d="M0 0 10 5 0 10z"/></marker>
+        <marker id="dg2-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="mk-bad" d="M0 0 10 5 0 10z"/></marker>
+      </defs>
+      <rect class="box" x="20" y="8" width="180" height="44" rx="9"/>
+      <text class="t" x="110" y="28" text-anchor="middle">Plugin in the sandbox</text>
+      <text class="s" x="110" y="44" text-anchor="middle">third-party machines</text>
+      <rect class="box em" x="270" y="8" width="180" height="44" rx="9"/>
+      <text class="t" x="360" y="28" text-anchor="middle">Host</text>
+      <text class="s" x="360" y="44" text-anchor="middle">broker, secrets, audit</text>
+      <rect class="box" x="520" y="8" width="180" height="44" rx="9"/>
+      <text class="t" x="610" y="28" text-anchor="middle">api.github.com</text>
+      <text class="s" x="610" y="44" text-anchor="middle">the real destination</text>
+      <path class="life" d="M110 52V580M360 52V580M610 52V580"/>
+
+      <text class="n" x="12" y="84">1</text>
+      <text class="m" x="235" y="80" text-anchor="middle">host.secret secret://GH_TOKEN</text>
+      <path class="ln" d="M110 90H356" marker-end="url(#dg2-a)"/>
+      <rect class="nb" x="250" y="102" width="220" height="40" rx="7"/>
+      <text class="s" x="360" y="119" text-anchor="middle">plugin is in the box? granted?</text>
+      <text class="s" x="360" y="134" text-anchor="middle">→ new placeholder, secret.access</text>
+      <text class="n" x="12" y="170">2</text>
+      <text class="m c-wait" x="235" y="164" text-anchor="middle">eipsec_7f3c…</text>
+      <path class="ln l-wait" d="M360 174H114" marker-end="url(#dg2-wait)"/>
+
+      <text class="n" x="12" y="222">3</text>
+      <text class="m" x="235" y="200" text-anchor="middle">host.http GET /repos/x</text>
+      <text class="m" x="235" y="215" text-anchor="middle">Bearer <tspan class="c-wait">eipsec_7f3c…</tspan></text>
+      <path class="ln" d="M110 226H356" marker-end="url(#dg2-a)"/>
+      <rect class="nb" x="250" y="238" width="220" height="40" rx="7"/>
+      <text class="s" x="360" y="255" text-anchor="middle">GET api.github.com/repos/* matches</text>
+      <text class="s" x="360" y="270" text-anchor="middle">→ swap in the real value</text>
+
+      <text class="n" x="12" y="318">4</text>
+      <text class="m" x="485" y="296" text-anchor="middle">GET /repos/x</text>
+      <text class="m" x="485" y="311" text-anchor="middle">Bearer <tspan class="c-ok">ghp_real…</tspan></text>
+      <path class="ln l-ok" d="M360 322H606" marker-end="url(#dg2-ok)"/>
+      <text class="n" x="12" y="360">5</text>
+      <text class="m" x="485" y="350" text-anchor="middle">200 {… <tspan class="c-ok">ghp_real…</tspan> …}</text>
+      <path class="ln" d="M610 360H364" marker-end="url(#dg2-a)"/>
+      <rect class="nb" x="250" y="372" width="220" height="40" rx="7"/>
+      <text class="s" x="360" y="389" text-anchor="middle">redact secret values</text>
+      <text class="s" x="360" y="404" text-anchor="middle">→ sandbox.egress allowed</text>
+      <text class="n" x="12" y="446">6</text>
+      <text class="m" x="235" y="440" text-anchor="middle">200 {… [REDACTED] …}</text>
+      <path class="ln" d="M360 450H114" marker-end="url(#dg2-a)"/>
+
+      <path class="sep" d="M20 474H700"/>
+      <text class="s" x="360" y="494" text-anchor="middle">Same placeholder, but the rule doesn't match (a DELETE, or another host)</text>
+      <text class="n" x="12" y="532">7</text>
+      <text class="m" x="235" y="510" text-anchor="middle">host.http DELETE /repos/x</text>
+      <text class="m" x="235" y="525" text-anchor="middle">Bearer <tspan class="c-wait">eipsec_7f3c…</tspan></text>
+      <path class="ln" d="M110 536H356" marker-end="url(#dg2-a)"/>
+      <path class="ln l-bad x" d="M602 526l16 20M618 526l-16 20"/>
+      <text class="s c-bad" x="610" y="566" text-anchor="middle">never sent</text>
+      <text class="n" x="12" y="572">8</text>
+      <text class="m c-bad" x="235" y="562" text-anchor="middle">refused · sandbox.egress denied</text>
+      <path class="ln l-bad" d="M360 572H114" marker-end="url(#dg2-bad)"/>
+    </svg></div>
+    <figcaption>The real token exists only in step 4, between the host and the API. The sandbox, and the service running it, only ever see the placeholder and the redacted reply.</figcaption>
+  </figure>
   <ol>
     <li>A plugin in the box asks for <code>secret://GITHUB_TOKEN</code> and gets a placeholder: 128 random bits that mean something only to this host's agent, held in its memory for as long as it runs.</li>
     <li>The box sends an HTTP request carrying the placeholder to the host (<code>host.http</code>), over the same stream.</li>
@@ -2322,9 +2495,9 @@ func Apply(p *sdk.Plugin) error {
     <li>The response comes back with the secret's value redacted, and the request is recorded as <code>sandbox.egress</code>.</li>
   </ol>
   <p>So the value never reaches the service's machines, and a placeholder copied out of the box is useless: no other host knows it, and this host swaps it only for the destinations its rules allow. A dishonest service could read the stream or send requests on it, but that gives it no more than a compromised box gets: the requests its rules permit. It does see what flows through the box (prompts, tool results, responses after redaction), so pick a service you would trust with that data.</p>
-  <p>So a compromised box can do only what these rules allow: spend model calls under the host's policy and limits, and send requests that <code>SecretHosts</code> and <code>Egress</code> permit. It can also claim to be any plugin when it asks for a secret (see below), which is why the rules, not the plugin names, are the boundary: keep them as narrow as the task needs.</p>
+  <p>So a compromised box can do only what these rules allow: spend model calls under the host's policy and limits, and send requests that <code>SecretHosts</code> and <code>Egress</code> permit. The box names the plugin that asks for a secret. The host refuses names of plugins it didn't start the box with, but can't tell apart the plugins that are in it, so the rules, not the plugin names, are the boundary: keep them as narrow as the task needs.</p>
   <p>To see it end to end in a microVM, run <code>go run ./examples/microsandbox</code> (<a href="#production-examples">output</a>): the agent runs in a <code>sandbox_microsandbox</code> VM with no network, the VM holds only a placeholder, and the API on the host receives the real token.</p>
-  <div class="note warn"><b>What it doesn't cover</b><div><p>Placeholders are swapped only in HTTP sent through Go's default transport. A plugin that needs the raw value in its own process (a database DSN, env for a stdio MCP server), or dials with its own transport like <code>tool_fetch</code>, can't use a secret inside the box: load it on the host with <code>RunIn.HostPlugins</code>. The host trusts the box to say which plugin is asking, so grants inside the box are only as strong as the box; a placeholder is still useless outside its <code>SecretHosts</code>. On the host without a sandbox, the agent already has the host's access, so none of this applies.</p></div></div>
+  <div class="note warn"><b>What it doesn't cover</b><div><p>Placeholders are swapped only in HTTP sent through Go's default transport. A plugin that needs the raw value in its own process (a database DSN, env for a stdio MCP server), or dials with its own transport like <code>tool_fetch</code>, can't use a secret inside the box: load it on the host with <code>RunIn.HostPlugins</code>. The host takes the box's word for which of its plugins is asking, so grants between plugins in the same box are only as strong as the box; a placeholder is still useless outside its <code>SecretHosts</code>. On the host without a sandbox, the agent already has the host's access, so none of this applies.</p></div></div>
   <h2>Built-in plugins</h2>
   <!-- gen:builtins sandboxes -->
 <div class="builtins">
