@@ -72,7 +72,7 @@ var osSyms = map[string][]string{
 	PermEnv:        {"Getenv", "LookupEnv", "Environ", "ExpandEnv", "Hostname", "UserHomeDir", "TempDir", "Getwd"},
 	PermEnvSecrets: {"Getenv", "LookupEnv", "Environ", "ExpandEnv"},
 	PermFSRead:     {"Open", "ReadFile", "ReadDir", "Stat", "Lstat", "DirFS", "Readlink", "SameFile", "Getwd", "TempDir", "UserHomeDir"},
-	PermFSWrite:    {"Create", "CreateTemp", "WriteFile", "Mkdir", "MkdirAll", "MkdirTemp", "Remove", "RemoveAll", "Rename", "OpenFile", "Chmod", "Chtimes", "Truncate", "CopyFS"},
+	PermFSWrite:    {"Create", "CreateTemp", "WriteFile", "Mkdir", "MkdirAll", "MkdirTemp", "Remove", "RemoveAll", "Rename", "OpenFile", "Chmod", "Chtimes", "Truncate"},
 	PermExec:       {"StartProcess", "FindProcess", "Getpid", "Executable", "ProcAttr", "Process", "ProcessState", "Signal", "Interrupt", "Kill"},
 }
 

@@ -2,7 +2,6 @@ package engine
 
 import (
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -258,25 +257,6 @@ func guardedTruncate(name string, size int64, deny []string) error {
 	return os.Truncate(target, size)
 }
 
-func guardedCopyFS(dir string, fsys fs.FS, deny []string) error {
-	target, err := writeTarget(dir, deny, true)
-	if err != nil {
-		return err
-	}
-	if err := fs.WalkDir(fsys, ".", func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if p == "." {
-			return nil
-		}
-		return checkWritePath(filepath.Join(target, filepath.FromSlash(p)), deny)
-	}); err != nil {
-		return err
-	}
-	return os.CopyFS(target, fsys)
-}
-
 func guardedIoutilWriteFile(name string, data []byte, perm os.FileMode, deny []string) error {
 	return guardedWriteFile(name, data, perm, deny)
 }
@@ -371,9 +351,6 @@ func guardOSSymbols(filtered map[string]reflect.Value, has map[string]bool, deny
 	})
 	setFiltered(filtered, "Truncate", func(name string, size int64) error {
 		return guardedTruncate(name, size, deny)
-	})
-	setFiltered(filtered, "CopyFS", func(dir string, fsys fs.FS) error {
-		return guardedCopyFS(dir, fsys, deny)
 	})
 }
 
