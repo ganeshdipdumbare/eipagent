@@ -4,6 +4,8 @@ All notable changes to eipagent. Versions follow [semantic versioning](https://s
 
 ## Unreleased
 
+## v0.4.3 — 2026-11-03
+
 ### Fixed
 
 - `WithRunIn`: when the agent in the sandbox exits, the run waiting on it fails with an error saying so (not `rpc: connection closed`), and the next run starts a new sandbox. Threads kept in the old sandbox are gone with it unless their store is outside the box.

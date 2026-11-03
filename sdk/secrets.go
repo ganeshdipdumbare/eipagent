@@ -18,7 +18,7 @@ import (
 
 // Version is the eipagent SDK version plugins are checked against
 // (the "eipagent" field of a plugin manifest).
-const Version = "0.4.2"
+const Version = "0.4.3"
 
 // Redaction: every secret value resolved through the "secrets" service
 // is remembered here, and audit / trace / log plugins pass what they
