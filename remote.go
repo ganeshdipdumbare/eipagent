@@ -86,11 +86,24 @@ func newRemote(cfg *config) (*Agent, error) {
 		return nil, fmt.Errorf("eipagent: %w", err)
 	}
 	hostCfg.specs = []engine.PluginSpec{{Use: "sandbox_" + ri.Provider, Config: ri.ProviderConfig}}
+	// A compiled plugin has no source the box could load. Keep it on the
+	// host; the sandbox provider is already in hostCfg.specs.
+	compiled := make(map[string]bool, len(cfg.compiled))
+	for _, p := range cfg.compiled {
+		compiled[sdk.CanonicalPlugin(p.Name)] = true
+	}
 	// Secret providers, then model providers (which resolve their keys
 	// through them), always stay on the host.
 	var boxSpecs, models []engine.PluginSpec
 	for _, s := range cfg.specs {
-		switch use := sdk.CanonicalPlugin(s.Use); {
+		use := sdk.CanonicalPlugin(s.Use)
+		if compiled[use] {
+			if use != sdk.CanonicalPlugin("sandbox_"+ri.Provider) {
+				hostCfg.specs = append(hostCfg.specs, s)
+			}
+			continue
+		}
+		switch {
 		case strings.HasPrefix(use, "secrets_"):
 			hostCfg.specs = append(hostCfg.specs, s)
 		case strings.HasPrefix(use, "model_"):

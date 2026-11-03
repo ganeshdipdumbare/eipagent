@@ -15,6 +15,11 @@
 // with KVM:
 //
 //	go run ./examples/microsandbox
+//
+// To run the same example on microsandbox cloud (private beta), select the
+// cloud backend with MSB_BACKEND=cloud and set MSB_API_KEY:
+//
+//	MSB_BACKEND=cloud MSB_API_KEY=... go run ./examples/microsandbox
 package main
 
 import (
@@ -125,7 +130,14 @@ func main() {
 	step := func(tool string, args map[string]any) map[string]any {
 		return map[string]any{"tool": tool, "args": args}
 	}
-	fmt.Println("Booting a microsandbox VM (no network) and starting the agent in it…")
+	if os.Getenv("MSB_BACKEND") == "cloud" {
+		if out, err := exec.Command("msb", "context").CombinedOutput(); err == nil {
+			fmt.Printf("%s\n", out)
+		}
+		fmt.Println("Booting a microsandbox cloud sandbox (no network) and starting the agent in it…")
+	} else {
+		fmt.Println("Booting a microsandbox VM (no network) and starting the agent in it…")
+	}
 	a, err := eipagent.New(
 		eipagent.WithModel("mock:demo"),
 		eipagent.WithPlugin("model_mock", map[string]any{"script": []any{

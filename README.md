@@ -99,12 +99,13 @@ go run ./examples/ollama -demo text      # also: stream, tools, plugins, object,
 
 The model string is just `ollama:<model>` (for example `ollama:qwen3.5:4b`). Set `OLLAMA_HOST` to use an Ollama running on another machine. See [`examples/ollama`](examples/ollama/main.go).
 
-**Production features, each as a runnable program** (offline, no keys needed):
+**Production features, each as a runnable program** (offline and no keys needed, except `examples/firecracker`, which needs Linux with `/dev/kvm`):
 
 | Example | Shows |
 |---|---|
 | [`examples/secrets`](examples/secrets/main.go) | `secrets_vault` against an in-process Vault: per-plugin grants, a plugin that can't ask as another, key rotation without a restart, a leaked key redacted from logs and audit, `secret.access` records |
-| [`examples/microsandbox`](examples/microsandbox/main.go) | the agent in a [microsandbox](https://microsandbox.dev) microVM with no network (needs `msb`): no secret env vars in the VM, a plugin that holds only a placeholder, the host swapping in the real token on `GET /orders` only, the echoed token redacted, a `DELETE` and any other host refused, and the host's `sandbox.egress` record of every request |
+| [`examples/microsandbox`](examples/microsandbox/main.go) | the agent in a [microsandbox](https://microsandbox.dev) microVM with no network (needs `msb`; set `MSB_BACKEND=cloud` and `MSB_API_KEY` for microsandbox cloud): no secret env vars in the VM, a plugin that holds only a placeholder, the host swapping in the real token on `GET /orders` only, the echoed token redacted, a `DELETE` and any other host refused, and the host's `sandbox.egress` record of every request |
+| [`examples/firecracker`](examples/firecracker/main.go) | a self-hosted [Firecracker](https://firecracker-microvm.github.io/) microVM, created and connected to like a small hosted sandbox (Linux with `/dev/kvm`; includes a Lima setup for macOS): tap device, Firecracker API, SSH, `WithRunIn`, and the same secret-placeholder, host-swap, redaction and `sandbox.egress` guarantees |
 | [`examples/observability`](examples/observability/main.go) | `audit_http` to an in-process SIEM that checks HMAC signatures and the hash chain; `trace_otlp` to an in-process OpenTelemetry collector, printing the span tree and the shared fields (`run`, `thread`, `user`, `plugin`, `provider`) |
 | [`examples/plugin-validate`](examples/plugin-validate/main.go) | the linter's report on a plugin with mistakes, then a signed package, and what verification refuses: a tampered file, a manifest that grants itself `exec`, an unknown signer, an unsigned package, a wrong pin |
 | [`examples/plugin-store`](examples/plugin-store/main.go) | one plugin through install, approval, enable, update, a failed update that keeps the old version, rollback and quarantine, in a running agent |
@@ -657,7 +658,7 @@ There are two directions:
   )
   ```
 
-Providers: `sandbox_local` (no isolation, for development), `sandbox_docker` (Docker or Podman, with no network by default) and `sandbox_microsandbox` ([microsandbox](https://microsandbox.dev) microVMs, with no network by default). Any other backend, such as Firecracker, E2B or Kubernetes, only needs to provide `sdk.SandboxProvider`. See [`examples/custom-sandbox`](examples/custom-sandbox).
+Providers: `sandbox_local` (no isolation, for development), `sandbox_docker` (Docker or Podman, with no network by default) and `sandbox_microsandbox` ([microsandbox](https://microsandbox.dev) microVMs, with no network by default). The microsandbox provider also runs on **microsandbox cloud** when the host environment sets `MSB_BACKEND=cloud` and `MSB_API_KEY` (or selects a cloud profile with `MSB_PROFILE`); no code changes are needed. Any other backend, such as Firecracker, E2B or Kubernetes, only needs to provide `sdk.SandboxProvider`. See [`examples/custom-sandbox`](examples/custom-sandbox) and the complete self-hosted microVM provider in [`examples/firecracker`](examples/firecracker). The `WithRunIn` + `SecretHosts` flow is the same for a hosted provider: the host runs the broker and secrets, and the provider's machine only receives placeholders. The Firecracker example walks that flow explicitly and has a [cloud-hosted equivalent](examples/firecracker/README.md#the-same-flow-on-a-cloud-hosted-sandbox).
 
 ## Security
 
@@ -782,4 +783,3 @@ To depend on a version, `go get github.com/ganeshdipdumbare/eipagent@vX.Y.Z`. To
 - runtime plugin management inside a `WithRunIn` box
 - `jobs_sql`
 - `eip serve --http`
-- a microsandbox adapter (microsandbox has no local server API)

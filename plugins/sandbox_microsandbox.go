@@ -25,6 +25,10 @@ import (
 // Config: binary ("msb"), image ("alpine"), name ("microsandbox"),
 // extra_args ([]).
 //
+// To run on microsandbox cloud (private beta), set MSB_BACKEND=cloud and
+// MSB_API_KEY in the host environment, or select a cloud profile with
+// MSB_PROFILE. The same provider and msb CLI then create cloud sandboxes.
+//
 // Example:
 //
 //	eipagent.WithPlugin("sandbox_microsandbox", map[string]any{"image": "python"})

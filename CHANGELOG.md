@@ -4,6 +4,16 @@ All notable changes to eipagent. Versions follow [semantic versioning](https://s
 
 ## Unreleased
 
+### Added
+
+- `examples/firecracker`: a complete self-hosted [Firecracker](https://firecracker-microvm.github.io/) sandbox provider. It creates a tap device, boots a microVM through the Firecracker API, connects to it over SSH, and runs the agent with `WithRunIn`. A setup script fetches the kernel, rootfs, SSH key and Firecracker binary, and the README shows how to run it inside Lima on Apple Silicon. The example keeps model and secret values on the host and shows the same placeholder, host-swap, redaction and `sandbox.egress` guarantees as the local microsandbox example.
+- The microsandbox provider and example document how to run on microsandbox cloud: set `MSB_BACKEND=cloud` and `MSB_API_KEY` (or `MSB_PROFILE`) in the host environment. The same `msb` provider is used.
+- The sandbox docs make the hosted-service boundary explicit: `examples/firecracker` shows the same `host.secret`, `host.http`, placeholder, redaction and `sandbox.egress` flow, and the README and docs map it to a cloud-hosted provider where only the provider plugin changes.
+
+### Fixed
+
+- `WithRunIn` keeps compiled plugins on the host instead of trying to load them inside the box, where compiled source is unavailable. This makes a compiled sandbox provider usable with `WithRunIn`.
+
 ## v0.4.4 — 2026-11-03
 
 ### Changed

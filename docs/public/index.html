@@ -386,7 +386,7 @@ td code { white-space: nowrap; }
 <aside class="side" id="side" aria-label="Documentation">
   <div class="version">
     <span class="logo"><svg viewBox="0 0 32 32" aria-hidden="true"><rect x="3" y="3" width="11" height="11" rx="2.5" fill="var(--bg)"/><rect x="18" y="3" width="11" height="11" rx="2.5" fill="none" stroke="var(--bg)" stroke-width="2.4"/><rect x="3" y="18" width="11" height="11" rx="2.5" fill="none" stroke="var(--bg)" stroke-width="2.4"/><rect x="18" y="18" width="11" height="11" rx="2.5" fill="var(--accent)"/></svg></span>
-    <span><b>v0.4.3</b><small>Go 1.27 · latest</small></span>
+    <span><b>v0.4.4</b><small>Go 1.27 · latest</small></span>
   </div>
   <nav id="sidenav"></nav>
 </aside>
@@ -469,12 +469,12 @@ fmt.Println(res.Text)</code></pre></div></div></div>
 <section id="installation" class="page">
   <h1>Installation</h1>
   <p>eipagent needs Go 1.27 or newer. Add a tagged release to your module:</p>
-  <div class="code" data-title="terminal"><pre><code class="language-bash">go get github.com/ganeshdipdumbare/eipagent@v0.4.3</code></pre></div>
+  <div class="code" data-title="terminal"><pre><code class="language-bash">go get github.com/ganeshdipdumbare/eipagent@v0.4.4</code></pre></div>
   <p>The repository is private, so tell Go and give git access once:</p>
   <div class="code" data-title="terminal"><pre><code class="language-bash">go env -w GOPRIVATE=github.com/ganeshdipdumbare/*
 gh auth setup-git        # or use an SSH key for github.com</code></pre></div>
   <p>The CLI installs the same way:</p>
-  <div class="code" data-title="terminal"><pre><code class="language-bash">go install github.com/ganeshdipdumbare/eipagent/cmd/eip@v0.4.3</code></pre></div>
+  <div class="code" data-title="terminal"><pre><code class="language-bash">go install github.com/ganeshdipdumbare/eipagent/cmd/eip@v0.4.4</code></pre></div>
   <h2>Versions</h2>
   <p>Releases are git tags that follow semantic versioning. While the major version is 0, patch releases (<code>v0.4.x</code>) only fix bugs and security issues, and minor releases (<code>v0.x.0</code>) may break the API. Each break is listed with what to change in <a href="https://github.com/ganeshdipdumbare/eipagent/blob/main/CHANGELOG.md">CHANGELOG.md</a>. Interpreted plugins import the SDK as <code>"eipagent/sdk"</code>, an alias that stays the same across releases, so plugin files never change for it.</p>
   <p>Check that everything works from a checkout. The test suite runs offline, using a mock model that needs no API key.</p>
@@ -890,7 +890,7 @@ if len(ap.Approvals) != 1 {
 
 <section id="production-examples" class="page">
   <h1>Production examples</h1>
-  <p>Each of these is a small program that runs offline, with a mock model and in-process stand-ins for Vault, a SIEM and an OpenTelemetry collector. Run one, read the output, then read the code.</p>
+  <p>Each of these is a small program that runs offline, with a mock model and in-process stand-ins for Vault, a SIEM and an OpenTelemetry collector. The exception is the Firecracker example, which needs a Linux host with KVM (or a Lima VM) and a one-time setup download. Run one, read the output, then read the code.</p>
 
   <h2>Secrets: Vault, grants, rotation, redaction</h2>
   <div class="code" data-title="terminal"><pre><code class="language-bash">go run ./examples/secrets</code></pre></div>
@@ -943,6 +943,42 @@ The host's record of every request from the VM (sandbox.egress):
   denied DELETE 127.0.0.1/orders secrets=[ACME_API_TOKEN] (... may not be sent to DELETE 127.0.0.1/orders ...)
   denied GET localhost/steal secrets=[ACME_API_TOKEN] (... may not be sent to GET localhost/steal ...)</code></pre></div>
   <p>The whole agent runs in a <a href="https://microsandbox.dev">microsandbox</a> VM with no network (<code>sandbox_microsandbox</code>). The real <code>ACME_API_TOKEN</code> is only in the host's environment. A plugin in the VM asks for it and gets a placeholder; its request goes through the host, which swaps in the real token because the rule <code>GET 127.0.0.1/orders*</code> in <code>SecretHosts</code> allows it. The API echoes the token back and the VM sees <code>[REDACTED]</code>. The same placeholder on a <code>DELETE</code>, or sent to <code>localhost</code>, is refused. The host records every request as <code>sandbox.egress</code>, allowed or not. See <a href="#runin-secrets">Secrets in a sandboxed agent</a>.</p>
+
+  <h2>Self-host a Firecracker microVM, connect like a cloud</h2>
+  <div class="code" data-title="terminal"><pre><code class="language-bash">sudo examples/firecracker/setup.sh   # Linux with /dev/kvm; on macOS use Lima (see the README)
+go run ./examples/firecracker</code></pre></div>
+  <div class="code" data-title="output"><pre><code class="language-plaintext">Booting a self-hosted Firecracker microVM and starting the agent in it...
+created firecracker microVM fc-53af8ea6a870 at 172.16.4.2
+
+1. Inside the Firecracker microVM: no secret env vars
+  machine: aarch64 Linux 6.18.56+
+  workspace: /root/.eipagent/sandboxes/local-e7847b12aa73
+  environment:
+    HOME=/root
+    LANG=C.UTF-8
+    PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
+    PWD=/root/.eipagent/sandboxes/local-e7847b12aa73
+
+2. A plugin in the microVM calls the API (GET /orders is allowed for the token)
+  token in the sandbox: eipsec_e4b032f848cd20cd447a488ac32b486d
+  API replied: {"orders": 3, "you_sent": "Bearer [REDACTED]"}
+
+3. The same token on a DELETE (only GET is allowed)
+  token in the sandbox: eipsec_e4b032f848cd20cd447a488ac32b486d
+  request failed: Delete "http://127.0.0.1:34131/orders": sandbox egress: secret ACME_API_TOKEN may not be sent to DELETE 127.0.0.1/orders (RunIn.SecretHosts)
+
+4. The same token sent to a host that isn't listed
+  token in the sandbox: eipsec_e4b032f848cd20cd447a488ac32b486d
+  request failed: Get "http://localhost:34131/steal": sandbox egress: secret ACME_API_TOKEN may not be sent to GET localhost/steal (RunIn.SecretHosts)
+
+On the host, the Acme API received:
+  GET 127.0.0.1:34131/orders Bearer acme_live_7f3c9a1e5b2d4c6f8a0b
+
+The host's record of every request from the microVM (sandbox.egress):
+  allowed GET 127.0.0.1/orders -&gt; 200 secrets=[ACME_API_TOKEN]
+  denied DELETE 127.0.0.1/orders secrets=[ACME_API_TOKEN] (... may not be sent to DELETE 127.0.0.1/orders ...)
+  denied GET localhost/steal secrets=[ACME_API_TOKEN] (... may not be sent to GET localhost/steal ...)</code></pre></div>
+  <p>The provider creates a tap device, boots an Ubuntu rootfs with the Firecracker API, and connects to the guest over SSH. It is a self-hosted version of the hosted-service path: the agent, plugins and tools run in the microVM, while the model provider and every secret stay on the host. The same placeholder, host-swap, redaction and <code>sandbox.egress</code> rules apply, and <code>Close</code> destroys the VM and its rootfs copy. <a href="https://github.com/ganeshdipdumbare/eipagent/blob/main/examples/firecracker/main.go">Source</a></p>
 
   <h2>Audit to a SIEM, traces to OpenTelemetry</h2>
   <div class="code" data-title="terminal"><pre><code class="language-bash">go run ./examples/observability</code></pre></div>
@@ -2507,6 +2543,29 @@ func Apply(p *sdk.Plugin) error {
   <p>So a compromised box can do only what these rules allow: spend model calls under the host's policy and limits, and send requests that <code>SecretHosts</code> and <code>Egress</code> permit. The box names the plugin that asks for a secret. The host refuses names of plugins it didn't start the box with, but can't tell apart the plugins that are in it, so the rules, not the plugin names, are the boundary: keep them as narrow as the task needs.</p>
   <p>To see it end to end in a microVM, run <code>go run ./examples/microsandbox</code> (<a href="#production-examples">output</a>): the agent runs in a <code>sandbox_microsandbox</code> VM with no network, the VM holds only a placeholder, and the API on the host receives the real token.</p>
   <div class="note warn"><b>What it doesn't cover</b><div><p>Placeholders are swapped only in HTTP sent through Go's default transport. A plugin that needs the raw value in its own process (a database DSN, env for a stdio MCP server), or dials with its own transport like <code>tool_fetch</code>, can't use a secret inside the box: load it on the host with <code>RunIn.HostPlugins</code>. The host takes the box's word for which of its plugins is asking, so grants between plugins in the same box are only as strong as the box; a placeholder is still useless outside its <code>SecretHosts</code>. On the host without a sandbox, the agent already has the host's access, so none of this applies.</p></div></div>
+  <h3>Run it on a self-hosted microVM</h3>
+  <p><a href="https://firecracker-microvm.github.io/">Firecracker</a> is the microVM monitor behind AWS Lambda. <a href="https://github.com/ganeshdipdumbare/eipagent/blob/main/examples/firecracker"><code>examples/firecracker</code></a> is a complete <code>sdk.SandboxProvider</code> that creates a tap device, boots a local microVM through the Firecracker API, connects to it over SSH, and runs the agent inside it. It is the same provider shape a hosted service would use, but self-hosted and free:</p>
+  <div class="code" data-title="go"><pre><code class="language-go">agent, _ := eipagent.New(
+	eipagent.WithCompiledPlugin(firecracker()), // examples/firecracker/provider.go
+	eipagent.WithPlugins("tool_shell"),
+	eipagent.WithRunIn(eipagent.RunIn{
+		Provider: "firecracker",
+		Binary:   "./eip-linux", // GOOS=linux GOARCH=arm64 (or amd64) go build -o eip-linux ./cmd/eip
+		Spec:     sdk.SandboxSpec{CPUs: 1, MemoryMB: 512, Network: sdk.NetworkPolicy{Mode: "none"}},
+	}),
+)</code></pre></div>
+  <p>It needs Linux with <code>/dev/kvm</code> and passwordless <code>sudo -n</code>. The README shows the same setup inside a Lima VM with nested virtualization on Apple Silicon. The host keeps the model and secret values; the microVM gets only placeholders, and every request is recorded as <code>sandbox.egress</code>.</p>
+  <h3>The same flow on a hosted service</h3>
+  <p>The host/sandbox split does not depend on who owns the machines. Firecracker is the runnable stand-in; with a hosted provider, only the provider plugin changes:</p>
+  <div class="code" data-title="go"><pre><code class="language-go">eipagent.WithRunIn(eipagent.RunIn{
+	Provider: "your_hosted_provider", // E2B, microsandbox cloud, Kubernetes...
+	Binary:   "./eip-linux",
+	SecretHosts: map[string][]string{
+		"ACME_API_TOKEN": {"GET api.acme.com/orders*"},
+	},
+})</code></pre></div>
+  <p>Your host still runs the model provider, secrets service, broker and audit sink. The provider's machine runs the sandbox. A plugin there gets only a placeholder; when it sends a request with that placeholder, your host checks <code>SecretHosts</code>, swaps in the real value, makes the request from the host, redacts the reply and records <code>sandbox.egress</code>. The provider never receives the value. The Firecracker example exercises exactly those <code>host.secret</code> and <code>host.http</code> paths, so it is the local, inspectable version of a cloud-hosted sandbox.</p>
+  <p><b>Microsandbox cloud</b> uses the built-in provider. Set <code>MSB_BACKEND=cloud</code> and <code>MSB_API_KEY</code> in the host environment (or select a cloud profile with <code>MSB_PROFILE</code>) and run <code>go run ./examples/microsandbox</code>; access is currently by request during the private beta.</p>
   <h2>Built-in plugins</h2>
   <!-- gen:builtins sandboxes -->
 <div class="builtins">
@@ -2539,7 +2598,11 @@ have no network by default; allowlist mode turns hosts into msb
 network rules.
 
 Config: binary (&#34;msb&#34;), image (&#34;alpine&#34;), name (&#34;microsandbox&#34;),
-extra_args ([]).</pre></details></div>
+extra_args ([]).
+
+To run on microsandbox cloud (private beta), set MSB_BACKEND=cloud and
+MSB_API_KEY in the host environment, or select a cloud profile with
+MSB_PROFILE. The same provider and msb CLI then create cloud sandboxes.</pre></details></div>
 <div class="builtin" id="plugin-workspace_local"><div class="bhead"><code>workspace_local</code><span class="bsum">provides workspace · uses sandbox/local · requires sandbox/local · no permissions</span></div><p>Shell and file tools act on the host, in one workspace directory (via sandbox/local). Provided as &#34;workspace&#34;. Use workspace_sandbox instead to move every shell/fs tool into isolated sandboxes.</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugin(&#34;sandbox_local&#34;, map[string]any{&#34;workdir&#34;: &#34;.&#34;})
 eipagent.WithPlugins(&#34;workspace_local&#34;, &#34;tool_shell&#34;, &#34;tool_fs&#34;)</code></pre></div><details><summary>Config and details</summary><pre>Shell and file tools act on the host, in one workspace directory
 (via sandbox/local). Provided as &#34;workspace&#34;. Use workspace_sandbox instead to

@@ -1,0 +1,575 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"os"
+	"os/exec"
+	"path"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/ganeshdipdumbare/eipagent"
+	"github.com/ganeshdipdumbare/eipagent/sdk"
+)
+
+// firecracker is a sandbox provider for a self-hosted Firecracker microVM.
+// It creates a tap device, boots Firecracker, and talks to the guest over
+// SSH, so it behaves like a small hosted sandbox: create, connect, run, and
+// destroy.
+//
+// It needs Linux with /dev/kvm and passwordless sudo (for the tap device and
+// the Firecracker process). examples/firecracker/setup.sh downloads a kernel,
+// rootfs, and Firecracker binary.
+type fcConfig struct {
+	bin        string
+	kernel     string
+	rootfs     string
+	sshKey     string
+	workdir    string
+	bootArgs   string
+	cpus       int
+	memMB      int
+	tapPrefix  string
+	sshTimeout time.Duration
+}
+
+func firecracker() eipagent.Plugin {
+	return eipagent.Plugin{
+		Name: "sandbox_firecracker",
+		Apply: func(p *sdk.Plugin) error {
+			cfg := fcConfig{
+				bin:        envOr("FC_BIN", "/usr/local/bin/firecracker"),
+				kernel:     envOr("FC_KERNEL", ".eipagent/firecracker/vmlinux"),
+				rootfs:     envOr("FC_ROOTFS", ".eipagent/firecracker/rootfs.ext4"),
+				sshKey:     envOr("FC_SSH_KEY", ".eipagent/firecracker/id_ed25519"),
+				workdir:    envOr("FC_WORKDIR", filepath.Join(os.TempDir(), "eip-firecracker")),
+				bootArgs:   envOr("FC_BOOT_ARGS", defaultBootArgs()),
+				cpus:       envInt("FC_CPUS", 1),
+				memMB:      envInt("FC_MEM_MB", 512),
+				tapPrefix:  envOr("FC_TAP_PREFIX", "fct"),
+				sshTimeout: 90 * time.Second,
+			}
+			cfg = cfg.absolutize()
+			if err := cfg.check(); err != nil {
+				return err
+			}
+			return p.Provide("sandbox/firecracker", &sdk.SandboxProvider{
+				Name:      "firecracker",
+				Isolation: "microvm",
+				Create: func(c context.Context, spec sdk.SandboxSpec) (*sdk.Sandbox, error) {
+					return createVM(c, p, cfg, spec)
+				},
+				Attach: func(c context.Context, id string) (*sdk.Sandbox, error) {
+					return attachVM(c, p, cfg, id)
+				},
+			})
+		},
+	}
+}
+
+func (c fcConfig) absolutize() fcConfig {
+	abs := func(p string) string {
+		if a, err := filepath.Abs(p); err == nil {
+			return a
+		}
+		return p
+	}
+	c.bin = abs(c.bin)
+	c.kernel = abs(c.kernel)
+	c.rootfs = abs(c.rootfs)
+	c.sshKey = abs(c.sshKey)
+	c.workdir = abs(c.workdir)
+	return c
+}
+
+func (c fcConfig) check() error {
+	for name, path := range map[string]string{c.bin: "firecracker", c.kernel: "kernel", c.rootfs: "rootfs", c.sshKey: "ssh key"} {
+		if _, err := os.Stat(name); err != nil {
+			return fmt.Errorf("firecracker: %s %s: %w (run examples/firecracker/setup.sh)", path, name, err)
+		}
+	}
+	if _, err := os.Stat("/dev/kvm"); err != nil {
+		return fmt.Errorf("firecracker: /dev/kvm: %w (need Linux with KVM; on macOS use Lima with nestedVirtualization)", err)
+	}
+	return nil
+}
+
+func createVM(ctx context.Context, p *sdk.Plugin, cfg fcConfig, spec sdk.SandboxSpec) (*sdk.Sandbox, error) {
+	if len(spec.Mounts) > 0 {
+		return nil, errors.New("firecracker: host mounts are not supported")
+	}
+	if len(spec.Env) > 0 {
+		return nil, errors.New("firecracker: sandbox env is not supported; put config in the rootfs or upload files")
+	}
+	if err := os.MkdirAll(cfg.workdir, 0o755); err != nil {
+		return nil, err
+	}
+	id := "fc-" + randomHex(6)
+	idx := randomIndex()
+	dir := filepath.Join(cfg.workdir, id)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+	tap := fmt.Sprintf("%s%d", cfg.tapPrefix, idx)
+	hostIP := fmt.Sprintf("172.16.%d.1", idx)
+	guestIP := fmt.Sprintf("172.16.%d.2", idx)
+	mac := fmt.Sprintf("06:00:AC:10:%02x:02", idx)
+	m := &meta{ID: id, Dir: dir, Tap: tap, HostIP: hostIP, GuestIP: guestIP, MAC: mac, PidFile: filepath.Join(dir, "firecracker.pid"), Socket: filepath.Join(dir, "firecracker.sock")}
+	ok := false
+	defer func() {
+		if !ok {
+			stop(m, cfg)
+		}
+	}()
+
+	if err := runPriv(ctx, "ip", "tuntap", "add", "dev", tap, "mode", "tap"); err != nil {
+		return nil, fmt.Errorf("firecracker: create tap %s: %w", tap, err)
+	}
+	if err := runPriv(ctx, "ip", "addr", "add", hostIP+"/30", "dev", tap); err != nil {
+		return nil, fmt.Errorf("firecracker: address tap %s: %w", tap, err)
+	}
+	if err := runPriv(ctx, "ip", "link", "set", "dev", tap, "up"); err != nil {
+		return nil, fmt.Errorf("firecracker: bring up tap %s: %w", tap, err)
+	}
+	rootfs := filepath.Join(dir, "rootfs.ext4")
+	if out, err := exec.CommandContext(ctx, "cp", "--reflink=auto", cfg.rootfs, rootfs).CombinedOutput(); err != nil {
+		if out2, err2 := exec.CommandContext(ctx, "cp", cfg.rootfs, rootfs).CombinedOutput(); err2 != nil {
+			return nil, fmt.Errorf("firecracker: copy rootfs: %v %s / %v %s", err, out, err2, out2)
+		}
+	}
+	cpus, mem := cfg.cpus, cfg.memMB
+	if spec.CPUs > 0 {
+		cpus = int(spec.CPUs + 0.5)
+	}
+	if spec.MemoryMB > 0 {
+		mem = spec.MemoryMB
+	}
+	if err := startFirecracker(cfg, m); err != nil {
+		return nil, err
+	}
+	if err := configureFirecracker(ctx, cfg, m, cpus, mem); err != nil {
+		return nil, err
+	}
+	if err := waitSSH(ctx, cfg, guestIP, cfg.sshTimeout); err != nil {
+		return nil, err
+	}
+	m.VCPUs, m.MemoryMB = cpus, mem
+	if err := writeMeta(m); err != nil {
+		return nil, err
+	}
+	box := wrapVM(cfg, m)
+	if spec.TTLSeconds > 0 {
+		time.AfterFunc(time.Duration(spec.TTLSeconds)*time.Second, func() {
+			box.Close(context.Background())
+		})
+	}
+	ok = true
+	p.Logf("created firecracker microVM %s at %s", id, guestIP)
+	return box, nil
+}
+
+type meta struct {
+	ID       string `json:"id"`
+	Dir      string `json:"dir"`
+	Tap      string `json:"tap"`
+	HostIP   string `json:"host_ip"`
+	GuestIP  string `json:"guest_ip"`
+	MAC      string `json:"mac"`
+	PidFile  string `json:"pid_file"`
+	Socket   string `json:"socket"`
+	VCPUs    int    `json:"vcpus"`
+	MemoryMB int    `json:"memory_mb"`
+}
+
+func writeMeta(m *meta) error {
+	b, err := json.Marshal(m)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(m.Dir, "meta.json"), b, 0o644)
+}
+
+func attachVM(ctx context.Context, p *sdk.Plugin, cfg fcConfig, id string) (*sdk.Sandbox, error) {
+	b, err := os.ReadFile(filepath.Join(cfg.workdir, id, "meta.json"))
+	if err != nil {
+		return nil, fmt.Errorf("firecracker: attach %s: %w", id, err)
+	}
+	var m meta
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil, err
+	}
+	if err := waitSSH(ctx, cfg, m.GuestIP, 10*time.Second); err != nil {
+		return nil, fmt.Errorf("firecracker: attach %s: %w", id, err)
+	}
+	p.Logf("attached firecracker microVM %s at %s", id, m.GuestIP)
+	return wrapVM(cfg, &m), nil
+}
+
+func startFirecracker(cfg fcConfig, m *meta) error {
+	logf, err := os.Create(filepath.Join(m.Dir, "firecracker.log"))
+	if err != nil {
+		return err
+	}
+	script := fmt.Sprintf("echo $$ > %s && exec %s --api-sock %s",
+		shellQuote(m.PidFile), shellQuote(cfg.bin), shellQuote(m.Socket))
+	args := append(priv(), "sh", "-c", script)
+	cmd := exec.Command(args[0], args[1:]...)
+	cmd.Dir = m.Dir
+	cmd.Stdout, cmd.Stderr = logf, logf
+	if err := cmd.Start(); err != nil {
+		logf.Close()
+		return fmt.Errorf("firecracker: start: %w", err)
+	}
+	_ = logf.Close()
+	go func() { _ = cmd.Wait() }()
+	// The socket is created by root; every API call and the SSH client run
+	// as the caller.
+	for i := 0; i < 100; i++ {
+		if _, err := os.Stat(m.Socket); err == nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if _, err := os.Stat(m.Socket); err != nil {
+		return fmt.Errorf("firecracker: API socket did not appear: %w", err)
+	}
+	_ = runPriv(context.Background(), "chmod", "666", m.Socket)
+	return nil
+}
+
+func configureFirecracker(ctx context.Context, cfg fcConfig, m *meta, cpus, mem int) error {
+	requests := []struct {
+		path string
+		body any
+	}{
+		{"/boot-source", map[string]any{"kernel_image_path": cfg.kernel, "boot_args": cfg.bootArgs}},
+		{"/drives/rootfs", map[string]any{"drive_id": "rootfs", "path_on_host": filepath.Join(m.Dir, "rootfs.ext4"), "is_root_device": true, "is_read_only": false}},
+		{"/machine-config", map[string]any{"vcpu_count": cpus, "mem_size_mib": mem}},
+		{"/network-interfaces/net1", map[string]any{"iface_id": "net1", "guest_mac": m.MAC, "host_dev_name": m.Tap}},
+		{"/actions", map[string]any{"action_type": "InstanceStart"}},
+	}
+	for _, r := range requests {
+		if err := fcAPI(ctx, m.Socket, r.path, r.body); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func fcAPI(ctx context.Context, sock, endpoint string, body any) error {
+	tr := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", sock)
+	}}
+	client := &http.Client{Transport: tr, Timeout: 10 * time.Second}
+	b, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, "http://localhost"+endpoint, bytes.NewReader(b))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("firecracker: PUT %s: %w", endpoint, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("firecracker: PUT %s: %s: %s", endpoint, resp.Status, strings.TrimSpace(string(msg)))
+	}
+	return nil
+}
+
+func waitSSH(ctx context.Context, cfg fcConfig, ip string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	var last error
+	for time.Now().Before(deadline) {
+		c, cancel := context.WithTimeout(ctx, 3*time.Second)
+		err := sshRun(c, cfg, ip, "true", nil).Run()
+		cancel()
+		if err == nil {
+			return nil
+		}
+		last = err
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(300 * time.Millisecond):
+		}
+	}
+	return fmt.Errorf("firecracker: guest SSH at %s not ready: %w", ip, last)
+}
+
+func stop(m *meta, cfg fcConfig) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if b, err := os.ReadFile(m.PidFile); err == nil {
+		pid := strings.TrimSpace(string(b))
+		if pid != "" {
+			_ = runPriv(ctx, "kill", "-TERM", pid)
+			time.Sleep(300 * time.Millisecond)
+			_ = runPriv(ctx, "kill", "-KILL", pid)
+		}
+	}
+	_ = runPriv(ctx, "pkill", "-f", m.Socket)
+	_ = runPriv(ctx, "ip", "link", "del", m.Tap)
+	if err := os.RemoveAll(m.Dir); err != nil {
+		_ = runPriv(ctx, "rm", "-rf", m.Dir)
+	}
+}
+
+func wrapVM(cfg fcConfig, m *meta) *sdk.Sandbox {
+	abs := func(p string) string {
+		if strings.HasPrefix(p, "/") {
+			return p
+		}
+		return path.Join("/root", p)
+	}
+	sh := func(c context.Context, line string, stdin []byte, timeout int) (string, string, int, error) {
+		if timeout > 0 {
+			var cancel context.CancelFunc
+			c, cancel = context.WithTimeout(c, time.Duration(timeout)*time.Second)
+			defer cancel()
+		}
+		cmd := sshRun(c, cfg, m.GuestIP, line, stdin)
+		var out, errb bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &out, &errb
+		err := cmd.Run()
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			return out.String(), errb.String(), ee.ExitCode(), nil
+		}
+		if err != nil && c.Err() != nil {
+			return out.String(), errb.String() + "\n(timed out)", 124, nil
+		}
+		return out.String(), errb.String(), 0, err
+	}
+	runExec := func(c context.Context, req sdk.ExecRequest) (*sdk.ExecResult, error) {
+		var line string
+		if req.Shell != "" {
+			line = req.Shell
+		} else {
+			line = shellLine(req.Cmd, req.Args)
+		}
+		if req.Dir != "" {
+			line = "cd -- " + shellQuote(abs(req.Dir)) + " && " + line
+		}
+		for k, v := range req.Env {
+			line = "export " + k + "=" + shellQuote(v) + "; " + line
+		}
+		t := time.Now()
+		out, errs, code, err := sh(c, line, req.Stdin, req.TimeoutSeconds)
+		if err != nil {
+			return nil, err
+		}
+		return &sdk.ExecResult{Stdout: out, Stderr: errs, ExitCode: code, DurationMS: time.Since(t).Milliseconds()}, nil
+	}
+	start := func(c context.Context, req sdk.ExecRequest) (*sdk.Process, error) {
+		line := req.Shell
+		if line == "" {
+			line = shellLine(abs(req.Cmd), req.Args)
+		}
+		if req.Dir != "" {
+			line = "cd -- " + shellQuote(abs(req.Dir)) + " && " + line
+		}
+		for k, v := range req.Env {
+			line = "export " + k + "=" + shellQuote(v) + "; " + line
+		}
+		if strings.HasPrefix(req.Cmd, "/") || strings.HasPrefix(req.Cmd, "./") {
+			_, _, _, _ = sh(c, "chmod +x -- "+shellQuote(abs(req.Cmd)), nil, 5)
+		}
+		cmd := sshRun(c, cfg, m.GuestIP, line, nil)
+		in, _ := cmd.StdinPipe()
+		out, _ := cmd.StdoutPipe()
+		errp, _ := cmd.StderrPipe()
+		if err := cmd.Start(); err != nil {
+			return nil, err
+		}
+		return &sdk.Process{Stdin: in, Stdout: out, Stderr: errp,
+			Wait: func() (int, error) {
+				err := cmd.Wait()
+				var ee *exec.ExitError
+				if errors.As(err, &ee) {
+					return ee.ExitCode(), nil
+				}
+				return 0, err
+			},
+			Kill: func() error { return cmd.Process.Kill() }}, nil
+	}
+	return &sdk.Sandbox{
+		ID: m.ID, Provider: "firecracker", Isolation: "microvm",
+		Exec: runExec, Start: start,
+		ReadFile: func(c context.Context, fpath string) ([]byte, error) {
+			out, errs, code, err := sh(c, "cat -- "+shellQuote(abs(fpath)), nil, 30)
+			if err != nil {
+				return nil, err
+			}
+			if code != 0 {
+				return nil, errors.New(strings.TrimSpace(errs))
+			}
+			return []byte(out), nil
+		},
+		WriteFile: func(c context.Context, fpath string, data []byte) error {
+			_, errs, code, err := sh(c, "mkdir -p -- $(dirname "+shellQuote(abs(fpath))+") && cat > "+shellQuote(abs(fpath)), data, 60)
+			if err != nil {
+				return err
+			}
+			if code != 0 {
+				return errors.New(strings.TrimSpace(errs))
+			}
+			return nil
+		},
+		ListDir: func(c context.Context, fpath string) ([]sdk.FileInfo, error) {
+			out, errs, code, err := sh(c, "ls -1Ap -- "+shellQuote(abs(fpath)), nil, 30)
+			if err != nil {
+				return nil, err
+			}
+			if code != 0 {
+				return nil, errors.New(strings.TrimSpace(errs))
+			}
+			var fis []sdk.FileInfo
+			for _, l := range strings.Split(strings.TrimSpace(out), "\n") {
+				if l == "" {
+					continue
+				}
+				fis = append(fis, sdk.FileInfo{Name: strings.TrimSuffix(l, "/"), IsDir: strings.HasSuffix(l, "/")})
+			}
+			return fis, nil
+		},
+		Remove: func(c context.Context, fpath string) error {
+			_, errs, code, err := sh(c, "rm -rf -- "+shellQuote(abs(fpath)), nil, 30)
+			if err != nil {
+				return err
+			}
+			if code != 0 {
+				return errors.New(strings.TrimSpace(errs))
+			}
+			return nil
+		},
+		Upload: func(c context.Context, hostPath, boxPath string) error {
+			f, err := os.Open(hostPath)
+			if err != nil {
+				return err
+			}
+			defer f.Close()
+			data, err := io.ReadAll(f)
+			if err != nil {
+				return err
+			}
+			return func() error {
+				_, errs, code, err := sh(c, "mkdir -p -- $(dirname "+shellQuote(abs(boxPath))+") && cat > "+shellQuote(abs(boxPath)), data, 300)
+				if err != nil {
+					return err
+				}
+				if code != 0 {
+					return errors.New(strings.TrimSpace(errs))
+				}
+				return nil
+			}()
+		},
+		Download: func(c context.Context, boxPath, hostPath string) error {
+			out, errs, code, err := sh(c, "cat -- "+shellQuote(abs(boxPath)), nil, 300)
+			if err != nil {
+				return err
+			}
+			if code != 0 {
+				return errors.New(strings.TrimSpace(errs))
+			}
+			return os.WriteFile(hostPath, []byte(out), 0o644)
+		},
+		Close: func(c context.Context) error {
+			stop(m, cfg)
+			return nil
+		},
+	}
+}
+
+func sshRun(ctx context.Context, cfg fcConfig, ip, line string, stdin []byte) *exec.Cmd {
+	args := []string{"-i", cfg.sshKey,
+		"-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
+		"-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "LogLevel=ERROR",
+		"-T", "root@" + ip, "--", "bash", "-c", shellQuote(line)}
+	cmd := exec.CommandContext(ctx, "ssh", args...)
+	if stdin != nil {
+		cmd.Stdin = bytes.NewReader(stdin)
+	}
+	return cmd
+}
+
+func priv() []string {
+	if os.Geteuid() == 0 {
+		return nil
+	}
+	return []string{"sudo", "-n"}
+}
+
+func runPriv(ctx context.Context, name string, args ...string) error {
+	all := append(priv(), name)
+	all = append(all, args...)
+	out, err := exec.CommandContext(ctx, all[0], all[1:]...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s: %w: %s", strings.Join(all, " "), err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
+func envInt(key string, def int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return def
+}
+
+func defaultBootArgs() string {
+	if runtime.GOARCH == "arm64" {
+		return "keep_bootcon console=ttyS0 reboot=k panic=1"
+	}
+	return "console=ttyS0 reboot=k panic=1"
+}
+
+func randomHex(n int) string {
+	b := make([]byte, n)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+func randomIndex() int {
+	b := make([]byte, 1)
+	rand.Read(b)
+	return int(b[0]%200) + 1 // 172.16.1.0/30 ... 172.16.200.0/30
+}
+
+func shellLine(cmd string, args []string) string {
+	parts := []string{shellQuote(cmd)}
+	for _, a := range args {
+		parts = append(parts, shellQuote(a))
+	}
+	return strings.Join(parts, " ")
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
+}
