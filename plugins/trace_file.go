@@ -19,6 +19,11 @@ import (
 //
 // Config: path (".eipagent/trace.jsonl"), content (include prompts and
 // results, default false). Secret values are redacted.
+//
+// Example:
+//
+//	eipagent.WithPlugin("trace_file", map[string]any{"path": ".eipagent/trace.jsonl", "content": true})
+//	// then: eip trace view .eipagent/trace.jsonl > trace.html
 var Permissions = []string{"fs:read", "fs:write"}
 
 func Apply(p *sdk.Plugin) error {

@@ -5,6 +5,10 @@ package plugin
 import "eipagent/sdk"
 
 // Counts tool calls; prints a summary when unloaded (Effect cleanup).
+//
+// Example:
+//
+//	eipagent.WithPlugins("hook_stats") // prints tool-call counts when the agent closes
 func Apply(p *sdk.Plugin) error {
 	calls := 0
 	p.OnEvent(func(e sdk.Event) {

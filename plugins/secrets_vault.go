@@ -39,6 +39,16 @@ import (
 //	             (grants or allow is required; there is no read-all default)
 //	grants:      {plugin instance: [names]}: when set, a plugin may read only
 //	             the names granted to it (the caller is set by the core)
+//
+// Example:
+//
+//	eipagent.WithPlugin("secrets_vault", map[string]any{
+//		"address":     "https://vault.internal:8200",
+//		"mount":       "secret",
+//		"prefix":      "eipagent",
+//		"allow":       []any{"*_API_KEY"},
+//		"ttl_seconds": 300,
+//	})
 var Permissions = []string{"net", "env", "env:secrets", "fs:read"}
 
 // validName keeps secret names to one path segment of safe characters,

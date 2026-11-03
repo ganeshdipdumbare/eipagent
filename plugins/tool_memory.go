@@ -13,6 +13,11 @@ import (
 
 // Long-term memory tools over the "memory" service. Notes are kept per
 // user (namespace ["memories", user]). Config: namespace.
+//
+// Example:
+//
+//	eipagent.WithPlugins("memory_file", "tool_memory")
+//	// "Remember that I prefer window seats" -> remember; later "Book my usual seat" -> recall
 var Requires = []string{"memory"}
 
 func Apply(p *sdk.Plugin) error {
@@ -54,7 +59,10 @@ func Apply(p *sdk.Plugin) error {
 			}
 			var notes []string
 			for _, it := range items {
-				t, _ := it.Value["text"].(string)
+				t := ""
+				if x, ok := it.Value["text"].(string); ok {
+					t = x
+				}
 				notes = append(notes, t)
 			}
 			return strings.Join(notes, "; "), nil

@@ -29,6 +29,12 @@ import (
 //	base_url:        override the backend URL (required for searxng)
 //	max_results:     default 5 (the model may ask for up to 20)
 //	timeout_seconds: default 20
+//
+// Example:
+//
+//	eipagent.WithPlugin("tool_websearch", map[string]any{"backend": "tavily", "max_results": 8})
+//	eipagent.WithPlugin("tool_fetch", map[string]any{"allow_hosts": []any{"*"}}) // to read the results
+//	// Shortcut: eipagent.WithWebSearch("duckduckgo")
 var Permissions = []string{"net"}
 
 type hit struct{ Title, URL, Snippet string }

@@ -31,6 +31,15 @@ import (
 // headers ({name: value or secret://NAME}), service_name ("eipagent"),
 // content (include prompts / results, false), flush_seconds (2),
 // max_queue (5000).
+//
+// Example:
+//
+//	eipagent.WithPlugin("trace_otlp", map[string]any{
+//		"endpoint":     "https://otlp.example.com",
+//		"headers":      map[string]any{"x-api-key": "secret://OTLP_KEY"},
+//		"service_name": "support-agent",
+//	})
+//	// Shortcut: eipagent.WithTracing("http://localhost:4318")
 var Permissions = []string{"net"}
 
 var Requires = []string{"?secrets"}
@@ -144,7 +153,10 @@ func Apply(p *sdk.Plugin) error {
 		}
 		req.Header.Set("Content-Type", "application/json")
 		for k, v := range headers {
-			s, _ := v.(string)
+			s := ""
+			if x, ok := v.(string); ok {
+				s = x
+			}
 			val, err := p.Secret(s)
 			if err != nil {
 				requeue(batch, fmt.Errorf("header %s: %v", k, err))

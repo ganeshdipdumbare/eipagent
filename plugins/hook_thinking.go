@@ -26,6 +26,11 @@ import (
 //	models:        only for these models, globs like "anthropic:*" (default all)
 //
 // A run can override the effort with RunState.Values["thinking_effort"].
+//
+// Example:
+//
+//	eipagent.WithPlugin("hook_thinking", map[string]any{"effort": "high", "models": []any{"anthropic:*", "openai:*"}})
+//	// Shortcut: eipagent.WithThinking("high")
 func Apply(p *sdk.Plugin) error {
 	effort := p.ConfigString("effort", "")
 	budget := p.ConfigInt("budget_tokens", 0)

@@ -24,6 +24,11 @@ import (
 //	name:     default "gemini"
 //	base_url: default https://generativelanguage.googleapis.com/v1beta
 //	api_key:  literal or secret://NAME (default secret://GEMINI_API_KEY)
+//
+// Example:
+//
+//	eipagent.WithModel("gemini:gemini-2.5-pro") // loads model_gemini by itself
+//	eipagent.WithPlugin("model_gemini", map[string]any{"api_key": "secret://GEMINI_KEY_TEAM_A"})
 var Permissions = []string{"net"}
 
 func Apply(p *sdk.Plugin) error {
@@ -216,9 +221,10 @@ type gResp struct {
 		FinishReason string `json:"finishReason"`
 	} `json:"candidates"`
 	UsageMetadata *struct {
-		PromptTokenCount     int `json:"promptTokenCount"`
-		CandidatesTokenCount int `json:"candidatesTokenCount"`
-		TotalTokenCount      int `json:"totalTokenCount"`
+		PromptTokenCount        int `json:"promptTokenCount"`
+		CandidatesTokenCount    int `json:"candidatesTokenCount"`
+		TotalTokenCount         int `json:"totalTokenCount"`
+		CachedContentTokenCount int `json:"cachedContentTokenCount"`
 	} `json:"usageMetadata"`
 }
 
@@ -231,7 +237,8 @@ type accum struct {
 
 func (a *accum) add(r gResp, emit func(sdk.Chunk)) {
 	if r.UsageMetadata != nil {
-		a.usage = sdk.Usage{InputTokens: r.UsageMetadata.PromptTokenCount, OutputTokens: r.UsageMetadata.CandidatesTokenCount, TotalTokens: r.UsageMetadata.TotalTokenCount}
+		a.usage = sdk.Usage{InputTokens: r.UsageMetadata.PromptTokenCount, OutputTokens: r.UsageMetadata.CandidatesTokenCount, TotalTokens: r.UsageMetadata.TotalTokenCount,
+			CacheReadTokens: r.UsageMetadata.CachedContentTokenCount}
 	}
 	if len(r.Candidates) == 0 {
 		return
@@ -273,6 +280,8 @@ func (a *accum) response() *sdk.ModelResponse {
 		finish = "tool_calls"
 	case a.finish == "MAX_TOKENS":
 		finish = "length"
+	case a.finish == "SAFETY" || a.finish == "PROHIBITED_CONTENT" || a.finish == "BLOCKLIST" || a.finish == "SPII":
+		finish = "refusal"
 	}
 	msg := sdk.Message{Role: sdk.RoleAssistant, Content: a.text.String(), Reasoning: a.reasoning.String(), ToolCalls: a.calls}
 	return &sdk.ModelResponse{Message: msg, Usage: a.usage, FinishReason: finish}

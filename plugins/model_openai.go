@@ -28,6 +28,12 @@ import (
 //	structured:  json_schema | json_object (how ResponseSchema is sent)
 //	headers:     extra HTTP headers
 //	timeout_seconds: default 120
+//
+// Example:
+//
+//	eipagent.WithModel("openai:gpt-4.1") // also deepseek:, ollama:, openrouter:, groq:
+//	// Any other OpenAI-compatible server, e.g. vLLM, then WithModel("vllm:qwen3-32b"):
+//	eipagent.WithPlugin("model_openai", map[string]any{"name": "vllm", "base_url": "http://gpu-box:8000/v1", "api_key": ""})
 var Permissions = []string{"net"}
 
 func Apply(p *sdk.Plugin) error {
@@ -213,9 +219,12 @@ type wireMsg struct {
 }
 
 type wireUsage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	PromptTokens        int `json:"prompt_tokens"`
+	CompletionTokens    int `json:"completion_tokens"`
+	TotalTokens         int `json:"total_tokens"`
+	PromptTokensDetails *struct {
+		CachedTokens int `json:"cached_tokens"`
+	} `json:"prompt_tokens_details"`
 }
 
 type wireResp struct {
@@ -245,6 +254,8 @@ func finishOf(r string) string {
 		return "tool_calls"
 	case "length":
 		return "length"
+	case "content_filter":
+		return "refusal"
 	}
 	return "stop"
 }
@@ -253,7 +264,11 @@ func usageOf(u *wireUsage) sdk.Usage {
 	if u == nil {
 		return sdk.Usage{}
 	}
-	return sdk.Usage{InputTokens: u.PromptTokens, OutputTokens: u.CompletionTokens, TotalTokens: u.TotalTokens}
+	out := sdk.Usage{InputTokens: u.PromptTokens, OutputTokens: u.CompletionTokens, TotalTokens: u.TotalTokens}
+	if u.PromptTokensDetails != nil {
+		out.CacheReadTokens = u.PromptTokensDetails.CachedTokens
+	}
+	return out
 }
 
 func parseResponse(raw []byte) (*sdk.ModelResponse, error) {

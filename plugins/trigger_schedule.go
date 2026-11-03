@@ -22,6 +22,14 @@ import (
 //
 // Config: timezone ("UTC"), max_jobs (20 per user), jobs (predefined:
 // [{name, schedule, prompt, user}]), tick_seconds (15).
+//
+// Example:
+//
+//	eipagent.WithPlugin("trigger_schedule", map[string]any{
+//		"timezone": "Europe/Berlin",
+//		"jobs": []any{map[string]any{"name": "daily-digest", "schedule": "daily 09:00",
+//			"prompt": "Summarize yesterday's tickets", "user": "ops"}},
+//	})
 var Requires = []string{"agent", "?memory"}
 
 type job struct {

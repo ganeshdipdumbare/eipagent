@@ -13,6 +13,10 @@ import (
 )
 
 // In-memory long-term memory, provided as "memory".
+//
+// Example:
+//
+//	eipagent.WithPlugins("memory_inmem", "tool_memory") // lost on exit
 func Apply(p *sdk.Plugin) error {
 	var mu sync.Mutex
 	items := map[string]sdk.StoreItem{}

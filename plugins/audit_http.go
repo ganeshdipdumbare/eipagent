@@ -28,6 +28,15 @@ import (
 // Config: url (required), headers ({name: value or secret://NAME}),
 // hmac_key (secret://NAME), batch_size (100), flush_seconds (2),
 // max_queue (10000), retries (3), timeout_seconds (10).
+//
+// Example:
+//
+//	eipagent.WithPlugin("audit_file", map[string]any{"path": "-"}) // no local file
+//	eipagent.WithPlugin("audit_http", map[string]any{
+//		"url":      "https://siem.example.com/ingest",
+//		"hmac_key": "secret://SIEM_HMAC_KEY",
+//		"headers":  map[string]any{"Authorization": "secret://SIEM_TOKEN"},
+//	})
 var Permissions = []string{"net"}
 
 var Requires = []string{"audit", "?secrets"}
@@ -61,7 +70,10 @@ func Apply(p *sdk.Plugin) error {
 		}
 		req.Header.Set("Content-Type", "application/x-ndjson")
 		for k, v := range headers {
-			s, _ := v.(string)
+			s := ""
+			if x, ok := v.(string); ok {
+				s = x
+			}
 			val, err := p.Secret(s)
 			if err != nil {
 				return err

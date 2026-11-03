@@ -325,6 +325,20 @@ eipagent.WithPlugin("hook_cache", map[string]any{"ttl": "1h"})      // prompt ca
 eipagent.WithPlugin("hook_output_validate", map[string]any{"max_retries": 2}) // re-ask when GenerateObject output doesn't match the schema
 ```
 
+### Long runs, guardrails and evals
+
+```go
+eipagent.WithPlugin("hook_compact", map[string]any{"max_fraction": 0.8}) // stay inside the context window, cheapest first
+eipagent.WithPlugin("tool_search", map[string]any{"threshold": 15})      // reveal tools on demand (big MCP servers)
+eipagent.WithPlugins("tool_plan", "hook_loop_detect", "hook_tool_output_limit")
+eipagent.WithPlugin("hook_guardrails", map[string]any{"rules": []any{
+	map[string]any{"on": "output", "detect": "secrets", "action": "redact"},
+}})
+eipagent.WithSaveEachStep() // a crash keeps the run's progress; Thread.Continue resumes it
+```
+
+`agent.Thread(id).Fork(ctx, newID)` copies a conversation to try another direction. `eip eval cases.json` (or package [`evals`](evals/evals.go)) grades the agent on a dataset of prompts.
+
 ### Scheduled jobs and webhooks
 
 ```go
@@ -600,8 +614,8 @@ Named by what they do. The prefix is a convention for the plugins we ship, not a
 
 | Kind | Plugins |
 |---|---|
-| [Tools](https://eipagent-docs.vercel.app/#kind-tools): the model can call them | `tool_shell`, `tool_fs`, `tool_fetch`, `tool_websearch`, `tool_time`, `tool_memory`, `tool_mcp`, `tool_subagents`, `tool_skills`, `tool_sandbox` |
-| [Hooks](https://eipagent-docs.vercel.app/#kind-hooks): run around calls | `hook_retry`, `hook_fallback`, `hook_limits`, `hook_summarize`, `hook_thinking`, `hook_cache`, `hook_output_validate`, `hook_approval`, `hook_review`, `hook_pii`, `hook_tool_errors`, `hook_log`, `hook_guard`, `hook_stats` |
+| [Tools](https://eipagent-docs.vercel.app/#kind-tools): the model can call them | `tool_shell`, `tool_fs`, `tool_fetch`, `tool_websearch`, `tool_search`, `tool_plan`, `tool_time`, `tool_memory`, `tool_mcp`, `tool_subagents`, `tool_skills`, `tool_sandbox` |
+| [Hooks](https://eipagent-docs.vercel.app/#kind-hooks): run around calls | `hook_retry`, `hook_fallback`, `hook_limits`, `hook_summarize`, `hook_thinking`, `hook_cache`, `hook_output_validate`, `hook_compact`, `hook_guardrails`, `hook_loop_detect`, `hook_tool_output_limit`, `hook_approval`, `hook_review`, `hook_pii`, `hook_tool_errors`, `hook_log`, `hook_guard`, `hook_stats` |
 | [Model providers](https://eipagent-docs.vercel.app/#kind-models) | `model_openai` (OpenAI, DeepSeek, Ollama, vLLM, OpenRouter, Groq), `model_anthropic`, `model_gemini`, `model_mock` |
 | [Threads and memory](https://eipagent-docs.vercel.app/#kind-threads-memory) | `threads_inmem` / `_file` / `_sql`, `memory_inmem` / `_file` / `_sql`, `db_sql` |
 | [Sandboxes and workspaces](https://eipagent-docs.vercel.app/#kind-sandboxes) | `sandbox_local`, `sandbox_docker`, `sandbox_microsandbox`, `workspace_local`, `workspace_sandbox` |

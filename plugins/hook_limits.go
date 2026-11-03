@@ -18,6 +18,14 @@ import (
 //	tokens_run, tokens_thread: 0 = unlimited
 //	tools:          {tool name: max calls per run}
 //	exit_behavior:  "end" (default: finish politely) | "error" (fail the run)
+//
+// Example:
+//
+//	eipagent.WithPlugin("hook_limits", map[string]any{
+//		"model_calls_run": 20,
+//		"tokens_thread":   500000,
+//		"tools":           map[string]any{"web_search": 5},
+//	})
 func Apply(p *sdk.Plugin) error {
 	lim := map[string]int{}
 	for _, k := range []string{"model_calls_run", "model_calls_thread", "tool_calls_run", "tool_calls_thread", "tokens_run", "tokens_thread"} {

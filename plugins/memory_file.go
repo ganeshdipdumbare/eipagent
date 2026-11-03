@@ -20,6 +20,11 @@ import (
 // single-node and development use; use memory_sql for shared storage.
 //
 // Config: path (default ".eipagent/store.json").
+//
+// Example:
+//
+//	eipagent.WithPlugin("memory_file", map[string]any{"path": ".eipagent/memory.json"})
+//	eipagent.WithPlugins("tool_memory") // lets the model remember and recall
 var Permissions = []string{"fs:read", "fs:write"}
 
 func Apply(p *sdk.Plugin) error {

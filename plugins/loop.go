@@ -16,6 +16,10 @@ import (
 // loading another plugin that provides "loop".
 //
 // Config: max_steps (default 20), parallel_tools (default false).
+//
+// Example:
+//
+//	eipagent.WithPlugin("loop", map[string]any{"max_steps": 30, "parallel_tools": true})
 func Apply(p *sdk.Plugin) error {
 	defMax := p.ConfigInt("max_steps", 20)
 	parallel := p.ConfigBool("parallel_tools", false)

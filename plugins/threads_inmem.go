@@ -14,6 +14,10 @@ import (
 
 // In-memory thread storage, provided as "threads". State is
 // deep-copied (via JSON) so callers can't mutate stored history.
+//
+// Example:
+//
+//	eipagent.WithPlugins("threads_inmem") // the default; lost on exit
 func Apply(p *sdk.Plugin) error {
 	var mu sync.Mutex
 	data := map[string][]byte{}

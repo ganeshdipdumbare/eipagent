@@ -18,6 +18,11 @@ import (
 //
 // Config: driver (default "pgx"), dsn (literal or secret://NAME),
 // name (service suffix), max_open (10), max_idle (5).
+//
+// Example:
+//
+//	// import _ "github.com/ganeshdipdumbare/eipagent/drivers/postgres"
+//	eipagent.WithPlugin("db_sql", map[string]any{"dsn": "secret://DATABASE_URL", "max_open": 20})
 var Permissions = []string{"db"}
 
 func Apply(p *sdk.Plugin) error {

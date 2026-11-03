@@ -20,6 +20,14 @@ import (
 //	               "*" matches every tool
 //	non_readonly:  true = also every tool not marked Meta.readonly
 //	risk:          ["high"] = also tools whose Meta.risk is listed
+//
+// Example:
+//
+//	eipagent.WithPlugin("hook_approval", map[string]any{"interrupt_on": map[string]any{
+//		"delete_file": true,
+//		"send_email":  map[string]any{"allowed": []any{"approve", "edit", "reject"}, "description": "Send this email?"},
+//	}})
+//	// Shortcut: eipagent.WithApprovals("delete_file", "send_email")
 func Apply(p *sdk.Plugin) error {
 	if p.Priority() == 0 {
 		p.SetPriority(-10) // inner: runs after policy, limits, reviewers

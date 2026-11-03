@@ -76,6 +76,7 @@ type Agent struct {
 	stop         chan struct{}
 	closeOnce    sync.Once
 	remote       *remote // set when the agent runs inside a sandbox (WithRunIn)
+	saveEachStep bool
 }
 
 // New starts an agent. With no options it uses the secure preset, the
@@ -117,7 +118,7 @@ func newLocal(cfg *config) (*Agent, error) {
 	// The Agent is complete before any plugin runs: plugins (jobs,
 	// webhooks) may start runs through the "agent" service right away.
 	a := &Agent{eng: eng, model: prof.Model, instructions: prof.Instructions, maxSteps: prof.MaxSteps,
-		user: cfg.user, roles: cfg.roles, stop: make(chan struct{})}
+		user: cfg.user, roles: cfg.roles, stop: make(chan struct{}), saveEachStep: cfg.saveEachStep}
 	if a.instructions == "" {
 		a.instructions = "You are a helpful assistant."
 	}
@@ -267,6 +268,9 @@ func (a *Agent) run(ctx context.Context, st *sdk.RunState, ro *runOptions) (*Res
 	st.Emit = func(e sdk.Event) {
 		if ro.onEvent != nil {
 			ro.onEvent(e)
+		}
+		if ro.onStep != nil && e.Type == "step_start" {
+			ro.onStep(st)
 		}
 	}
 	res, err := loop.Run(ctx, snap, st)

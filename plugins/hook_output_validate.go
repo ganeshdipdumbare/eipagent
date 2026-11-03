@@ -21,6 +21,11 @@ import (
 // items, enum, minItems/maxItems and minLength/maxLength.
 //
 // Config: max_retries (2), on_fail (error | accept, default error).
+//
+// Example:
+//
+//	eipagent.WithPlugin("hook_output_validate", map[string]any{"max_retries": 2})
+//	// then: invoice, err := eipagent.GenerateObject[Invoice](ctx, agent, "Extract the invoice")
 func Apply(p *sdk.Plugin) error {
 	maxRetries := p.ConfigInt("max_retries", 2)
 	onFail := p.ConfigString("on_fail", "error")

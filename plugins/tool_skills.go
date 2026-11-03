@@ -19,6 +19,10 @@ import (
 // next to it) on demand, which keeps prompts small.
 //
 // Config: dirs (default ["skills"]).
+//
+// Example:
+//
+//	eipagent.WithPlugin("tool_skills", map[string]any{"dirs": []any{"./skills"}}) // skills/<name>/SKILL.md
 var Permissions = []string{"fs:read"}
 
 type skill struct {

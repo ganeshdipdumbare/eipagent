@@ -31,6 +31,14 @@ import (
 //	(input covers user, assistant and tool messages in the history,
 //	including the string arguments of earlier tool calls)
 //	patterns:   {name: regex} extra detectors
+//
+// Example:
+//
+//	eipagent.WithPlugin("hook_pii", map[string]any{
+//		"types":    []any{"email", "credit_card", "phone"},
+//		"strategy": "mask",
+//		"patterns": map[string]any{"order_id": `ORD-\d{6}`},
+//	})
 var Requires = []string{"?secrets"} // only for hash_key
 
 func Apply(p *sdk.Plugin) error {
@@ -83,7 +91,10 @@ func Apply(p *sdk.Plugin) error {
 		}
 	}
 	for name, pat := range p.ConfigMap("patterns") {
-		s, _ := pat.(string)
+		s := ""
+		if x, ok := pat.(string); ok {
+			s = x
+		}
 		re, err := regexp.Compile(s)
 		if err != nil {
 			return fmt.Errorf("hook_pii pattern %s: %w", name, err)

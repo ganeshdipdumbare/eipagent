@@ -17,6 +17,15 @@ import (
 //
 // Config: provider ("docker"), image, memory_mb, cpus, network ("none"),
 // idle_ttl_seconds (1800).
+//
+// Example:
+//
+//	eipagent.WithPlugin("workspace_sandbox", map[string]any{
+//		"provider":         "docker",
+//		"image":            "python:3.12-slim",
+//		"idle_ttl_seconds": 900,
+//	})
+//	eipagent.WithPlugins("sandbox_docker", "tool_shell", "tool_fs")
 var Requires = []string{"sandbox/*"}
 
 type entry struct {

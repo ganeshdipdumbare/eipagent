@@ -100,7 +100,21 @@ func Generate(site []byte, plugins fs.FS) ([]byte, error) {
 }
 
 type pluginDoc struct {
-	name, summary, lead, doc string
+	name, summary, lead, doc, example string
+}
+
+// SplitExample separates a plugin doc comment's "Example:" section (the
+// code shown on the site) from the rest of it.
+func SplitExample(doc string) (rest, example string) {
+	i := strings.Index(doc, "\nExample:\n")
+	if i < 0 {
+		return doc, ""
+	}
+	var lines []string
+	for _, l := range strings.Split(doc[i+len("\nExample:\n"):], "\n") {
+		lines = append(lines, strings.TrimPrefix(l, "\t"))
+	}
+	return strings.TrimSpace(doc[:i]), strings.TrimSpace(strings.Join(lines, "\n"))
 }
 
 func readPlugins(plugins fs.FS) (map[string]pluginDoc, error) {
@@ -125,13 +139,13 @@ func readPlugins(plugins fs.FS) (map[string]pluginDoc, error) {
 		if err != nil {
 			return nil, err
 		}
-		doc := leadingDoc(src)
+		doc, example := SplitExample(leadingDoc(src))
 		lead := doc
 		if i := strings.Index(lead, "\n\n"); i >= 0 {
 			lead = lead[:i]
 		}
 		summary := strings.TrimPrefix(pluginpkg.Summary(name, fa), name+": ")
-		out[name] = pluginDoc{name: name, summary: summary, lead: strings.Join(strings.Fields(lead), " "), doc: strings.TrimSpace(doc)}
+		out[name] = pluginDoc{name: name, summary: summary, lead: strings.Join(strings.Fields(lead), " "), doc: strings.TrimSpace(doc), example: example}
 	}
 	return out, nil
 }
@@ -185,6 +199,9 @@ func renderBuiltins(kindID string, docs map[string]pluginDoc) (string, error) {
 		fmt.Fprintf(&b, `<div class="builtin" id="plugin-%s"><div class="bhead"><code>%s</code><span class="bsum">%s</span></div>`,
 			n, n, html.EscapeString(d.summary))
 		fmt.Fprintf(&b, "<p>%s</p>", html.EscapeString(d.lead))
+		if d.example != "" {
+			fmt.Fprintf(&b, `<div class="code" data-title="example"><pre><code class="language-go">%s</code></pre></div>`, html.EscapeString(d.example))
+		}
 		if d.doc != "" && d.doc != d.lead {
 			fmt.Fprintf(&b, `<details><summary>Config and details</summary><pre>%s</pre></details>`, html.EscapeString(d.doc))
 		}

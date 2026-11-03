@@ -32,6 +32,15 @@ import (
 //	  trust_annotations: false,  // true: treat the server's readOnlyHint as read-only for policy
 //	  timeout_seconds: 60
 //	}]
+//
+// Example:
+//
+//	eipagent.WithPlugin("tool_mcp", map[string]any{"servers": []any{
+//		map[string]any{"name": "github", "command": "npx", "args": []any{"-y", "@modelcontextprotocol/server-github"},
+//			"env": map[string]any{"GITHUB_PERSONAL_ACCESS_TOKEN": "secret://GITHUB_TOKEN"}},
+//		map[string]any{"name": "docs", "url": "https://mcp.example.com/mcp"},
+//	}})
+//	// Shortcut: eipagent.WithMCP("github", "npx", "-y", "@modelcontextprotocol/server-github")
 var Permissions = []string{"net", "exec"}
 
 // rpcMsg is only decoded into. Outgoing messages are built as maps:
@@ -91,7 +100,10 @@ func resolveMap(p *sdk.Plugin, raw any) (map[string]string, error) {
 	out := map[string]string{}
 	m, _ := raw.(map[string]any)
 	for k, v := range m {
-		s, _ := v.(string)
+		s := ""
+		if x, ok := v.(string); ok {
+			s = x
+		}
 		r, err := p.Secret(s)
 		if err != nil {
 			return nil, err

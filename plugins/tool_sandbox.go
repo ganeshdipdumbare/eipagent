@@ -19,6 +19,15 @@ import (
 //
 // Config: provider ("docker"), image, network ("none"), memory_mb, cpus,
 // max_boxes (3 per thread), images (allowed images; [] = any).
+//
+// Example:
+//
+//	eipagent.WithPlugins("sandbox_docker")
+//	eipagent.WithPlugin("tool_sandbox", map[string]any{
+//		"provider":  "docker",
+//		"images":    []any{"python:3.12-slim", "node:22-slim"},
+//		"max_boxes": 2,
+//	})
 var Requires = []string{"sandbox/*"}
 
 func Apply(p *sdk.Plugin) error {

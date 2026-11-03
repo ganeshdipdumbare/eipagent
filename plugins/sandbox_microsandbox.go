@@ -24,6 +24,12 @@ import (
 //
 // Config: binary ("msb"), image ("alpine"), name ("microsandbox"),
 // extra_args ([]).
+//
+// Example:
+//
+//	eipagent.WithPlugin("sandbox_microsandbox", map[string]any{"image": "python"})
+//	eipagent.WithPlugin("workspace_sandbox", map[string]any{"provider": "microsandbox"})
+//	eipagent.WithPlugins("tool_shell", "tool_fs")
 var Permissions = []string{"exec"}
 
 func Apply(p *sdk.Plugin) error {

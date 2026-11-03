@@ -10,6 +10,10 @@ import (
 
 // Vetoes tool calls whose arguments contain a blocked word.
 // Config: words (default ["password"]).
+//
+// Example:
+//
+//	eipagent.WithPlugin("hook_guard", map[string]any{"words": []any{"password", "api_key"}})
 func Apply(p *sdk.Plugin) error {
 	words := p.ConfigStrings("words")
 	if len(words) == 0 {

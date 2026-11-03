@@ -1021,7 +1021,7 @@ unsigned package: hello_tool: package is not signed (signatures are required)</c
 res.Text          // the final answer
 res.Steps         // each model call, with its tool results
 res.ToolCalls()   // every tool call in the run
-res.Usage         // input, output and total tokens
+res.Usage         // input, output and total tokens, and cache reads/writes
 res.FinishReason  // stop | max_steps | interrupted | tool:&lt;name&gt;</code></pre></div>
   <p>For a one-off call without keeping an agent around, use <code>eipagent.GenerateText(ctx, "openai:gpt-4.1", "Hello")</code>.</p>
 </section>
@@ -1109,7 +1109,23 @@ msgs, _ := th.Messages(ctx)</code></pre></div>
 	eipagent.WithPlugins("memory_file", "tool_memory"),
 	eipagent.WithUser("ada"),
 )</code></pre></div>
-  <p>Long conversations stay inside the context window with <code>hook_summarize</code>. It summarizes older messages and keeps the most recent ones word for word.</p>
+  <p>Long conversations stay inside the context window with <code>hook_compact</code> (or the simpler <code>hook_summarize</code>); see <a href="#agent-loop">Long runs</a>.</p>
+  <h2>Save every step, continue, fork</h2>
+  <p>A thread is saved when a run ends or pauses. With <code>WithSaveEachStep</code> it is also saved before every model call, so if the process dies mid-run the work so far is kept, and <code>Continue</code> picks it up without a new message. <code>Fork</code> copies a thread to try another direction without touching the original.</p>
+  <div class="code" data-title="go"><pre><code class="language-go">agent, _ := eipagent.New(
+	eipagent.WithModel("openai:gpt-4.1"),
+	eipagent.WithPersistence("postgres", "secret://DATABASE_URL"),
+	eipagent.WithSaveEachStep(),
+)
+
+th := agent.Thread("report-7")
+if _, err := th.Generate(ctx, "Research X and write a report"); err != nil {
+	// later, in this process or another one after a restart:
+	res, err := th.Continue(ctx) // carries on from the last saved step
+}
+
+alt, _ := th.Fork(ctx, "report-7-shorter")
+alt.Generate(ctx, "Now make it half as long") // report-7 is unchanged</code></pre></div>
 </section>
 
 <section id="human-in-the-loop" class="page">
@@ -1152,6 +1168,63 @@ for res.Interrupted() {
     <li><code>AfterModel</code> can end the run with <code>sc.Jump = "end"</code>.</li>
   </ul>
   <p>See <a href="#lifecycles">Lifecycles</a> for the exact order.</p>
+  <h2>Long runs</h2>
+  <p>A run that reads many files or calls many tools grows past what a model can hold, or gets stuck. These plugins keep it on track; each is opt-in.</p>
+  <div class="table"><table>
+    <thead><tr><th>Problem</th><th>Plugin</th><th>What it does</th></tr></thead>
+    <tbody>
+      <tr><td>context fills up</td><td><a href="#plugin-hook_compact"><code>hook_compact</code></a></td><td>Measures the request against the model's window (from the tokens the provider reported) and, past <code>max_fraction</code>, compacts cheapest first: cut huge messages, blank old tool results, drop old turns, summarize. Optional <code>compact_context</code> tool for the model.</td></tr>
+      <tr><td>one tool result is huge</td><td><a href="#plugin-hook_tool_output_limit"><code>hook_tool_output_limit</code></a></td><td>Keeps the start and end of results over <code>max_chars</code>.</td></tr>
+      <tr><td>too many tools (big MCP servers)</td><td><a href="#plugin-tool_search"><code>tool_search</code></a></td><td>Shows only a <code>search_tools</code> tool past <code>threshold</code>; each search reveals the matching tools.</td></tr>
+      <tr><td>the model loses track of a multi-step task</td><td><a href="#plugin-tool_plan"><code>tool_plan</code></a></td><td>A task list the model keeps, shown back to it each step.</td></tr>
+      <tr><td>the model repeats the same call</td><td><a href="#plugin-hook_loop_detect"><code>hook_loop_detect</code></a></td><td>Refuses a call repeated more than <code>max_repeats</code> times; stops the run after <code>stop_after</code>.</td></tr>
+      <tr><td>a crash loses the run</td><td><code>WithSaveEachStep</code></td><td>Saves the thread before each model call; <code>Thread.Continue</code> resumes (<a href="#threads">Threads</a>).</td></tr>
+    </tbody>
+  </table></div>
+  <div class="code" data-title="go"><pre><code class="language-go">agent, _ := eipagent.New(
+	eipagent.WithModel("anthropic:claude-sonnet-5-5"),
+	eipagent.WithMCP("github", "npx", "-y", "@modelcontextprotocol/server-github"),
+	eipagent.WithPlugin("hook_compact", map[string]any{"max_fraction": 0.8, "tool": true}),
+	eipagent.WithPlugin("tool_search", map[string]any{"threshold": 15}),
+	eipagent.WithPlugins("tool_plan", "hook_loop_detect", "hook_tool_output_limit"),
+	eipagent.WithPlugin("hook_cache", nil), // long runs resend the same prefix: cache it
+)</code></pre></div>
+  <p>Each step emits a <code>context_usage</code> event (<code>tokens</code>, <code>window</code>, <code>fraction</code>, <code>compacted</code>) when <code>hook_compact</code> is loaded, and <code>res.Usage.CacheReadTokens</code> shows what caching saved.</p>
+</section>
+
+<section id="evals" class="page">
+  <h1>Evals</h1>
+  <p class="lede">Check an agent against a set of cases before you ship a prompt, model or plugin change. Each case is a prompt and what must hold: words in the answer, tools called or not, a step budget, or a rubric a judge model grades.</p>
+  <div class="code" data-title="cases.json"><pre><code class="language-json">{
+  "name": "support desk",
+  "judge_model": "anthropic:claude-haiku-5-5",
+  "cases": [
+    {"name": "tracking", "prompt": "Where is order #1077?",
+     "expect": {"contains": ["shipped"], "tools": ["lookup_order"], "max_steps": 3}},
+    {"name": "refund tone", "prompt": "My mug arrived broken.",
+     "expect": {"judge": "Apologises and offers a refund or replacement.", "no_tools": ["issue_refund"]}}
+  ]
+}</code></pre></div>
+  <div class="code" data-title="terminal"><pre><code class="language-bash">eip eval -profile eip.json cases.json     # exits 1 if any case fails; -json for the full report</code></pre></div>
+  <p>Or from Go, for example in a test:</p>
+  <div class="code" data-title="go"><pre><code class="language-go">ds, _ := evals.Load("cases.json")
+rep, err := evals.Run(ctx, agent, ds, evals.Options{Parallel: 4})
+fmt.Print(rep.Summary())
+// PASS  tracking (2 steps, 812 tokens, 1.4s)
+// FAIL  refund tone (1 steps, 455 tokens, 0.9s)
+//       - judge: offers a refund but doesn't apologise
+// 1 passed, 1 failed</code></pre></div>
+  <div class="table"><table>
+    <thead><tr><th>Check</th><th>Passes when</th></tr></thead>
+    <tbody>
+      <tr><td><code>contains</code> / <code>not_contains</code></td><td>the answer has (or lacks) each string, ignoring case</td></tr>
+      <tr><td><code>regex</code></td><td>the answer matches</td></tr>
+      <tr><td><code>tools</code> / <code>no_tools</code></td><td>these tools were (or were not) called</td></tr>
+      <tr><td><code>max_steps</code></td><td>the run took at most this many model calls</td></tr>
+      <tr><td><code>judge</code></td><td>the judge model (<code>judge_model</code>, default the agent's) says the answer meets the rubric</td></tr>
+    </tbody>
+  </table></div>
+  <p>Cases run against the agent you pass, with all its plugins, so they test what you ship. Run them with <code>model_mock</code> in CI for wiring, and with the real model before a release.</p>
 </section>
 
 <section id="multi-agent" class="page">
@@ -1308,7 +1381,7 @@ office: VALIDATED
     <thead><tr><th>I want to…</th><th>Option</th><th>Plugin(s)</th><th>Page</th></tr></thead>
     <tbody>
       <tr><td>use OpenAI, Anthropic, Gemini, DeepSeek, Ollama, OpenRouter or Groq</td><td><code>WithModel("anthropic:…")</code></td><td><code>model_*</code> (loads itself)</td><td><a href="#kind-models">Models</a></td></tr>
-      <tr><td>fall back to another model, or retry on errors</td><td></td><td><code>hook_fallback</code>, <code>hook_retry</code></td><td><a href="#kind-hooks">Hooks</a></td></tr>
+      <tr><td>fall back to another model (on errors or refusals), or retry on errors</td><td></td><td><code>hook_fallback</code>, <code>hook_retry</code></td><td><a href="#kind-hooks">Hooks</a></td></tr>
       <tr><td>let the model call my Go function</td><td><code>WithTools(eipagent.Tool(…))</code></td><td>(none)</td><td><a href="#tools">Tools</a></td></tr>
       <tr><td>let the model run shell commands or edit files</td><td><code>WithPlugins("tool_shell", "tool_fs")</code></td><td><code>tool_shell</code>, <code>tool_fs</code> (+ workspace, auto)</td><td><a href="#kind-tools">Tools</a></td></tr>
       <tr><td>…but in a container, not on my machine</td><td><code>WithSandbox("docker")</code></td><td><code>sandbox_docker</code>, <code>workspace_sandbox</code></td><td><a href="#kind-sandboxes">Sandboxes</a></td></tr>
@@ -1322,7 +1395,13 @@ office: VALIDATED
       <tr><td>have another model review risky calls first</td><td></td><td><code>hook_review</code></td><td><a href="#kind-hooks">Hooks</a></td></tr>
       <tr><td>keep card numbers and emails away from the model</td><td></td><td><code>hook_pii</code></td><td><a href="#kind-hooks">Hooks</a></td></tr>
       <tr><td>cap model calls, tool calls or tokens</td><td></td><td><code>hook_limits</code>, <code>policy</code></td><td><a href="#kind-hooks">Hooks</a></td></tr>
-      <tr><td>keep long conversations within the context window</td><td></td><td><code>hook_summarize</code></td><td><a href="#kind-hooks">Hooks</a></td></tr>
+      <tr><td>keep long conversations within the context window</td><td></td><td><code>hook_compact</code> (or <code>hook_summarize</code>)</td><td><a href="#agent-loop">Long runs</a></td></tr>
+      <tr><td>offer many tools without sending them all every step</td><td></td><td><code>tool_search</code></td><td><a href="#agent-loop">Long runs</a></td></tr>
+      <tr><td>let the model keep a task list</td><td></td><td><code>tool_plan</code></td><td><a href="#agent-loop">Long runs</a></td></tr>
+      <tr><td>stop repeated calls, cap huge tool results</td><td></td><td><code>hook_loop_detect</code>, <code>hook_tool_output_limit</code></td><td><a href="#agent-loop">Long runs</a></td></tr>
+      <tr><td>block, redact or retry on what goes in and out</td><td></td><td><code>hook_guardrails</code></td><td><a href="#kind-hooks">Hooks</a></td></tr>
+      <tr><td>keep a run's progress if the process dies</td><td><code>WithSaveEachStep()</code></td><td>(threads)</td><td><a href="#threads">Threads</a></td></tr>
+      <tr><td>test the agent on a set of cases</td><td><code>eip eval</code></td><td>(package <code>evals</code>)</td><td><a href="#evals">Evals</a></td></tr>
       <tr><td>turn on model reasoning (thinking) with one setting</td><td><code>WithThinking("high")</code></td><td><code>hook_thinking</code></td><td><a href="#kind-hooks">Hooks</a></td></tr>
       <tr><td>cut cost and latency with prompt caching</td><td></td><td><code>hook_cache</code></td><td><a href="#kind-hooks">Hooks</a></td></tr>
       <tr><td>retry when structured output doesn't match the schema</td><td></td><td><code>hook_output_validate</code></td><td><a href="#kind-hooks">Hooks</a></td></tr>
@@ -1353,18 +1432,26 @@ office: VALIDATED
   <h2>Built-in tool plugins</h2>
   <!-- gen:builtins tools -->
 <div class="builtins">
-<div class="builtin" id="plugin-tool_fetch"><div class="bhead"><code>tool_fetch</code><span class="bsum">adds 1 tool (http_fetch) · permissions net</span></div><p>Fetches web pages for the model. Egress is restricted: only hosts in allow_hosts (glob patterns, e.g. &#34;*.example.com&#34;), and never private, loopback or link-local addresses (SSRF protection) unless allow_private.</p><details><summary>Config and details</summary><pre>Fetches web pages for the model. Egress is restricted: only hosts in
+<div class="builtin" id="plugin-tool_fetch"><div class="bhead"><code>tool_fetch</code><span class="bsum">adds 1 tool (http_fetch) · permissions net</span></div><p>Fetches web pages for the model. Egress is restricted: only hosts in allow_hosts (glob patterns, e.g. &#34;*.example.com&#34;), and never private, loopback or link-local addresses (SSRF protection) unless allow_private.</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugin(&#34;tool_fetch&#34;, map[string]any{
+	&#34;allow_hosts&#34;: []any{&#34;*.wikipedia.org&#34;, &#34;docs.python.org&#34;},
+	&#34;max_bytes&#34;:   200000,
+})</code></pre></div><details><summary>Config and details</summary><pre>Fetches web pages for the model. Egress is restricted: only hosts in
 allow_hosts (glob patterns, e.g. &#34;*.example.com&#34;), and never private,
 loopback or link-local addresses (SSRF protection) unless allow_private.
 
 Config: allow_hosts (required; [&#34;*&#34;] = any public host), allow_private
 (false), max_bytes (500000), timeout_seconds (20).</pre></details></div>
-<div class="builtin" id="plugin-tool_fs"><div class="bhead"><code>tool_fs</code><span class="bsum">adds 6 tools (edit_file, find_files, grep, list_dir, read_file, write_file) · wraps tool calls · runs at run start · uses workspace · requires workspace · no permissions</span></div><p>File tools in the &#34;workspace&#34; world: read_file, write_file, edit_file, list_dir, find_files, grep. Writes are recorded per run (Result.Changes) so hosts can show a review diff.</p><details><summary>Config and details</summary><pre>File tools in the &#34;workspace&#34; world: read_file, write_file, edit_file,
+<div class="builtin" id="plugin-tool_fs"><div class="bhead"><code>tool_fs</code><span class="bsum">adds 6 tools (edit_file, find_files, grep, list_dir, read_file, write_file) · wraps tool calls · runs at run start · uses workspace · requires workspace · no permissions</span></div><p>File tools in the &#34;workspace&#34; world: read_file, write_file, edit_file, list_dir, find_files, grep. Writes are recorded per run (Result.Changes) so hosts can show a review diff.</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugin(&#34;tool_fs&#34;, map[string]any{&#34;readonly&#34;: true}) // only read_file, list_dir, find_files, grep</code></pre></div><details><summary>Config and details</summary><pre>File tools in the &#34;workspace&#34; world: read_file, write_file, edit_file,
 list_dir, find_files, grep. Writes are recorded per run (Result.Changes)
 so hosts can show a review diff.
 
 Config: max_read (200000 bytes), readonly (true = only read tools).</pre></details></div>
-<div class="builtin" id="plugin-tool_mcp"><div class="bhead"><code>tool_mcp</code><span class="bsum">adds tools named at runtime · permissions net, exec</span></div><p>Model Context Protocol client: connects to MCP servers and registers their tools as &#34;&lt;server&gt;__&lt;tool&gt;&#34;.</p><details><summary>Config and details</summary><pre>Model Context Protocol client: connects to MCP servers and registers
+<div class="builtin" id="plugin-tool_mcp"><div class="bhead"><code>tool_mcp</code><span class="bsum">adds tools named at runtime · permissions net, exec</span></div><p>Model Context Protocol client: connects to MCP servers and registers their tools as &#34;&lt;server&gt;__&lt;tool&gt;&#34;.</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugin(&#34;tool_mcp&#34;, map[string]any{&#34;servers&#34;: []any{
+	map[string]any{&#34;name&#34;: &#34;github&#34;, &#34;command&#34;: &#34;npx&#34;, &#34;args&#34;: []any{&#34;-y&#34;, &#34;@modelcontextprotocol/server-github&#34;},
+		&#34;env&#34;: map[string]any{&#34;GITHUB_PERSONAL_ACCESS_TOKEN&#34;: &#34;secret://GITHUB_TOKEN&#34;}},
+	map[string]any{&#34;name&#34;: &#34;docs&#34;, &#34;url&#34;: &#34;https://mcp.example.com/mcp&#34;},
+}})
+// Shortcut: eipagent.WithMCP(&#34;github&#34;, &#34;npx&#34;, &#34;-y&#34;, &#34;@modelcontextprotocol/server-github&#34;)</code></pre></div><details><summary>Config and details</summary><pre>Model Context Protocol client: connects to MCP servers and registers
 their tools as &#34;&lt;server&gt;__&lt;tool&gt;&#34;.
 
 Config:
@@ -1377,25 +1464,63 @@ Config:
 	  trust_annotations: false,  // true: treat the server&#39;s readOnlyHint as read-only for policy
 	  timeout_seconds: 60
 	}]</pre></details></div>
-<div class="builtin" id="plugin-tool_memory"><div class="bhead"><code>tool_memory</code><span class="bsum">adds 2 tools (recall, remember) · uses memory · requires memory · no permissions</span></div><p>Long-term memory tools over the &#34;memory&#34; service. Notes are kept per user (namespace [&#34;memories&#34;, user]). Config: namespace.</p><details><summary>Config and details</summary><pre>Long-term memory tools over the &#34;memory&#34; service. Notes are kept per
+<div class="builtin" id="plugin-tool_memory"><div class="bhead"><code>tool_memory</code><span class="bsum">adds 2 tools (recall, remember) · uses memory · requires memory · no permissions</span></div><p>Long-term memory tools over the &#34;memory&#34; service. Notes are kept per user (namespace [&#34;memories&#34;, user]). Config: namespace.</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugins(&#34;memory_file&#34;, &#34;tool_memory&#34;)
+// &#34;Remember that I prefer window seats&#34; -&gt; remember; later &#34;Book my usual seat&#34; -&gt; recall</code></pre></div><details><summary>Config and details</summary><pre>Long-term memory tools over the &#34;memory&#34; service. Notes are kept per
 user (namespace [&#34;memories&#34;, user]). Config: namespace.</pre></details></div>
-<div class="builtin" id="plugin-tool_sandbox"><div class="bhead"><code>tool_sandbox</code><span class="bsum">adds 6 tools (sandbox_create, sandbox_destroy, sandbox_exec, sandbox_list, sandbox_read_file, sandbox_write_file) · requires sandbox/* · no permissions</span></div><p>Lets the model start and use sandboxes on demand: sandbox_create, sandbox_exec, sandbox_write_file, sandbox_read_file, sandbox_list, sandbox_destroy. Boxes belong to the thread that made them and are destroyed when the plugin unloads.</p><details><summary>Config and details</summary><pre>Lets the model start and use sandboxes on demand: sandbox_create,
+<div class="builtin" id="plugin-tool_plan"><div class="bhead"><code>tool_plan</code><span class="bsum">adds 3 tools (plan_read, plan_update, plan_write) · wraps tool calls · rewrites each step · runs at run end · uses memory · requires ?memory · no permissions</span></div><p>Gives the model a task list it keeps up to date: plan_write sets the tasks, plan_update changes one task&#39;s status, plan_read shows the list. The current plan is shown to the model with the newest tool result each step (not in the system prompt, so prompt caching keeps working).</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugins(&#34;tool_plan&#34;)</code></pre></div><details><summary>Config and details</summary><pre>Gives the model a task list it keeps up to date: plan_write sets the
+tasks, plan_update changes one task&#39;s status, plan_read shows the list.
+The current plan is shown to the model with the newest tool result
+each step (not in the system prompt, so prompt caching keeps working).
+
+Plans are kept per thread (per run without a thread). With a &#34;memory&#34;
+service loaded they survive restarts.
+
+Config: max_tasks (default 30), reminder (default true: show the plan
+each step).</pre></details></div>
+<div class="builtin" id="plugin-tool_sandbox"><div class="bhead"><code>tool_sandbox</code><span class="bsum">adds 6 tools (sandbox_create, sandbox_destroy, sandbox_exec, sandbox_list, sandbox_read_file, sandbox_write_file) · requires sandbox/* · no permissions</span></div><p>Lets the model start and use sandboxes on demand: sandbox_create, sandbox_exec, sandbox_write_file, sandbox_read_file, sandbox_list, sandbox_destroy. Boxes belong to the thread that made them and are destroyed when the plugin unloads.</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugins(&#34;sandbox_docker&#34;)
+eipagent.WithPlugin(&#34;tool_sandbox&#34;, map[string]any{
+	&#34;provider&#34;:  &#34;docker&#34;,
+	&#34;images&#34;:    []any{&#34;python:3.12-slim&#34;, &#34;node:22-slim&#34;},
+	&#34;max_boxes&#34;: 2,
+})</code></pre></div><details><summary>Config and details</summary><pre>Lets the model start and use sandboxes on demand: sandbox_create,
 sandbox_exec, sandbox_write_file, sandbox_read_file, sandbox_list,
 sandbox_destroy. Boxes belong to the thread that made them and are
 destroyed when the plugin unloads.
 
 Config: provider (&#34;docker&#34;), image, network (&#34;none&#34;), memory_mb, cpus,
 max_boxes (3 per thread), images (allowed images; [] = any).</pre></details></div>
-<div class="builtin" id="plugin-tool_shell"><div class="bhead"><code>tool_shell</code><span class="bsum">adds 1 tool (bash) · uses workspace · requires workspace · no permissions</span></div><p>A bash tool that runs in the &#34;workspace&#34; world (host workspace or sandbox).</p><details><summary>Config and details</summary><pre>A bash tool that runs in the &#34;workspace&#34; world (host workspace or sandbox).
+<div class="builtin" id="plugin-tool_search"><div class="bhead"><code>tool_search</code><span class="bsum">adds 1 tool (search_tools) · wraps tool calls · rewrites each step · runs at run end · no permissions</span></div><p>Loads tools on demand. When a step would offer more than threshold tools, the model sees only the always-visible ones plus a search_tools tool; each search reveals the matching tools for the rest of the run. Useful once MCP servers bring dozens of tools.</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugin(&#34;tool_search&#34;, map[string]any{
+	&#34;threshold&#34;: 10,
+	&#34;always&#34;:    []any{&#34;read_file&#34;, &#34;bash&#34;},
+})</code></pre></div><details><summary>Config and details</summary><pre>Loads tools on demand. When a step would offer more than threshold
+tools, the model sees only the always-visible ones plus a search_tools
+tool; each search reveals the matching tools for the rest of the run.
+Useful once MCP servers bring dozens of tools.
+
+Search matches the query&#39;s words (three letters or more) against the
+start of words in tool names and descriptions; name matches count more.
+A hidden tool still runs if the model calls it by its exact name.
+
+Config:
+
+	threshold:   hide tools only when there are more than this many (default 15)
+	always:      tools that stay visible, globs like &#34;github__*&#34; (default none)
+	max_results: tools a search reveals at most (default 5)</pre></details></div>
+<div class="builtin" id="plugin-tool_shell"><div class="bhead"><code>tool_shell</code><span class="bsum">adds 1 tool (bash) · uses workspace · requires workspace · no permissions</span></div><p>A bash tool that runs in the &#34;workspace&#34; world (host workspace or sandbox).</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugin(&#34;tool_shell&#34;, map[string]any{&#34;timeout_seconds&#34;: 60, &#34;max_output&#34;: 10000})
+eipagent.WithSandbox(&#34;docker&#34;) // run it in a container instead of on the host</code></pre></div><details><summary>Config and details</summary><pre>A bash tool that runs in the &#34;workspace&#34; world (host workspace or sandbox).
 
 Config: timeout_seconds (120), max_output (30000 chars).</pre></details></div>
-<div class="builtin" id="plugin-tool_skills"><div class="bhead"><code>tool_skills</code><span class="bsum">adds 2 tools (load_skill, read_skill_file) · permissions fs:read</span></div><p>Agent skills: folders containing SKILL.md (YAML-ish front matter with name and description, then instructions). Only names and descriptions go into the system prompt; the model loads a skill&#39;s body (and files next to it) on demand, which keeps prompts small.</p><details><summary>Config and details</summary><pre>Agent skills: folders containing SKILL.md (YAML-ish front matter with
+<div class="builtin" id="plugin-tool_skills"><div class="bhead"><code>tool_skills</code><span class="bsum">adds 2 tools (load_skill, read_skill_file) · permissions fs:read</span></div><p>Agent skills: folders containing SKILL.md (YAML-ish front matter with name and description, then instructions). Only names and descriptions go into the system prompt; the model loads a skill&#39;s body (and files next to it) on demand, which keeps prompts small.</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugin(&#34;tool_skills&#34;, map[string]any{&#34;dirs&#34;: []any{&#34;./skills&#34;}}) // skills/&lt;name&gt;/SKILL.md</code></pre></div><details><summary>Config and details</summary><pre>Agent skills: folders containing SKILL.md (YAML-ish front matter with
 name and description, then instructions). Only names and descriptions
 go into the system prompt; the model loads a skill&#39;s body (and files
 next to it) on demand, which keeps prompts small.
 
 Config: dirs (default [&#34;skills&#34;]).</pre></details></div>
-<div class="builtin" id="plugin-tool_subagents"><div class="bhead"><code>tool_subagents</code><span class="bsum">adds 1 tool (transfer_back) · adds tools named at runtime · rewrites each step · checks model replies · requires loop · no permissions</span></div><p>Multi-agent: subagents exposed as tools, and handoffs that switch which agent is talking.</p><details><summary>Config and details</summary><pre>Multi-agent: subagents exposed as tools, and handoffs that switch
+<div class="builtin" id="plugin-tool_subagents"><div class="bhead"><code>tool_subagents</code><span class="bsum">adds 1 tool (transfer_back) · adds tools named at runtime · rewrites each step · checks model replies · requires loop · no permissions</span></div><p>Multi-agent: subagents exposed as tools, and handoffs that switch which agent is talking.</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugin(&#34;tool_subagents&#34;, map[string]any{&#34;agents&#34;: []any{
+	map[string]any{&#34;name&#34;: &#34;researcher&#34;, &#34;description&#34;: &#34;Finds facts on the web&#34;,
+		&#34;instructions&#34;: &#34;Cite your sources.&#34;, &#34;tools&#34;: []any{&#34;web_search&#34;, &#34;http_fetch&#34;}, &#34;max_steps&#34;: 8},
+	map[string]any{&#34;name&#34;: &#34;billing&#34;, &#34;description&#34;: &#34;Handles refunds&#34;, &#34;mode&#34;: &#34;handoff&#34;},
+}})</code></pre></div><details><summary>Config and details</summary><pre>Multi-agent: subagents exposed as tools, and handoffs that switch
 which agent is talking.
 
 Config:
@@ -1409,8 +1534,10 @@ Config:
 	}]
 
 Policy and audit hooks follow subagents (they run in the same snapshot).</pre></details></div>
-<div class="builtin" id="plugin-tool_time"><div class="bhead"><code>tool_time</code><span class="bsum">adds 1 tool (current_time) · no permissions</span></div><p>Returns the current time. Config: layout (Go time layout).</p></div>
-<div class="builtin" id="plugin-tool_websearch"><div class="bhead"><code>tool_websearch</code><span class="bsum">adds 1 tool (web_search) · permissions net</span></div><p>Web search for the model: a web_search tool returning titles, URLs and snippets. Pair it with tool_fetch to read the pages it finds.</p><details><summary>Config and details</summary><pre>Web search for the model: a web_search tool returning titles, URLs and
+<div class="builtin" id="plugin-tool_time"><div class="bhead"><code>tool_time</code><span class="bsum">adds 1 tool (current_time) · no permissions</span></div><p>Returns the current time. Config: layout (Go time layout).</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugin(&#34;tool_time&#34;, map[string]any{&#34;layout&#34;: &#34;2006-01-02 15:04 MST&#34;})</code></pre></div></div>
+<div class="builtin" id="plugin-tool_websearch"><div class="bhead"><code>tool_websearch</code><span class="bsum">adds 1 tool (web_search) · permissions net</span></div><p>Web search for the model: a web_search tool returning titles, URLs and snippets. Pair it with tool_fetch to read the pages it finds.</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugin(&#34;tool_websearch&#34;, map[string]any{&#34;backend&#34;: &#34;tavily&#34;, &#34;max_results&#34;: 8})
+eipagent.WithPlugin(&#34;tool_fetch&#34;, map[string]any{&#34;allow_hosts&#34;: []any{&#34;*&#34;}}) // to read the results
+// Shortcut: eipagent.WithWebSearch(&#34;duckduckgo&#34;)</code></pre></div><details><summary>Config and details</summary><pre>Web search for the model: a web_search tool returning titles, URLs and
 snippets. Pair it with tool_fetch to read the pages it finds.
 
 Config:
@@ -1515,7 +1642,11 @@ func Apply(p *sdk.Plugin) error {
   <h2>Built-in hook plugins</h2>
   <!-- gen:builtins hooks -->
 <div class="builtins">
-<div class="builtin" id="plugin-hook_approval"><div class="bhead"><code>hook_approval</code><span class="bsum">wraps tool calls · no permissions</span></div><p>Human in the loop: pauses the run before chosen tool calls until a person approves, edits, rejects or answers them. Resume with Thread.Resume / Agent.Resume, or load an &#34;approver&#34; service to decide synchronously.</p><details><summary>Config and details</summary><pre>Human in the loop: pauses the run before chosen tool calls until a
+<div class="builtin" id="plugin-hook_approval"><div class="bhead"><code>hook_approval</code><span class="bsum">wraps tool calls · no permissions</span></div><p>Human in the loop: pauses the run before chosen tool calls until a person approves, edits, rejects or answers them. Resume with Thread.Resume / Agent.Resume, or load an &#34;approver&#34; service to decide synchronously.</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugin(&#34;hook_approval&#34;, map[string]any{&#34;interrupt_on&#34;: map[string]any{
+	&#34;delete_file&#34;: true,
+	&#34;send_email&#34;:  map[string]any{&#34;allowed&#34;: []any{&#34;approve&#34;, &#34;edit&#34;, &#34;reject&#34;}, &#34;description&#34;: &#34;Send this email?&#34;},
+}})
+// Shortcut: eipagent.WithApprovals(&#34;delete_file&#34;, &#34;send_email&#34;)</code></pre></div><details><summary>Config and details</summary><pre>Human in the loop: pauses the run before chosen tool calls until a
 person approves, edits, rejects or answers them. Resume with
 Thread.Resume / Agent.Resume, or load an &#34;approver&#34; service to decide
 synchronously.
@@ -1526,7 +1657,7 @@ Config:
 	               &#34;*&#34; matches every tool
 	non_readonly:  true = also every tool not marked Meta.readonly
 	risk:          [&#34;high&#34;] = also tools whose Meta.risk is listed</pre></details></div>
-<div class="builtin" id="plugin-hook_cache"><div class="bhead"><code>hook_cache</code><span class="bsum">rewrites each step · no permissions</span></div><p>Prompt caching: reuses the unchanged prefix of each request (tools, system prompt, earlier messages) so long agent runs cost less and answer faster. It sets ModelRequest.Extra[&#34;eip.cache&#34;]; model plugins map it:</p><details><summary>Config and details</summary><pre>Prompt caching: reuses the unchanged prefix of each request (tools,
+<div class="builtin" id="plugin-hook_cache"><div class="bhead"><code>hook_cache</code><span class="bsum">rewrites each step · no permissions</span></div><p>Prompt caching: reuses the unchanged prefix of each request (tools, system prompt, earlier messages) so long agent runs cost less and answer faster. It sets ModelRequest.Extra[&#34;eip.cache&#34;]; model plugins map it:</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugin(&#34;hook_cache&#34;, map[string]any{&#34;ttl&#34;: &#34;1h&#34;})</code></pre></div><details><summary>Config and details</summary><pre>Prompt caching: reuses the unchanged prefix of each request (tools,
 system prompt, earlier messages) so long agent runs cost less and
 answer faster. It sets ModelRequest.Extra[&#34;eip.cache&#34;]; model plugins
 map it:
@@ -1537,13 +1668,86 @@ map it:
 	gemini:    nothing to do (implicit caching)
 
 Config: ttl (5m | 1h, default 5m).</pre></details></div>
-<div class="builtin" id="plugin-hook_fallback"><div class="bhead"><code>hook_fallback</code><span class="bsum">wraps model calls · no permissions</span></div><p>Falls back to other models when a model call fails.</p><details><summary>Config and details</summary><pre>Falls back to other models when a model call fails.
+<div class="builtin" id="plugin-hook_compact"><div class="bhead"><code>hook_compact</code><span class="bsum">adds 1 tool (compact_context) · wraps tool calls · rewrites each step · checks model replies · runs at run end · no permissions</span></div><p>Keeps a run inside the model&#39;s context window. Before each step it estimates the request&#39;s size and, past the trigger, applies the strategies in order, cheapest first, until the estimate is under the target. Edits stay in the run&#39;s history.</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugin(&#34;hook_compact&#34;, map[string]any{
+	&#34;max_fraction&#34;:    0.8,
+	&#34;target_fraction&#34;: 0.5,
+	&#34;strategies&#34;:      []any{&#34;clear_tool_results&#34;, &#34;summarize&#34;},
+})</code></pre></div><details><summary>Config and details</summary><pre>Keeps a run inside the model&#39;s context window. Before each step it
+estimates the request&#39;s size and, past the trigger, applies the
+strategies in order, cheapest first, until the estimate is under the
+target. Edits stay in the run&#39;s history.
+
+The estimate starts from the input and output tokens the provider
+reported for the last step and adds about one token per four
+characters for what came after (the ratio is calibrated from that
+report). It never splits a tool call from its result.
+
+Strategies (in the default order):
+
+	clamp:              cut any message longer than clamp_chars to its head and tail
+	clear_tool_results: blank all but the last keep_tool_results tool results
+	sliding_window:     drop the oldest messages, keeping the first user message
+	summarize:          replace older messages with a summary (one model call)
+
+Each step emits a &#34;context_usage&#34; event: tokens, window, fraction and
+the strategies applied.
+
+Config:
+
+	context_window:    the model&#39;s window in tokens (default: a guess from the
+	                   model name, else fallback_context_window, 200000)
+	max_fraction:      compact when the estimate passes this share of the
+	                   window (default 0.8)
+	max_tokens:        ...or this many tokens (0 = off)
+	max_messages:      ...or this many messages (0 = off)
+	target_fraction:   compact down to this share of the window (default 0.5)
+	strategies:        default [clamp, clear_tool_results, sliding_window, summarize]
+	clamp_chars:       default 20000 (keeping 2000 at each end)
+	keep_tool_results: default 3
+	keep_messages:     recent messages sliding_window and summarize keep (default 20)
+	summary_model:     model for summarize (default: the run&#39;s model)
+	tool:              give the model a compact_context tool (default false)</pre></details></div>
+<div class="builtin" id="plugin-hook_fallback"><div class="bhead"><code>hook_fallback</code><span class="bsum">wraps model calls · no permissions</span></div><p>Falls back to other models when a model call fails, or when the model refuses (finish reason &#34;refusal&#34;: a safety stop or content filter).</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugin(&#34;hook_fallback&#34;, map[string]any{
+	&#34;models&#34;:     []any{&#34;openai:gpt-4.1&#34;, &#34;gemini:gemini-2.5-pro&#34;},
+	&#34;on_refusal&#34;: true,
+})</code></pre></div><details><summary>Config and details</summary><pre>Falls back to other models when a model call fails, or when the model
+refuses (finish reason &#34;refusal&#34;: a safety stop or content filter).
 
 Config: models ([&#34;anthropic:claude-...&#34;, &#34;openai:gpt-...&#34;]), tried in
-order after the requested model. Default priority 20 (outside hook_retry).</pre></details></div>
-<div class="builtin" id="plugin-hook_guard"><div class="bhead"><code>hook_guard</code><span class="bsum">wraps tool calls · no permissions</span></div><p>Vetoes tool calls whose arguments contain a blocked word. Config: words (default [&#34;password&#34;]).</p><details><summary>Config and details</summary><pre>Vetoes tool calls whose arguments contain a blocked word.
+order after the requested model; on_refusal (true): also fall back on a
+refusal. Default priority 20 (outside hook_retry).</pre></details></div>
+<div class="builtin" id="plugin-hook_guard"><div class="bhead"><code>hook_guard</code><span class="bsum">wraps tool calls · no permissions</span></div><p>Vetoes tool calls whose arguments contain a blocked word. Config: words (default [&#34;password&#34;]).</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugin(&#34;hook_guard&#34;, map[string]any{&#34;words&#34;: []any{&#34;password&#34;, &#34;api_key&#34;}})</code></pre></div><details><summary>Config and details</summary><pre>Vetoes tool calls whose arguments contain a blocked word.
 Config: words (default [&#34;password&#34;]).</pre></details></div>
-<div class="builtin" id="plugin-hook_limits"><div class="bhead"><code>hook_limits</code><span class="bsum">wraps model calls · wraps tool calls · runs at run end · no permissions</span></div><p>Caps model calls, tool calls and tokens per run and per thread.</p><details><summary>Config and details</summary><pre>Caps model calls, tool calls and tokens per run and per thread.
+<div class="builtin" id="plugin-hook_guardrails"><div class="bhead"><code>hook_guardrails</code><span class="bsum">wraps tool calls · rewrites each step · checks model replies · runs at run start · runs at run end · no permissions</span></div><p>Checks what goes in and out of the model against rules, and blocks, redacts or retries. Each rule looks at one place:</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugin(&#34;hook_guardrails&#34;, map[string]any{&#34;rules&#34;: []any{
+	map[string]any{&#34;on&#34;: &#34;output&#34;, &#34;detect&#34;: &#34;secrets&#34;, &#34;action&#34;: &#34;redact&#34;},
+	map[string]any{&#34;on&#34;: &#34;tool_args&#34;, &#34;keywords&#34;: []any{&#34;DROP TABLE&#34;}, &#34;action&#34;: &#34;block&#34;,
+		&#34;message&#34;: &#34;Destructive SQL is not allowed.&#34;},
+	map[string]any{&#34;on&#34;: &#34;output&#34;, &#34;regex&#34;: `(?i)as an ai`, &#34;action&#34;: &#34;retry&#34;,
+		&#34;message&#34;: &#34;Answer directly, without talking about being an AI.&#34;},
+}})</code></pre></div><details><summary>Config and details</summary><pre>Checks what goes in and out of the model against rules, and blocks,
+redacts or retries. Each rule looks at one place:
+
+	input:       the user&#39;s message, before the run starts
+	output:      the model&#39;s final answer
+	tool_args:   a tool call&#39;s arguments, before it runs
+	tool_result: a tool&#39;s result, before the model sees it
+
+and matches a regex, any of a list of keywords (case-insensitive), or a
+built-in detector (&#34;secrets&#34;: API keys, tokens and private keys). The
+action is:
+
+	block:  input fails the run; output and tool_result are replaced by
+	        message; tool_args returns message to the model instead of running
+	redact: replace each match with [redacted] (input, output, tool_result)
+	retry:  output only: ask the model again with message, up to
+	        max_retries times, then block
+
+Config: rules (required), max_retries (default 1).</pre></details></div>
+<div class="builtin" id="plugin-hook_limits"><div class="bhead"><code>hook_limits</code><span class="bsum">wraps model calls · wraps tool calls · runs at run end · no permissions</span></div><p>Caps model calls, tool calls and tokens per run and per thread.</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugin(&#34;hook_limits&#34;, map[string]any{
+	&#34;model_calls_run&#34;: 20,
+	&#34;tokens_thread&#34;:   500000,
+	&#34;tools&#34;:           map[string]any{&#34;web_search&#34;: 5},
+})</code></pre></div><details><summary>Config and details</summary><pre>Caps model calls, tool calls and tokens per run and per thread.
 
 Config:
 
@@ -1551,9 +1755,16 @@ Config:
 	tokens_run, tokens_thread: 0 = unlimited
 	tools:          {tool name: max calls per run}
 	exit_behavior:  &#34;end&#34; (default: finish politely) | &#34;error&#34; (fail the run)</pre></details></div>
-<div class="builtin" id="plugin-hook_log"><div class="bhead"><code>hook_log</code><span class="bsum">wraps model calls · wraps tool calls · no permissions</span></div><p>Logs every model and tool call with timing. Config: args (log tool arguments, default true), results (log tool results, default false).</p><details><summary>Config and details</summary><pre>Logs every model and tool call with timing. Config: args (log tool
+<div class="builtin" id="plugin-hook_log"><div class="bhead"><code>hook_log</code><span class="bsum">wraps model calls · wraps tool calls · no permissions</span></div><p>Logs every model and tool call with timing. Config: args (log tool arguments, default true), results (log tool results, default false).</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugin(&#34;hook_log&#34;, map[string]any{&#34;results&#34;: true})</code></pre></div><details><summary>Config and details</summary><pre>Logs every model and tool call with timing. Config: args (log tool
 arguments, default true), results (log tool results, default false).</pre></details></div>
-<div class="builtin" id="plugin-hook_output_validate"><div class="bhead"><code>hook_output_validate</code><span class="bsum">rewrites each step · checks model replies · runs at run end · no permissions</span></div><p>Checks structured output (runs with a ResponseSchema) against the schema. When the final reply is not valid JSON or does not match, the model is asked again with the errors, up to max_retries times.</p><details><summary>Config and details</summary><pre>Checks structured output (runs with a ResponseSchema) against the
+<div class="builtin" id="plugin-hook_loop_detect"><div class="bhead"><code>hook_loop_detect</code><span class="bsum">wraps tool calls · runs at run end · no permissions</span></div><p>Stops the model from repeating itself. When it calls the same tool with the same arguments more than max_repeats times in a run, the call is not run and the model is told to try something else; past stop_after repeats the run ends with an error.</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugin(&#34;hook_loop_detect&#34;, map[string]any{&#34;max_repeats&#34;: 2, &#34;stop_after&#34;: 4})</code></pre></div><details><summary>Config and details</summary><pre>Stops the model from repeating itself. When it calls the same tool
+with the same arguments more than max_repeats times in a run, the call
+is not run and the model is told to try something else; past
+stop_after repeats the run ends with an error.
+
+Config: max_repeats (default 3), stop_after (default 6; 0 = never stop).</pre></details></div>
+<div class="builtin" id="plugin-hook_output_validate"><div class="bhead"><code>hook_output_validate</code><span class="bsum">rewrites each step · checks model replies · runs at run end · no permissions</span></div><p>Checks structured output (runs with a ResponseSchema) against the schema. When the final reply is not valid JSON or does not match, the model is asked again with the errors, up to max_retries times.</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugin(&#34;hook_output_validate&#34;, map[string]any{&#34;max_retries&#34;: 2})
+// then: invoice, err := eipagent.GenerateObject[Invoice](ctx, agent, &#34;Extract the invoice&#34;)</code></pre></div><details><summary>Config and details</summary><pre>Checks structured output (runs with a ResponseSchema) against the
 schema. When the final reply is not valid JSON or does not match, the
 model is asked again with the errors, up to max_retries times.
 
@@ -1561,7 +1772,11 @@ Validates type, required, properties, additionalProperties: false,
 items, enum, minItems/maxItems and minLength/maxLength.
 
 Config: max_retries (2), on_fail (error | accept, default error).</pre></details></div>
-<div class="builtin" id="plugin-hook_pii"><div class="bhead"><code>hook_pii</code><span class="bsum">wraps model calls · wraps tool calls · requires ?secrets · no permissions</span></div><p>Detects PII and redacts, masks, hashes or blocks it.</p><details><summary>Config and details</summary><pre>Detects PII and redacts, masks, hashes or blocks it.
+<div class="builtin" id="plugin-hook_pii"><div class="bhead"><code>hook_pii</code><span class="bsum">wraps model calls · wraps tool calls · requires ?secrets · no permissions</span></div><p>Detects PII and redacts, masks, hashes or blocks it.</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugin(&#34;hook_pii&#34;, map[string]any{
+	&#34;types&#34;:    []any{&#34;email&#34;, &#34;credit_card&#34;, &#34;phone&#34;},
+	&#34;strategy&#34;: &#34;mask&#34;,
+	&#34;patterns&#34;: map[string]any{&#34;order_id&#34;: `ORD-\d{6}`},
+})</code></pre></div><details><summary>Config and details</summary><pre>Detects PII and redacts, masks, hashes or blocks it.
 
 Config:
 
@@ -1577,13 +1792,17 @@ Config:
 	(input covers user, assistant and tool messages in the history,
 	including the string arguments of earlier tool calls)
 	patterns:   {name: regex} extra detectors</pre></details></div>
-<div class="builtin" id="plugin-hook_retry"><div class="bhead"><code>hook_retry</code><span class="bsum">wraps model calls · wraps tool calls · no permissions</span></div><p>Retries transient model failures (HTTP 429/5xx, network errors) with exponential backoff, and optionally failing tools.</p><details><summary>Config and details</summary><pre>Retries transient model failures (HTTP 429/5xx, network errors) with
+<div class="builtin" id="plugin-hook_retry"><div class="bhead"><code>hook_retry</code><span class="bsum">wraps model calls · wraps tool calls · no permissions</span></div><p>Retries transient model failures (HTTP 429/5xx, network errors) with exponential backoff, and optionally failing tools.</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugin(&#34;hook_retry&#34;, map[string]any{&#34;max_retries&#34;: 5, &#34;initial_delay_ms&#34;: 1000, &#34;tool_retries&#34;: 1})</code></pre></div><details><summary>Config and details</summary><pre>Retries transient model failures (HTTP 429/5xx, network errors) with
 exponential backoff, and optionally failing tools.
 
 Config: max_retries (3), initial_delay_ms (500), max_delay_ms (8000),
 backoff (2.0), jitter (true), tool_retries (0), retry_tools ([] = all).
 Default priority 10: inside hook_fallback, outside everything else.</pre></details></div>
-<div class="builtin" id="plugin-hook_review"><div class="bhead"><code>hook_review</code><span class="bsum">wraps tool calls · no permissions</span></div><p>Auto approval review: a reviewer model judges risky tool calls before they run. It approves, denies, or escalates to a human (hook_approval).</p><details><summary>Config and details</summary><pre>Auto approval review: a reviewer model judges risky tool calls before
+<div class="builtin" id="plugin-hook_review"><div class="bhead"><code>hook_review</code><span class="bsum">wraps tool calls · no permissions</span></div><p>Auto approval review: a reviewer model judges risky tool calls before they run. It approves, denies, or escalates to a human (hook_approval).</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugin(&#34;hook_review&#34;, map[string]any{
+	&#34;model&#34;:  &#34;anthropic:claude-haiku-5-5&#34;,
+	&#34;tools&#34;:  []any{&#34;bash&#34;, &#34;write_file&#34;},
+	&#34;policy&#34;: &#34;Deny anything that deletes data or touches production.&#34;,
+})</code></pre></div><details><summary>Config and details</summary><pre>Auto approval review: a reviewer model judges risky tool calls before
 they run. It approves, denies, or escalates to a human (hook_approval).
 
 Config:
@@ -1592,8 +1811,12 @@ Config:
 	tools:   tools to review ([] = every tool not marked readonly)
 	policy:  extra guidance for the reviewer
 	on_error: escalate (default) | deny</pre></details></div>
-<div class="builtin" id="plugin-hook_stats"><div class="bhead"><code>hook_stats</code><span class="bsum">watches events · runs background work · no permissions</span></div><p>Counts tool calls; prints a summary when unloaded (Effect cleanup).</p></div>
-<div class="builtin" id="plugin-hook_summarize"><div class="bhead"><code>hook_summarize</code><span class="bsum">rewrites each step · no permissions</span></div><p>Summarizes old history when it grows too long, keeping recent messages verbatim. Tool calls and their results are never split.</p><details><summary>Config and details</summary><pre>Summarizes old history when it grows too long, keeping recent
+<div class="builtin" id="plugin-hook_stats"><div class="bhead"><code>hook_stats</code><span class="bsum">watches events · runs background work · no permissions</span></div><p>Counts tool calls; prints a summary when unloaded (Effect cleanup).</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugins(&#34;hook_stats&#34;) // prints tool-call counts when the agent closes</code></pre></div></div>
+<div class="builtin" id="plugin-hook_summarize"><div class="bhead"><code>hook_summarize</code><span class="bsum">rewrites each step · no permissions</span></div><p>Summarizes old history when it grows too long, keeping recent messages verbatim. Tool calls and their results are never split.</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugin(&#34;hook_summarize&#34;, map[string]any{
+	&#34;trigger_messages&#34;: 60,
+	&#34;keep_messages&#34;:    12,
+	&#34;model&#34;:            &#34;anthropic:claude-haiku-5-5&#34;,
+})</code></pre></div><details><summary>Config and details</summary><pre>Summarizes old history when it grows too long, keeping recent
 messages verbatim. Tool calls and their results are never split.
 
 Config:
@@ -1603,7 +1826,8 @@ Config:
 	keep_messages:    recent messages kept verbatim (default 10)
 	model:            model for the summary (default: the run&#39;s model)
 	prompt:           summary instruction</pre></details></div>
-<div class="builtin" id="plugin-hook_thinking"><div class="bhead"><code>hook_thinking</code><span class="bsum">rewrites each step · no permissions</span></div><p>Turns on model reasoning (thinking) with one provider-neutral setting. It sets ModelRequest.Extra[&#34;eip.thinking&#34;]; each model plugin maps it:</p><details><summary>Config and details</summary><pre>Turns on model reasoning (thinking) with one provider-neutral setting.
+<div class="builtin" id="plugin-hook_thinking"><div class="bhead"><code>hook_thinking</code><span class="bsum">rewrites each step · no permissions</span></div><p>Turns on model reasoning (thinking) with one provider-neutral setting. It sets ModelRequest.Extra[&#34;eip.thinking&#34;]; each model plugin maps it:</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugin(&#34;hook_thinking&#34;, map[string]any{&#34;effort&#34;: &#34;high&#34;, &#34;models&#34;: []any{&#34;anthropic:*&#34;, &#34;openai:*&#34;}})
+// Shortcut: eipagent.WithThinking(&#34;high&#34;)</code></pre></div><details><summary>Config and details</summary><pre>Turns on model reasoning (thinking) with one provider-neutral setting.
 It sets ModelRequest.Extra[&#34;eip.thinking&#34;]; each model plugin maps it:
 
 	anthropic: thinking {type: adaptive} + output_config.effort
@@ -1619,13 +1843,25 @@ Config:
 	models:        only for these models, globs like &#34;anthropic:*&#34; (default all)
 
 A run can override the effort with RunState.Values[&#34;thinking_effort&#34;].</pre></details></div>
-<div class="builtin" id="plugin-hook_tool_errors"><div class="bhead"><code>hook_tool_errors</code><span class="bsum">wraps tool calls · no permissions</span></div><p>Controls what happens when a tool fails.</p><details><summary>Config and details</summary><pre>Controls what happens when a tool fails.
+<div class="builtin" id="plugin-hook_tool_errors"><div class="bhead"><code>hook_tool_errors</code><span class="bsum">wraps tool calls · no permissions</span></div><p>Controls what happens when a tool fails.</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugin(&#34;hook_tool_errors&#34;, map[string]any{
+	&#34;on_error&#34;: &#34;message&#34;,
+	&#34;template&#34;: &#34;{tool} failed: {error}. Try another way.&#34;,
+})</code></pre></div><details><summary>Config and details</summary><pre>Controls what happens when a tool fails.
 
 Config:
 
 	on_error: &#34;message&#34; (default: tell the model) | &#34;raise&#34; (abort the run)
 	template: message template; {tool} and {error} are replaced
 	tools:    only these tools ([] = all)</pre></details></div>
+<div class="builtin" id="plugin-hook_tool_output_limit"><div class="bhead"><code>hook_tool_output_limit</code><span class="bsum">wraps tool calls · no permissions</span></div><p>Caps how much of a tool&#39;s result reaches the model. A longer result keeps its beginning and end, with a note of how much was cut, so one huge file or log can&#39;t fill the context window.</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugin(&#34;hook_tool_output_limit&#34;, map[string]any{
+	&#34;max_chars&#34;: 10000,
+	&#34;tools&#34;:     map[string]any{&#34;read_file&#34;: 40000},
+})</code></pre></div><details><summary>Config and details</summary><pre>Caps how much of a tool&#39;s result reaches the model. A longer result
+keeps its beginning and end, with a note of how much was cut, so one
+huge file or log can&#39;t fill the context window.
+
+Config: max_chars (default 20000), tools (per-tool limits, e.g.
+{&#34;bash&#34;: 5000}; 0 = no limit for that tool).</pre></details></div>
 </div>
 <!-- /gen:builtins -->
   <h2>Write your own</h2>
@@ -1700,7 +1936,13 @@ agent.Generate(ctx, "hi", eipagent.Model("vllm:qwen3-32b"))</code></pre></div>
   <h2>Built-in model plugins</h2>
   <!-- gen:builtins models -->
 <div class="builtins">
-<div class="builtin" id="plugin-model_anthropic"><div class="bhead"><code>model_anthropic</code><span class="bsum">provides model/&lt;name&gt; · permissions net</span></div><p>Anthropic Messages API adapter, provided as &#34;model/&lt;name&gt;&#34;.</p><details><summary>Config and details</summary><pre>Anthropic Messages API adapter, provided as &#34;model/&lt;name&gt;&#34;.
+<div class="builtin" id="plugin-model_anthropic"><div class="bhead"><code>model_anthropic</code><span class="bsum">provides model/&lt;name&gt; · permissions net</span></div><p>Anthropic Messages API adapter, provided as &#34;model/&lt;name&gt;&#34;.</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithModel(&#34;anthropic:claude-sonnet-5-5&#34;) // loads model_anthropic by itself
+// A proxy, another key or a bigger output limit:
+eipagent.WithPlugin(&#34;model_anthropic&#34;, map[string]any{
+	&#34;base_url&#34;:   &#34;https://anthropic-proxy.internal&#34;,
+	&#34;api_key&#34;:    &#34;secret://ANTHROPIC_KEY_TEAM_A&#34;,
+	&#34;max_tokens&#34;: 16000,
+})</code></pre></div><details><summary>Config and details</summary><pre>Anthropic Messages API adapter, provided as &#34;model/&lt;name&gt;&#34;.
 
 Config:
 
@@ -1712,7 +1954,8 @@ Config:
 
 Structured output uses a tool named after the schema; when the model
 calls it, its input becomes the reply text.</pre></details></div>
-<div class="builtin" id="plugin-model_gemini"><div class="bhead"><code>model_gemini</code><span class="bsum">provides model/&lt;name&gt; · permissions net</span></div><p>Google Gemini adapter (generateContent / streamGenerateContent), provided as &#34;model/&lt;name&gt;&#34;.</p><details><summary>Config and details</summary><pre>Google Gemini adapter (generateContent / streamGenerateContent),
+<div class="builtin" id="plugin-model_gemini"><div class="bhead"><code>model_gemini</code><span class="bsum">provides model/&lt;name&gt; · permissions net</span></div><p>Google Gemini adapter (generateContent / streamGenerateContent), provided as &#34;model/&lt;name&gt;&#34;.</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithModel(&#34;gemini:gemini-2.5-pro&#34;) // loads model_gemini by itself
+eipagent.WithPlugin(&#34;model_gemini&#34;, map[string]any{&#34;api_key&#34;: &#34;secret://GEMINI_KEY_TEAM_A&#34;})</code></pre></div><details><summary>Config and details</summary><pre>Google Gemini adapter (generateContent / streamGenerateContent),
 provided as &#34;model/&lt;name&gt;&#34;.
 
 Config:
@@ -1720,7 +1963,11 @@ Config:
 	name:     default &#34;gemini&#34;
 	base_url: default https://generativelanguage.googleapis.com/v1beta
 	api_key:  literal or secret://NAME (default secret://GEMINI_API_KEY)</pre></details></div>
-<div class="builtin" id="plugin-model_mock"><div class="bhead"><code>model_mock</code><span class="bsum">provides model/&lt;name&gt; · no permissions</span></div><p>A deterministic fake LLM for tests and offline demos, provided as &#34;model/mock&#34; (model string &#34;mock:anything&#34;).</p><details><summary>Config and details</summary><pre>A deterministic fake LLM for tests and offline demos, provided as
+<div class="builtin" id="plugin-model_mock"><div class="bhead"><code>model_mock</code><span class="bsum">provides model/&lt;name&gt; · no permissions</span></div><p>A deterministic fake LLM for tests and offline demos, provided as &#34;model/mock&#34; (model string &#34;mock:anything&#34;).</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithModel(&#34;mock:demo&#34;)
+eipagent.WithPlugin(&#34;model_mock&#34;, map[string]any{&#34;script&#34;: []any{
+	map[string]any{&#34;tool&#34;: &#34;weather&#34;, &#34;args&#34;: map[string]any{&#34;city&#34;: &#34;Lisbon&#34;}},
+	map[string]any{&#34;text&#34;: &#34;Bring an umbrella.&#34;},
+}})</code></pre></div><details><summary>Config and details</summary><pre>A deterministic fake LLM for tests and offline demos, provided as
 &#34;model/mock&#34; (model string &#34;mock:anything&#34;).
 
 Config:
@@ -1732,7 +1979,9 @@ Config:
 
 Heuristics: replies to a tool result by echoing it; &#34;time&#34; calls
 current_time; &#34;remember X&#34; calls remember; &#34;recall&#34; calls recall.</pre></details></div>
-<div class="builtin" id="plugin-model_openai"><div class="bhead"><code>model_openai</code><span class="bsum">provides model/&lt;name&gt; · permissions net</span></div><p>OpenAI-compatible chat completions adapter: OpenAI, DeepSeek, Ollama, vLLM, OpenRouter, Groq... Provided as &#34;model/&lt;name&gt;&#34;.</p><details><summary>Config and details</summary><pre>OpenAI-compatible chat completions adapter: OpenAI, DeepSeek, Ollama,
+<div class="builtin" id="plugin-model_openai"><div class="bhead"><code>model_openai</code><span class="bsum">provides model/&lt;name&gt; · permissions net</span></div><p>OpenAI-compatible chat completions adapter: OpenAI, DeepSeek, Ollama, vLLM, OpenRouter, Groq... Provided as &#34;model/&lt;name&gt;&#34;.</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithModel(&#34;openai:gpt-4.1&#34;) // also deepseek:, ollama:, openrouter:, groq:
+// Any other OpenAI-compatible server, e.g. vLLM, then WithModel(&#34;vllm:qwen3-32b&#34;):
+eipagent.WithPlugin(&#34;model_openai&#34;, map[string]any{&#34;name&#34;: &#34;vllm&#34;, &#34;base_url&#34;: &#34;http://gpu-box:8000/v1&#34;, &#34;api_key&#34;: &#34;&#34;})</code></pre></div><details><summary>Config and details</summary><pre>OpenAI-compatible chat completions adapter: OpenAI, DeepSeek, Ollama,
 vLLM, OpenRouter, Groq... Provided as &#34;model/&lt;name&gt;&#34;.
 
 Config:
@@ -1894,29 +2143,36 @@ for k, v := range req.Extra {
   <h2>Built-in plugins</h2>
   <!-- gen:builtins threads-memory -->
 <div class="builtins">
-<div class="builtin" id="plugin-db_sql"><div class="bhead"><code>db_sql</code><span class="bsum">provides services named at runtime · permissions db</span></div><p>A shared database/sql pool, provided as &#34;db&#34; (or &#34;db/&lt;name&gt;&#34;). The driver must be linked into the host binary, e.g.</p><details><summary>Config and details</summary><pre>A shared database/sql pool, provided as &#34;db&#34; (or &#34;db/&lt;name&gt;&#34;). The
+<div class="builtin" id="plugin-db_sql"><div class="bhead"><code>db_sql</code><span class="bsum">provides services named at runtime · permissions db</span></div><p>A shared database/sql pool, provided as &#34;db&#34; (or &#34;db/&lt;name&gt;&#34;). The driver must be linked into the host binary, e.g.</p><div class="code" data-title="example"><pre><code class="language-go">// import _ &#34;github.com/ganeshdipdumbare/eipagent/drivers/postgres&#34;
+eipagent.WithPlugin(&#34;db_sql&#34;, map[string]any{&#34;dsn&#34;: &#34;secret://DATABASE_URL&#34;, &#34;max_open&#34;: 20})</code></pre></div><details><summary>Config and details</summary><pre>A shared database/sql pool, provided as &#34;db&#34; (or &#34;db/&lt;name&gt;&#34;). The
 driver must be linked into the host binary, e.g.
 
 	import _ &#34;eipagent/drivers/postgres&#34; // registers &#34;pgx&#34;
 
 Config: driver (default &#34;pgx&#34;), dsn (literal or secret://NAME),
 name (service suffix), max_open (10), max_idle (5).</pre></details></div>
-<div class="builtin" id="plugin-memory_file"><div class="bhead"><code>memory_file</code><span class="bsum">provides memory · permissions fs:read, fs:write</span></div><p>Long-term store kept in one JSON file, provided as &#34;memory&#34;. Good for single-node and development use; use memory_sql for shared storage.</p><details><summary>Config and details</summary><pre>Long-term store kept in one JSON file, provided as &#34;memory&#34;. Good for
+<div class="builtin" id="plugin-memory_file"><div class="bhead"><code>memory_file</code><span class="bsum">provides memory · permissions fs:read, fs:write</span></div><p>Long-term store kept in one JSON file, provided as &#34;memory&#34;. Good for single-node and development use; use memory_sql for shared storage.</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugin(&#34;memory_file&#34;, map[string]any{&#34;path&#34;: &#34;.eipagent/memory.json&#34;})
+eipagent.WithPlugins(&#34;tool_memory&#34;) // lets the model remember and recall</code></pre></div><details><summary>Config and details</summary><pre>Long-term store kept in one JSON file, provided as &#34;memory&#34;. Good for
 single-node and development use; use memory_sql for shared storage.
 
 Config: path (default &#34;.eipagent/store.json&#34;).</pre></details></div>
-<div class="builtin" id="plugin-memory_inmem"><div class="bhead"><code>memory_inmem</code><span class="bsum">provides memory · no permissions</span></div><p>In-memory long-term memory, provided as &#34;memory&#34;.</p></div>
-<div class="builtin" id="plugin-memory_sql"><div class="bhead"><code>memory_sql</code><span class="bsum">provides memory · uses db · requires db · permissions db</span></div><p>Postgres long-term memory over the &#34;db&#34; service, provided as &#34;memory&#34;. Search is a case-insensitive substring match over keys and values.</p><details><summary>Config and details</summary><pre>Postgres long-term memory over the &#34;db&#34; service, provided as &#34;memory&#34;.
+<div class="builtin" id="plugin-memory_inmem"><div class="bhead"><code>memory_inmem</code><span class="bsum">provides memory · no permissions</span></div><p>In-memory long-term memory, provided as &#34;memory&#34;.</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugins(&#34;memory_inmem&#34;, &#34;tool_memory&#34;) // lost on exit</code></pre></div></div>
+<div class="builtin" id="plugin-memory_sql"><div class="bhead"><code>memory_sql</code><span class="bsum">provides memory · uses db · requires db · permissions db</span></div><p>Postgres long-term memory over the &#34;db&#34; service, provided as &#34;memory&#34;. Search is a case-insensitive substring match over keys and values.</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugin(&#34;db_sql&#34;, map[string]any{&#34;dsn&#34;: &#34;secret://DATABASE_URL&#34;})
+eipagent.WithPlugin(&#34;memory_sql&#34;, map[string]any{&#34;table&#34;: &#34;agent_memory&#34;})
+// Shortcut with threads_sql too: eipagent.WithPersistence(&#34;postgres&#34;, &#34;secret://DATABASE_URL&#34;)</code></pre></div><details><summary>Config and details</summary><pre>Postgres long-term memory over the &#34;db&#34; service, provided as &#34;memory&#34;.
 Search is a case-insensitive substring match over keys and values.
 
 Config: table (default &#34;eip_store&#34;).</pre></details></div>
-<div class="builtin" id="plugin-threads_file"><div class="bhead"><code>threads_file</code><span class="bsum">provides threads · permissions fs:read, fs:write</span></div><p>Thread storage keeping one JSON file per thread, provided as &#34;threads&#34;. Safe across processes on one machine (lock files).</p><details><summary>Config and details</summary><pre>Thread storage keeping one JSON file per thread, provided as
+<div class="builtin" id="plugin-threads_file"><div class="bhead"><code>threads_file</code><span class="bsum">provides threads · permissions fs:read, fs:write</span></div><p>Thread storage keeping one JSON file per thread, provided as &#34;threads&#34;. Safe across processes on one machine (lock files).</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugin(&#34;threads_file&#34;, map[string]any{&#34;dir&#34;: &#34;.eipagent/threads&#34;})
+// Shortcut with memory_file too: eipagent.WithPersistence(&#34;file&#34;, &#34;.eipagent&#34;)</code></pre></div><details><summary>Config and details</summary><pre>Thread storage keeping one JSON file per thread, provided as
 &#34;threads&#34;. Safe across processes on one machine (lock files).
 
 Config: dir (default &#34;.eipagent/threads&#34;).</pre></details></div>
-<div class="builtin" id="plugin-threads_inmem"><div class="bhead"><code>threads_inmem</code><span class="bsum">provides threads · no permissions</span></div><p>In-memory thread storage, provided as &#34;threads&#34;. State is deep-copied (via JSON) so callers can&#39;t mutate stored history.</p><details><summary>Config and details</summary><pre>In-memory thread storage, provided as &#34;threads&#34;. State is
+<div class="builtin" id="plugin-threads_inmem"><div class="bhead"><code>threads_inmem</code><span class="bsum">provides threads · no permissions</span></div><p>In-memory thread storage, provided as &#34;threads&#34;. State is deep-copied (via JSON) so callers can&#39;t mutate stored history.</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugins(&#34;threads_inmem&#34;) // the default; lost on exit</code></pre></div><details><summary>Config and details</summary><pre>In-memory thread storage, provided as &#34;threads&#34;. State is
 deep-copied (via JSON) so callers can&#39;t mutate stored history.</pre></details></div>
-<div class="builtin" id="plugin-threads_sql"><div class="bhead"><code>threads_sql</code><span class="bsum">provides threads · uses db · requires db · permissions db</span></div><p>Postgres thread storage over the &#34;db&#34; service, provided as &#34;threads&#34;. Optimistic versioning lets many stateless replicas share threads safely. The table is created on first load.</p><details><summary>Config and details</summary><pre>Postgres thread storage over the &#34;db&#34; service, provided as
+<div class="builtin" id="plugin-threads_sql"><div class="bhead"><code>threads_sql</code><span class="bsum">provides threads · uses db · requires db · permissions db</span></div><p>Postgres thread storage over the &#34;db&#34; service, provided as &#34;threads&#34;. Optimistic versioning lets many stateless replicas share threads safely. The table is created on first load.</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugin(&#34;db_sql&#34;, map[string]any{&#34;dsn&#34;: &#34;secret://DATABASE_URL&#34;})
+eipagent.WithPlugin(&#34;threads_sql&#34;, map[string]any{&#34;table&#34;: &#34;agent_threads&#34;})
+// Shortcut with memory_sql too: eipagent.WithPersistence(&#34;postgres&#34;, &#34;secret://DATABASE_URL&#34;)</code></pre></div><details><summary>Config and details</summary><pre>Postgres thread storage over the &#34;db&#34; service, provided as
 &#34;threads&#34;. Optimistic versioning lets many stateless replicas
 share threads safely. The table is created on first load.
 
@@ -2044,19 +2300,45 @@ func Apply(p *sdk.Plugin) error {
     <li><b>Fails closed.</b> <code>eip serve --stdio</code> refuses to start if its environment holds a credential.</li>
     <li><b>Nested sandboxes</b> created inside the box get placeholders too; only the host turns them back into values.</li>
   </ul>
+  <h3>How the host knows it's talking to its own box</h3>
+  <p>There is no network channel to fake. The host starts the sandbox through its sandbox plugin, uploads <code>eip</code>, and runs <code>eip serve --stdio</code> in it. Every request from the box (model calls, secret lookups, HTTP, host tools) arrives on that process's stdout, and every answer goes back on its stdin. The host opens no port and listens on nothing, so no other process, and no fake sandbox, can reach the bridge: only the process the host itself started can send to it.</p>
+  <p>That settles <em>who</em> is asking, not whether to believe it. The code in the box may be compromised (a bad plugin, a prompt-injected tool), so the host treats every request as untrusted and decides on its own side:</p>
+  <div class="table"><table>
+    <thead><tr><th>Request from the box</th><th>What the host does</th></tr></thead>
+    <tbody>
+      <tr><td>model call (<code>host.llm</code>)</td><td>Runs it through the host's own model hooks and policy, then the host's provider. The box never sees an API key.</td></tr>
+      <tr><td>secret (<code>host.secret</code>)</td><td>Checks the grant on the host and returns only a placeholder, never the value.</td></tr>
+      <tr><td>HTTP (<code>host.http</code>)</td><td>Checks method, host and path against <code>SecretHosts</code> and <code>Egress</code>, swaps placeholders only where allowed, redacts the response, records <code>sandbox.egress</code>.</td></tr>
+      <tr><td>host tool (<code>host.tool</code>)</td><td>Runs only tools the host chose to expose; <code>RunIn.NoBridgeTools</code> exposes none.</td></tr>
+    </tbody>
+  </table></div>
+  <h3>A sandbox run by a third party</h3>
+  <p>The same holds when the box runs on someone else's machines, in a hosted sandbox service, through a sandbox plugin with <code>Isolation: "remote"</code>. That plugin's <code>Start</code> opens the box's stdin and stdout through the service's own API: the host connects out, over TLS, authenticated with the host's key for that service. Nothing connects in to the host, so the stream the host opened is the only way to reach it.</p>
+  <p>The host never has to trust the service or the code in the box with a secret. A secret is redeemed only on the host:</p>
+  <ol>
+    <li>A plugin in the box asks for <code>secret://GITHUB_TOKEN</code> and gets a placeholder: 128 random bits that mean something only to this host's agent, held in its memory for as long as it runs.</li>
+    <li>The box sends an HTTP request carrying the placeholder to the host (<code>host.http</code>), over the same stream.</li>
+    <li>The host looks the placeholder up, checks the method, host and path against that secret's <code>SecretHosts</code> rules, puts the real value in, and sends the request <em>from the host</em>.</li>
+    <li>The response comes back with the secret's value redacted, and the request is recorded as <code>sandbox.egress</code>.</li>
+  </ol>
+  <p>So the value never reaches the service's machines, and a placeholder copied out of the box is useless: no other host knows it, and this host swaps it only for the destinations its rules allow. A dishonest service could read the stream or send requests on it, but that gives it no more than a compromised box gets: the requests its rules permit. It does see what flows through the box (prompts, tool results, responses after redaction), so pick a service you would trust with that data.</p>
+  <p>So a compromised box can do only what these rules allow: spend model calls under the host's policy and limits, and send requests that <code>SecretHosts</code> and <code>Egress</code> permit. It can also claim to be any plugin when it asks for a secret (see below), which is why the rules, not the plugin names, are the boundary: keep them as narrow as the task needs.</p>
   <p>To see it end to end in a microVM, run <code>go run ./examples/microsandbox</code> (<a href="#production-examples">output</a>): the agent runs in a <code>sandbox_microsandbox</code> VM with no network, the VM holds only a placeholder, and the API on the host receives the real token.</p>
   <div class="note warn"><b>What it doesn't cover</b><div><p>Placeholders are swapped only in HTTP sent through Go's default transport. A plugin that needs the raw value in its own process (a database DSN, env for a stdio MCP server), or dials with its own transport like <code>tool_fetch</code>, can't use a secret inside the box: load it on the host with <code>RunIn.HostPlugins</code>. The host trusts the box to say which plugin is asking, so grants inside the box are only as strong as the box; a placeholder is still useless outside its <code>SecretHosts</code>. On the host without a sandbox, the agent already has the host's access, so none of this applies.</p></div></div>
   <h2>Built-in plugins</h2>
   <!-- gen:builtins sandboxes -->
 <div class="builtins">
-<div class="builtin" id="plugin-sandbox_docker"><div class="bhead"><code>sandbox_docker</code><span class="bsum">provides sandbox/&lt;name&gt; · permissions exec</span></div><p>Container sandboxes through the docker (or podman) CLI, provided as &#34;sandbox/docker&#34;. Containers run with no network by default, a read-only root filesystem off, dropped capabilities and no new privileges.</p><details><summary>Config and details</summary><pre>Container sandboxes through the docker (or podman) CLI, provided as
+<div class="builtin" id="plugin-sandbox_docker"><div class="bhead"><code>sandbox_docker</code><span class="bsum">provides sandbox/&lt;name&gt; · permissions exec</span></div><p>Container sandboxes through the docker (or podman) CLI, provided as &#34;sandbox/docker&#34;. Containers run with no network by default, a read-only root filesystem off, dropped capabilities and no new privileges.</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugin(&#34;sandbox_docker&#34;, map[string]any{&#34;image&#34;: &#34;python:3.12-slim&#34;, &#34;pids_limit&#34;: 128})
+eipagent.WithPlugins(&#34;workspace_sandbox&#34;, &#34;tool_shell&#34;, &#34;tool_fs&#34;)
+// Shortcut: eipagent.WithSandbox(&#34;docker&#34;)</code></pre></div><details><summary>Config and details</summary><pre>Container sandboxes through the docker (or podman) CLI, provided as
 &#34;sandbox/docker&#34;. Containers run with no network by default, a
 read-only root filesystem off, dropped capabilities and no new
 privileges.
 
 Config: binary (&#34;docker&#34;), image (&#34;alpine:3&#34;), name (&#34;docker&#34;),
 pids_limit (256), extra_args ([]).</pre></details></div>
-<div class="builtin" id="plugin-sandbox_local"><div class="bhead"><code>sandbox_local</code><span class="bsum">provides sandbox/local · permissions exec, fs:read, fs:write, env</span></div><p>Host &#34;sandbox&#34;: commands run as host processes inside a workdir, file access is confined to that workdir, and only allowlisted env vars are passed. NO isolation (Isolation &#34;none&#34;): for development, or when the whole agent already runs inside a sandbox. Provided as &#34;sandbox/local&#34;.</p><details><summary>Config and details</summary><pre>Host &#34;sandbox&#34;: commands run as host processes inside a workdir, file
+<div class="builtin" id="plugin-sandbox_local"><div class="bhead"><code>sandbox_local</code><span class="bsum">provides sandbox/local · permissions exec, fs:read, fs:write, env</span></div><p>Host &#34;sandbox&#34;: commands run as host processes inside a workdir, file access is confined to that workdir, and only allowlisted env vars are passed. NO isolation (Isolation &#34;none&#34;): for development, or when the whole agent already runs inside a sandbox. Provided as &#34;sandbox/local&#34;.</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugin(&#34;sandbox_local&#34;, map[string]any{&#34;workdir&#34;: &#34;.&#34;}) // no isolation: this project folder
+eipagent.WithPlugins(&#34;workspace_local&#34;, &#34;tool_shell&#34;, &#34;tool_fs&#34;)</code></pre></div><details><summary>Config and details</summary><pre>Host &#34;sandbox&#34;: commands run as host processes inside a workdir, file
 access is confined to that workdir, and only allowlisted env vars are
 passed. NO isolation (Isolation &#34;none&#34;): for development, or when the
 whole agent already runs inside a sandbox. Provided as &#34;sandbox/local&#34;.
@@ -2066,7 +2348,9 @@ directory instead of one per sandbox: every thread then shares it and
 its files outlive sandbox_destroy, so use it only for a single user&#39;s
 own workspace), env_allow ([&#34;PATH&#34;,&#34;HOME&#34;,&#34;LANG&#34;]; secret-looking
 names are never passed without the env:secrets permission).</pre></details></div>
-<div class="builtin" id="plugin-sandbox_microsandbox"><div class="bhead"><code>sandbox_microsandbox</code><span class="bsum">provides sandbox/&lt;name&gt; · permissions exec</span></div><p>MicroVM sandboxes through the microsandbox CLI (msb), provided as &#34;sandbox/microsandbox&#34;. Each sandbox is its own lightweight VM with its own kernel, so it is a stronger boundary than a container. Sandboxes have no network by default; allowlist mode turns hosts into msb network rules.</p><details><summary>Config and details</summary><pre>MicroVM sandboxes through the microsandbox CLI (msb), provided as
+<div class="builtin" id="plugin-sandbox_microsandbox"><div class="bhead"><code>sandbox_microsandbox</code><span class="bsum">provides sandbox/&lt;name&gt; · permissions exec</span></div><p>MicroVM sandboxes through the microsandbox CLI (msb), provided as &#34;sandbox/microsandbox&#34;. Each sandbox is its own lightweight VM with its own kernel, so it is a stronger boundary than a container. Sandboxes have no network by default; allowlist mode turns hosts into msb network rules.</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugin(&#34;sandbox_microsandbox&#34;, map[string]any{&#34;image&#34;: &#34;python&#34;})
+eipagent.WithPlugin(&#34;workspace_sandbox&#34;, map[string]any{&#34;provider&#34;: &#34;microsandbox&#34;})
+eipagent.WithPlugins(&#34;tool_shell&#34;, &#34;tool_fs&#34;)</code></pre></div><details><summary>Config and details</summary><pre>MicroVM sandboxes through the microsandbox CLI (msb), provided as
 &#34;sandbox/microsandbox&#34;. Each sandbox is its own lightweight VM with its
 own kernel, so it is a stronger boundary than a container. Sandboxes
 have no network by default; allowlist mode turns hosts into msb
@@ -2074,12 +2358,18 @@ network rules.
 
 Config: binary (&#34;msb&#34;), image (&#34;alpine&#34;), name (&#34;microsandbox&#34;),
 extra_args ([]).</pre></details></div>
-<div class="builtin" id="plugin-workspace_local"><div class="bhead"><code>workspace_local</code><span class="bsum">provides workspace · uses sandbox/local · requires sandbox/local · no permissions</span></div><p>Shell and file tools act on the host, in one workspace directory (via sandbox/local). Provided as &#34;workspace&#34;. Use workspace_sandbox instead to move every shell/fs tool into isolated sandboxes.</p><details><summary>Config and details</summary><pre>Shell and file tools act on the host, in one workspace directory
+<div class="builtin" id="plugin-workspace_local"><div class="bhead"><code>workspace_local</code><span class="bsum">provides workspace · uses sandbox/local · requires sandbox/local · no permissions</span></div><p>Shell and file tools act on the host, in one workspace directory (via sandbox/local). Provided as &#34;workspace&#34;. Use workspace_sandbox instead to move every shell/fs tool into isolated sandboxes.</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugin(&#34;sandbox_local&#34;, map[string]any{&#34;workdir&#34;: &#34;.&#34;})
+eipagent.WithPlugins(&#34;workspace_local&#34;, &#34;tool_shell&#34;, &#34;tool_fs&#34;)</code></pre></div><details><summary>Config and details</summary><pre>Shell and file tools act on the host, in one workspace directory
 (via sandbox/local). Provided as &#34;workspace&#34;. Use workspace_sandbox instead to
 move every shell/fs tool into isolated sandboxes.
 
 Load sandbox_local with config {workdir: &#34;.&#34;} to work in a project.</pre></details></div>
-<div class="builtin" id="plugin-workspace_sandbox"><div class="bhead"><code>workspace_sandbox</code><span class="bsum">runs at run start · runs at run end · provides workspace · runs background work · requires sandbox/* · no permissions</span></div><p>Shell and file tools act in a sandbox, one per thread, created lazily on first use and re-attached when a thread resumes in a new process. Provided as &#34;workspace&#34;.</p><details><summary>Config and details</summary><pre>Shell and file tools act in a sandbox, one per thread, created lazily
+<div class="builtin" id="plugin-workspace_sandbox"><div class="bhead"><code>workspace_sandbox</code><span class="bsum">runs at run start · runs at run end · provides workspace · runs background work · requires sandbox/* · no permissions</span></div><p>Shell and file tools act in a sandbox, one per thread, created lazily on first use and re-attached when a thread resumes in a new process. Provided as &#34;workspace&#34;.</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugin(&#34;workspace_sandbox&#34;, map[string]any{
+	&#34;provider&#34;:         &#34;docker&#34;,
+	&#34;image&#34;:            &#34;python:3.12-slim&#34;,
+	&#34;idle_ttl_seconds&#34;: 900,
+})
+eipagent.WithPlugins(&#34;sandbox_docker&#34;, &#34;tool_shell&#34;, &#34;tool_fs&#34;)</code></pre></div><details><summary>Config and details</summary><pre>Shell and file tools act in a sandbox, one per thread, created lazily
 on first use and re-attached when a thread resumes in a new process.
 Provided as &#34;workspace&#34;.
 
@@ -2227,7 +2517,11 @@ eipagent.WithPlugin("trigger_webhook", map[string]any{"routes": []any{
   <h2>Built-in plugins</h2>
   <!-- gen:builtins triggers -->
 <div class="builtins">
-<div class="builtin" id="plugin-trigger_schedule"><div class="bhead"><code>trigger_schedule</code><span class="bsum">adds 3 tools (schedule_cancel, schedule_create, schedule_list) · provides jobs · runs background work · uses agent, memory · requires agent, ?memory · no permissions</span></div><p>Scheduled and background agent runs. Gives the model schedule_create, schedule_list and schedule_cancel tools. Each job runs a prompt on its own thread. Job definitions persist in &#34;memory&#34; when one is loaded.</p><details><summary>Config and details</summary><pre>Scheduled and background agent runs. Gives the model schedule_create,
+<div class="builtin" id="plugin-trigger_schedule"><div class="bhead"><code>trigger_schedule</code><span class="bsum">adds 3 tools (schedule_cancel, schedule_create, schedule_list) · provides jobs · runs background work · uses agent, memory · requires agent, ?memory · no permissions</span></div><p>Scheduled and background agent runs. Gives the model schedule_create, schedule_list and schedule_cancel tools. Each job runs a prompt on its own thread. Job definitions persist in &#34;memory&#34; when one is loaded.</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugin(&#34;trigger_schedule&#34;, map[string]any{
+	&#34;timezone&#34;: &#34;Europe/Berlin&#34;,
+	&#34;jobs&#34;: []any{map[string]any{&#34;name&#34;: &#34;daily-digest&#34;, &#34;schedule&#34;: &#34;daily 09:00&#34;,
+		&#34;prompt&#34;: &#34;Summarize yesterday&#39;s tickets&#34;, &#34;user&#34;: &#34;ops&#34;}},
+})</code></pre></div><details><summary>Config and details</summary><pre>Scheduled and background agent runs. Gives the model schedule_create,
 schedule_list and schedule_cancel tools. Each job runs a prompt on its
 own thread. Job definitions persist in &#34;memory&#34; when one is loaded.
 
@@ -2235,7 +2529,11 @@ Schedules: &#34;every 30m&#34; | &#34;daily 09:00&#34; | &#34;weekly fri 17:00&#
 
 Config: timezone (&#34;UTC&#34;), max_jobs (20 per user), jobs (predefined:
 [{name, schedule, prompt, user}]), tick_seconds (15).</pre></details></div>
-<div class="builtin" id="plugin-trigger_webhook"><div class="bhead"><code>trigger_webhook</code><span class="bsum">uses agent · requires agent · permissions net</span></div><p>Starts agent runs from webhooks. Every route requires an HMAC-SHA256 signature (&#34;X-Signature-256: sha256=&lt;hex&gt;&#34; of the raw body), so only trusted senders can trigger work.</p><details><summary>Config and details</summary><pre>Starts agent runs from webhooks. Every route requires an HMAC-SHA256
+<div class="builtin" id="plugin-trigger_webhook"><div class="bhead"><code>trigger_webhook</code><span class="bsum">uses agent · requires agent · permissions net</span></div><p>Starts agent runs from webhooks. Every route requires an HMAC-SHA256 signature (&#34;X-Signature-256: sha256=&lt;hex&gt;&#34; of the raw body), so only trusted senders can trigger work.</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugin(&#34;trigger_webhook&#34;, map[string]any{
+	&#34;addr&#34;: &#34;127.0.0.1:8787&#34;,
+	&#34;routes&#34;: []any{map[string]any{&#34;path&#34;: &#34;/github&#34;, &#34;secret&#34;: &#34;secret://GH_WEBHOOK_TOKEN&#34;,
+		&#34;user&#34;: &#34;github-bot&#34;, &#34;thread&#34;: &#34;gh-{repository.full_name}&#34;}},
+})</code></pre></div><details><summary>Config and details</summary><pre>Starts agent runs from webhooks. Every route requires an HMAC-SHA256
 signature (&#34;X-Signature-256: sha256=&lt;hex&gt;&#34; of the raw body), so only
 trusted senders can trigger work.
 
@@ -2444,7 +2742,12 @@ eipagent.WithPlugin("trace_otlp", map[string]any{"endpoint": "http://otel-collec
   <h2>Built-in plugins</h2>
   <!-- gen:builtins telemetry -->
 <div class="builtins">
-<div class="builtin" id="plugin-audit_file"><div class="bhead"><code>audit_file</code><span class="bsum">wraps model calls · wraps tool calls · provides audit · requires ?secrets · permissions fs:read, fs:write</span></div><p>Append-only, hash-chained audit log (JSON lines), provided as &#34;audit&#34;. Each line is {&#34;body&#34;: {...}, &#34;prev&#34;: &#34;&lt;hash&gt;&#34;, &#34;hash&#34;: sha256(prev + body)}, so removing or editing any line breaks the chain (eip audit verify).</p><details><summary>Config and details</summary><pre>Append-only, hash-chained audit log (JSON lines), provided as &#34;audit&#34;.
+<div class="builtin" id="plugin-audit_file"><div class="bhead"><code>audit_file</code><span class="bsum">wraps model calls · wraps tool calls · provides audit · requires ?secrets · permissions fs:read, fs:write</span></div><p>Append-only, hash-chained audit log (JSON lines), provided as &#34;audit&#34;. Each line is {&#34;body&#34;: {...}, &#34;prev&#34;: &#34;&lt;hash&gt;&#34;, &#34;hash&#34;: sha256(prev + body)}, so removing or editing any line breaks the chain (eip audit verify).</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugin(&#34;audit_file&#34;, map[string]any{
+	&#34;path&#34;:    &#34;.eipagent/audit.jsonl&#34;,
+	&#34;results&#34;: true,                      // also record tool results
+	&#34;key&#34;:     &#34;secret://AUDIT_HMAC_KEY&#34;, // sign each line
+})
+// Shortcut: eipagent.WithAudit(&#34;.eipagent/audit.jsonl&#34;)</code></pre></div><details><summary>Config and details</summary><pre>Append-only, hash-chained audit log (JSON lines), provided as &#34;audit&#34;.
 Each line is {&#34;body&#34;: {...}, &#34;prev&#34;: &#34;&lt;hash&gt;&#34;, &#34;hash&#34;: sha256(prev + body)},
 so removing or editing any line breaks the chain (eip audit verify).
 
@@ -2466,7 +2769,12 @@ the key a rewritten log can&#39;t produce valid macs.
 Config: path (&#34;.eipagent/audit.jsonl&#34;; &#34;-&#34; keeps no local file),
 args (log tool args, true), results (log tool results, false),
 key (secret://NAME, optional).</pre></details></div>
-<div class="builtin" id="plugin-audit_http"><div class="bhead"><code>audit_http</code><span class="bsum">provides audit/sink/http · runs background work · requires audit, ?secrets · permissions net</span></div><p>Ships the audit stream to an HTTP endpoint (a SIEM, a log pipeline or a control plane), provided as &#34;audit/sink/http&#34;. It receives every record audit_file writes (already redacted and hash-chained, so the receiver can verify the chain) and POSTs them in batches as NDJSON.</p><details><summary>Config and details</summary><pre>Ships the audit stream to an HTTP endpoint (a SIEM, a log pipeline or a
+<div class="builtin" id="plugin-audit_http"><div class="bhead"><code>audit_http</code><span class="bsum">provides audit/sink/http · runs background work · requires audit, ?secrets · permissions net</span></div><p>Ships the audit stream to an HTTP endpoint (a SIEM, a log pipeline or a control plane), provided as &#34;audit/sink/http&#34;. It receives every record audit_file writes (already redacted and hash-chained, so the receiver can verify the chain) and POSTs them in batches as NDJSON.</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugin(&#34;audit_file&#34;, map[string]any{&#34;path&#34;: &#34;-&#34;}) // no local file
+eipagent.WithPlugin(&#34;audit_http&#34;, map[string]any{
+	&#34;url&#34;:      &#34;https://siem.example.com/ingest&#34;,
+	&#34;hmac_key&#34;: &#34;secret://SIEM_HMAC_KEY&#34;,
+	&#34;headers&#34;:  map[string]any{&#34;Authorization&#34;: &#34;secret://SIEM_TOKEN&#34;},
+})</code></pre></div><details><summary>Config and details</summary><pre>Ships the audit stream to an HTTP endpoint (a SIEM, a log pipeline or a
 control plane), provided as &#34;audit/sink/http&#34;. It receives every record
 audit_file writes (already redacted and hash-chained, so the receiver
 can verify the chain) and POSTs them in batches as NDJSON.
@@ -2479,12 +2787,18 @@ counted (a gap in seq tells the receiver).
 Config: url (required), headers ({name: value or secret://NAME}),
 hmac_key (secret://NAME), batch_size (100), flush_seconds (2),
 max_queue (10000), retries (3), timeout_seconds (10).</pre></details></div>
-<div class="builtin" id="plugin-trace_file"><div class="bhead"><code>trace_file</code><span class="bsum">wraps model calls · wraps tool calls · runs at run start · runs at run end · permissions fs:read, fs:write</span></div><p>Writes a trajectory trace: one JSON line per span (run, model call, tool call) with timing and hierarchy. View it with `eip trace view`.</p><details><summary>Config and details</summary><pre>Writes a trajectory trace: one JSON line per span (run, model call,
+<div class="builtin" id="plugin-trace_file"><div class="bhead"><code>trace_file</code><span class="bsum">wraps model calls · wraps tool calls · runs at run start · runs at run end · permissions fs:read, fs:write</span></div><p>Writes a trajectory trace: one JSON line per span (run, model call, tool call) with timing and hierarchy. View it with `eip trace view`.</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugin(&#34;trace_file&#34;, map[string]any{&#34;path&#34;: &#34;.eipagent/trace.jsonl&#34;, &#34;content&#34;: true})
+// then: eip trace view .eipagent/trace.jsonl &gt; trace.html</code></pre></div><details><summary>Config and details</summary><pre>Writes a trajectory trace: one JSON line per span (run, model call,
 tool call) with timing and hierarchy. View it with `eip trace view`.
 
 Config: path (&#34;.eipagent/trace.jsonl&#34;), content (include prompts and
 results, default false). Secret values are redacted.</pre></details></div>
-<div class="builtin" id="plugin-trace_otlp"><div class="bhead"><code>trace_otlp</code><span class="bsum">wraps model calls · wraps tool calls · runs at run start · runs at run end · runs background work · requires ?secrets · permissions net</span></div><p>Exports traces over OTLP/HTTP (JSON) to an OpenTelemetry collector or any OTLP backend: one trace per run, with a span per model call and per tool call. Attributes follow the OpenTelemetry GenAI conventions where they exist (gen_ai.*) plus eip.* fields: run id, thread, user, plugin, tool, call id. Secret values are redacted.</p><details><summary>Config and details</summary><pre>Exports traces over OTLP/HTTP (JSON) to an OpenTelemetry collector or
+<div class="builtin" id="plugin-trace_otlp"><div class="bhead"><code>trace_otlp</code><span class="bsum">wraps model calls · wraps tool calls · runs at run start · runs at run end · runs background work · requires ?secrets · permissions net</span></div><p>Exports traces over OTLP/HTTP (JSON) to an OpenTelemetry collector or any OTLP backend: one trace per run, with a span per model call and per tool call. Attributes follow the OpenTelemetry GenAI conventions where they exist (gen_ai.*) plus eip.* fields: run id, thread, user, plugin, tool, call id. Secret values are redacted.</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugin(&#34;trace_otlp&#34;, map[string]any{
+	&#34;endpoint&#34;:     &#34;https://otlp.example.com&#34;,
+	&#34;headers&#34;:      map[string]any{&#34;x-api-key&#34;: &#34;secret://OTLP_KEY&#34;},
+	&#34;service_name&#34;: &#34;support-agent&#34;,
+})
+// Shortcut: eipagent.WithTracing(&#34;http://localhost:4318&#34;)</code></pre></div><details><summary>Config and details</summary><pre>Exports traces over OTLP/HTTP (JSON) to an OpenTelemetry collector or
 any OTLP backend: one trace per run, with a span per model call and
 per tool call. Attributes follow the OpenTelemetry GenAI conventions
 where they exist (gen_ai.*) plus eip.* fields: run id, thread, user,
@@ -2551,7 +2865,10 @@ eipagent.WithPlugin("model_openai", map[string]any{"api_key": "secret://OPENAI_A
   <h2>Built-in plugins</h2>
   <!-- gen:builtins secrets -->
 <div class="builtins">
-<div class="builtin" id="plugin-secrets_env"><div class="bhead"><code>secrets_env</code><span class="bsum">provides secrets · permissions env, env:secrets</span></div><p>Resolves secret://NAME from environment variables, provided as &#34;secrets&#34;. Only names matching allow (glob patterns) are readable, so other plugins can&#39;t read arbitrary env through it.</p><details><summary>Config and details</summary><pre>Resolves secret://NAME from environment variables, provided as
+<div class="builtin" id="plugin-secrets_env"><div class="bhead"><code>secrets_env</code><span class="bsum">provides secrets · permissions env, env:secrets</span></div><p>Resolves secret://NAME from environment variables, provided as &#34;secrets&#34;. Only names matching allow (glob patterns) are readable, so other plugins can&#39;t read arbitrary env through it.</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugin(&#34;secrets_env&#34;, map[string]any{
+	&#34;allow&#34;:  []any{&#34;*_API_KEY&#34;, &#34;GITHUB_TOKEN&#34;},
+	&#34;grants&#34;: map[string]any{&#34;tool_mcp&#34;: []any{&#34;GITHUB_TOKEN&#34;}},
+})</code></pre></div><details><summary>Config and details</summary><pre>Resolves secret://NAME from environment variables, provided as
 &#34;secrets&#34;. Only names matching allow (glob patterns) are readable, so
 other plugins can&#39;t read arbitrary env through it.
 
@@ -2560,7 +2877,13 @@ Config:
 	allow:  glob patterns (default [&#34;*_API_KEY&#34;, &#34;*_TOKEN&#34;])
 	grants: {plugin instance: [names]} — when set, a plugin may read only
 	        the names granted to it (the caller is set by the core).</pre></details></div>
-<div class="builtin" id="plugin-secrets_vault"><div class="bhead"><code>secrets_vault</code><span class="bsum">provides secrets · permissions net, env, env:secrets, fs:read</span></div><p>Resolves secret://NAME from HashiCorp Vault (KV v2), provided as &#34;secrets&#34;. Values are cached for ttl_seconds and re-read after that, so rotating a secret in Vault reaches running plugins without a restart. If Vault can&#39;t be reached once the cache expires, lookups fail (closed).</p><details><summary>Config and details</summary><pre>Resolves secret://NAME from HashiCorp Vault (KV v2), provided as
+<div class="builtin" id="plugin-secrets_vault"><div class="bhead"><code>secrets_vault</code><span class="bsum">provides secrets · permissions net, env, env:secrets, fs:read</span></div><p>Resolves secret://NAME from HashiCorp Vault (KV v2), provided as &#34;secrets&#34;. Values are cached for ttl_seconds and re-read after that, so rotating a secret in Vault reaches running plugins without a restart. If Vault can&#39;t be reached once the cache expires, lookups fail (closed).</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugin(&#34;secrets_vault&#34;, map[string]any{
+	&#34;address&#34;:     &#34;https://vault.internal:8200&#34;,
+	&#34;mount&#34;:       &#34;secret&#34;,
+	&#34;prefix&#34;:      &#34;eipagent&#34;,
+	&#34;allow&#34;:       []any{&#34;*_API_KEY&#34;},
+	&#34;ttl_seconds&#34;: 300,
+})</code></pre></div><details><summary>Config and details</summary><pre>Resolves secret://NAME from HashiCorp Vault (KV v2), provided as
 &#34;secrets&#34;. Values are cached for ttl_seconds and re-read after that, so
 rotating a secret in Vault reaches running plugins without a restart.
 If Vault can&#39;t be reached once the cache expires, lookups fail (closed).
@@ -2633,11 +2956,13 @@ Config:
   <h2>Built-in plugins</h2>
   <!-- gen:builtins policy -->
 <div class="builtins">
-<div class="builtin" id="plugin-loop"><div class="bhead"><code>loop</code><span class="bsum">provides loop · no permissions</span></div><p>The default agent loop, provided as the &#34;loop&#34; service. Swap it by loading another plugin that provides &#34;loop&#34;.</p><details><summary>Config and details</summary><pre>The default agent loop, provided as the &#34;loop&#34; service. Swap it by
+<div class="builtin" id="plugin-loop"><div class="bhead"><code>loop</code><span class="bsum">provides loop · no permissions</span></div><p>The default agent loop, provided as the &#34;loop&#34; service. Swap it by loading another plugin that provides &#34;loop&#34;.</p><div class="code" data-title="example"><pre><code class="language-go">eipagent.WithPlugin(&#34;loop&#34;, map[string]any{&#34;max_steps&#34;: 30, &#34;parallel_tools&#34;: true})</code></pre></div><details><summary>Config and details</summary><pre>The default agent loop, provided as the &#34;loop&#34; service. Swap it by
 loading another plugin that provides &#34;loop&#34;.
 
 Config: max_steps (default 20), parallel_tools (default false).</pre></details></div>
-<div class="builtin" id="plugin-policy"><div class="bhead"><code>policy</code><span class="bsum">wraps model calls · wraps tool calls · runs at run end · no permissions</span></div><p>Enforces the admin policy&#39;s rules on every model and tool call. Load it as a locked plugin (policy.json &#34;locked&#34;: [&#34;policy&#34;], &#34;require&#34;: [{&#34;use&#34;: &#34;policy&#34;}]) so it runs outermost and can&#39;t be removed; the engine passes policy.json &#34;rules&#34; in as config.rules.</p><details><summary>Config and details</summary><pre>Enforces the admin policy&#39;s rules on every model and tool call. Load it
+<div class="builtin" id="plugin-policy"><div class="bhead"><code>policy</code><span class="bsum">wraps model calls · wraps tool calls · runs at run end · no permissions</span></div><p>Enforces the admin policy&#39;s rules on every model and tool call. Load it as a locked plugin (policy.json &#34;locked&#34;: [&#34;policy&#34;], &#34;require&#34;: [{&#34;use&#34;: &#34;policy&#34;}]) so it runs outermost and can&#39;t be removed; the engine passes policy.json &#34;rules&#34; in as config.rules.</p><div class="code" data-title="example"><pre><code class="language-go">// policy.json: {&#34;locked&#34;: [&#34;policy&#34;], &#34;require&#34;: [{&#34;use&#34;: &#34;policy&#34;}],
+//               &#34;rules&#34;: {&#34;mode&#34;: &#34;read-only&#34;, &#34;deny_tools&#34;: [&#34;bash&#34;]}}
+eipagent.WithPolicyFile(&#34;policy.json&#34;)</code></pre></div><details><summary>Config and details</summary><pre>Enforces the admin policy&#39;s rules on every model and tool call. Load it
 as a locked plugin (policy.json &#34;locked&#34;: [&#34;policy&#34;], &#34;require&#34;:
 [{&#34;use&#34;: &#34;policy&#34;}]) so it runs outermost and can&#39;t be removed; the
 engine passes policy.json &#34;rules&#34; in as config.rules.
@@ -2895,7 +3220,7 @@ st.Quarantine("weather", "0.1.0", "security advisory")</code></pre></div>
   <div class="code" data-title="go"><pre><code class="language-go">type Result struct {
 	Text         string
 	Steps        []sdk.Step      // Response, ToolResults, Usage, Finish
-	Usage        sdk.Usage       // InputTokens, OutputTokens, TotalTokens
+	Usage        sdk.Usage       // InputTokens (all, cached or not), OutputTokens, TotalTokens, CacheReadTokens, CacheWriteTokens
 	FinishReason string          // stop | max_steps | interrupted | tool:&lt;name&gt;
 	Interrupts   []sdk.Interrupt // ID, Kind, ToolCall, Message, Allowed
 	Messages     []sdk.Message   // full history
@@ -2914,6 +3239,7 @@ st.Quarantine("weather", "0.1.0", "security advisory")</code></pre></div>
       <tr><td><code>interrupt</code></td><td><code>ToolCall</code>, <code>Text</code></td></tr>
       <tr><td><code>finish</code></td><td><code>Text</code>, <code>Usage</code>, <code>Data["reason"]</code></td></tr>
       <tr><td><code>error</code></td><td><code>Text</code> (the error)</td></tr>
+      <tr><td><code>context_usage</code></td><td><code>Data["tokens"]</code>, <code>["window"]</code>, <code>["fraction"]</code>, <code>["compacted"]</code> (with <code>hook_compact</code>)</td></tr>
     </tbody>
   </table></div>
 </section>
@@ -2926,6 +3252,7 @@ st.Quarantine("weather", "0.1.0", "security advisory")</code></pre></div>
   <h1>CLI</h1>
   <div class="code" data-title="terminal"><pre><code class="language-bash">go run ./cmd/eip -model ollama:lfm3                       # chat; /plugins /load /unload /reload
 go run ./cmd/eip run -model openai:gpt-4.1 "hello"        # one prompt, headless (-json, -thread)
+go run ./cmd/eip eval -model openai:gpt-4.1 cases.json     # grade the agent on a dataset (see Evals)
 go run ./cmd/eip plugin pin -plugins ./plugins            # pin plugin files for the secure preset
 go run ./cmd/eip config dump -profile eip.json            # show the policy and every plugin's state
 go run ./cmd/eip trace view .eipagent/trace.jsonl > t.html</code></pre></div>
@@ -2983,7 +3310,7 @@ eip plugin list</code></pre></div>
     { title: "Getting Started", pages: ["installation", "quickstart", "concepts", "ollama"] },
     { title: "Examples", pages: ["fullstack", "production-examples"] },
     { title: "Foundations", pages: ["providers", "generating-text", "streaming", "tools", "structured-output", "threads", "human-in-the-loop"] },
-    { title: "Agents", pages: ["agent-loop", "multi-agent", "lifecycles"] },
+    { title: "Agents", pages: ["agent-loop", "multi-agent", "evals", "lifecycles"] },
     { title: "Plugins", pages: ["plugins", "plugins-choose", "kind-tools", "kind-hooks", "kind-models", "kind-threads-memory", "kind-sandboxes", "kind-triggers", "kind-telemetry", "kind-secrets", "kind-policy", "plugin-permissions", "runtime-plugins", "plugin-packages", "plugin-api"] },
     { title: "Security", pages: ["security"] },
     { title: "Reference", pages: ["reference-options", "reference-run", "reference-result", "cli"] }

@@ -21,6 +21,12 @@ import (
 //
 // Config: binary ("docker"), image ("alpine:3"), name ("docker"),
 // pids_limit (256), extra_args ([]).
+//
+// Example:
+//
+//	eipagent.WithPlugin("sandbox_docker", map[string]any{"image": "python:3.12-slim", "pids_limit": 128})
+//	eipagent.WithPlugins("workspace_sandbox", "tool_shell", "tool_fs")
+//	// Shortcut: eipagent.WithSandbox("docker")
 var Permissions = []string{"exec"}
 
 func Apply(p *sdk.Plugin) error {

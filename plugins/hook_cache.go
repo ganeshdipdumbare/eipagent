@@ -20,6 +20,10 @@ import (
 //	gemini:    nothing to do (implicit caching)
 //
 // Config: ttl (5m | 1h, default 5m).
+//
+// Example:
+//
+//	eipagent.WithPlugin("hook_cache", map[string]any{"ttl": "1h"})
 func Apply(p *sdk.Plugin) error {
 	ttl := p.ConfigString("ttl", "5m")
 	if ttl != "5m" && ttl != "1h" {

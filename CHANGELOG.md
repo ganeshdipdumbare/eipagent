@@ -6,6 +6,25 @@ All notable changes to eipagent. Versions follow [semantic versioning](https://s
 
 ### Added
 
+- `hook_compact`: keeps runs inside the model's context window. It estimates the request from the tokens the provider reported, and past `max_fraction` (or `max_tokens` / `max_messages`) applies `clamp`, `clear_tool_results`, `sliding_window` and `summarize`, cheapest first, down to `target_fraction`. Optional `compact_context` tool; a `context_usage` event each step.
+- `tool_search`: past `threshold` tools, the model sees a `search_tools` tool and the tools it reveals.
+- `tool_plan`: `plan_write`, `plan_update`, `plan_read`; the plan is shown with the newest tool result each step and kept per thread (in `memory` when loaded).
+- `hook_guardrails`: rules on input, output, tool arguments and tool results, matched by regex, keywords or the `secrets` detector, with `block`, `redact` or `retry`.
+- `hook_loop_detect` (refuses repeated identical calls, stops the run past `stop_after`) and `hook_tool_output_limit` (keeps the head and tail of long results).
+- `hook_fallback` also falls back when a model refuses (`on_refusal`, default true). Providers report `FinishReason: "refusal"` (Anthropic `refusal`, OpenAI `content_filter`, Gemini safety stops).
+- `sdk.Usage.CacheReadTokens` and `CacheWriteTokens`, filled by all three providers.
+- `WithSaveEachStep()`, `Thread.Continue` and `Thread.Fork`.
+- Package `evals` and `eip eval`: grade an agent on a dataset (contains, regex, tools, step budget, judge model).
+- Every built-in plugin's docs show an example; a test checks each one parses and uses only config keys the plugin reads.
+- `eip plugin validate` warns (rule `interpreter`) about two Yaegi quirks: `x, _ := v.(T)` in a loop body, and several conditions in one `case` of a switch with no tag.
+
+### Changed
+
+- **Behavior change:** Anthropic's `Usage.InputTokens` now includes cached input tokens, like the other providers.
+
+### Fixed
+
+- Several plugins read config with `x, _ := v.(T)` in a loop, which under Yaegi keeps the previous item's value when an item lacks the key: `tool_subagents` (an agent without `mode` or `name` took the previous agent's), `tool_memory` (a note without text showed the previous note's), `trigger_webhook` (nested field lookups), `audit_http` and `trace_otlp` (headers), `tool_mcp` (env), `hook_pii` (patterns) and `model_mock`.
 - `sandbox_microsandbox`: microVM sandboxes through the [microsandbox](https://microsandbox.dev) CLI (`msb`), with no network by default and allowlists as msb network rules. It works for `WithRunIn`, `WithSandbox` and `tool_sandbox`.
 - `examples/microsandbox`: the agent in a microVM, showing that the VM holds only a placeholder and the real token is used on the host.
 - `RunIn.SecretHosts` and `RunIn.Egress` rules take optional methods and a path: `GET api.github.com/repos/*`, `GET|POST api.acme.com/v1/orders`. A malformed rule fails `New`.
