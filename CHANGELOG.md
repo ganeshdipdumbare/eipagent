@@ -4,6 +4,11 @@ All notable changes to eipagent. Versions follow [semantic versioning](https://s
 
 ## Unreleased
 
+### Fixed
+
+- `WithRunIn`: when the agent in the sandbox exits, the run waiting on it fails with an error saying so (not `rpc: connection closed`), and the next run starts a new sandbox. Threads kept in the old sandbox are gone with it unless their store is outside the box.
+- `eip serve --stdio` keeps stdin and stdout for the host's messages only: a plugin that prints goes to the host's `[box]` log, and one that reads stdin gets EOF. The host also reads a message that has stray output in front of it on the same line, so a print without a newline no longer leaves a call waiting.
+
 ## v0.4.2 — 2026-11-03
 
 ### Added
