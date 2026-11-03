@@ -946,9 +946,15 @@ The host's record of every request from the VM (sandbox.egress):
 
   <h2>Self-host a Firecracker microVM, connect like a cloud</h2>
   <div class="code" data-title="terminal"><pre><code class="language-bash">sudo examples/firecracker/setup.sh   # Linux with /dev/kvm; on macOS use Lima (see the README)
+go run ./examples/firecracker
+
+# Or keep the host process on macOS and Firecracker inside Lima:
+FC_HOST=lima-firecracker FC_SSH_CONFIG="$HOME/.lima/firecracker/ssh.config" \
 go run ./examples/firecracker</code></pre></div>
-  <div class="code" data-title="output"><pre><code class="language-plaintext">Booting a self-hosted Firecracker microVM and starting the agent in it...
-created firecracker microVM fc-53af8ea6a870 at 172.16.4.2
+  <div class="code" data-title="output"><pre><code class="language-plaintext">Host process: darwin/... (model, secrets, broker live here)
+Firecracker host: lima-firecracker (VMM and microVM live there)
+Booting a self-hosted Firecracker microVM and starting the agent in it...
+created firecracker microVM fc-152d0bfd47db at 172.16.120.2
 
 1. Inside the Firecracker microVM: no secret env vars
   machine: aarch64 Linux 6.18.56+
@@ -978,7 +984,7 @@ The host's record of every request from the microVM (sandbox.egress):
   allowed GET 127.0.0.1/orders -&gt; 200 secrets=[ACME_API_TOKEN]
   denied DELETE 127.0.0.1/orders secrets=[ACME_API_TOKEN] (... may not be sent to DELETE 127.0.0.1/orders ...)
   denied GET localhost/steal secrets=[ACME_API_TOKEN] (... may not be sent to GET localhost/steal ...)</code></pre></div>
-  <p>The provider creates a tap device, boots an Ubuntu rootfs with the Firecracker API, and connects to the guest over SSH. It is a self-hosted version of the hosted-service path: the agent, plugins and tools run in the microVM, while the model provider and every secret stay on the host. The same placeholder, host-swap, redaction and <code>sandbox.egress</code> rules apply, and <code>Close</code> destroys the VM and its rootfs copy. <a href="https://github.com/ganeshdipdumbare/eipagent/blob/main/examples/firecracker/main.go">Source</a></p>
+  <p>The provider creates a tap device, boots an Ubuntu rootfs with the Firecracker API, and connects to the guest over SSH. It is a self-hosted version of the hosted-service path: the agent, plugins and tools run in the microVM, while the model provider and every secret stay on the host. With <code>FC_HOST</code> the host process runs on macOS and Firecracker runs in Lima, so the host-to-sandbox link crosses a real machine boundary. The same placeholder, host-swap, redaction and <code>sandbox.egress</code> rules apply, and <code>Close</code> destroys the VM and its rootfs copy. <a href="https://github.com/ganeshdipdumbare/eipagent/blob/main/examples/firecracker/main.go">Source</a></p>
 
   <h2>Audit to a SIEM, traces to OpenTelemetry</h2>
   <div class="code" data-title="terminal"><pre><code class="language-bash">go run ./examples/observability</code></pre></div>
@@ -2455,6 +2461,104 @@ func Apply(p *sdk.Plugin) error {
       <tr><td>host tool (<code>host.tool</code>)</td><td>Runs only tools the host chose to expose; <code>RunIn.NoBridgeTools</code> exposes none.</td></tr>
     </tbody>
   </table></div>
+  <h3>Sequence: host and sandbox</h3>
+  <p>The host knows the sandbox through its provider (the Firecracker API and the guest IP, or the hosted service's endpoint). The sandbox does not know the host: the host connects out, starts <code>eip serve --stdio</code>, and all <code>host.*</code> calls ride that stream.</p>
+  <figure class="diagram">
+    <div class="dg-scroll"><svg class="dg" viewBox="0 0 900 780" role="img" aria-labelledby="seq-t seq-d">
+      <title id="seq-t">Host and Firecracker sandbox sequence</title>
+      <desc id="seq-d">The host process on macOS creates a Firecracker VM on a separate Linux host, connects out over SSH, uploads eip and starts eip serve --stdio in the guest. Model, secret and HTTP requests travel back to the host on that stream; the sandbox never dials the host.</desc>
+      <defs>
+        <marker id="sq-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="mk" d="M0 0 10 5 0 10z"/></marker>
+        <marker id="sq-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="mk-acc" d="M0 0 10 5 0 10z"/></marker>
+        <marker id="sq-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="mk-ok" d="M0 0 10 5 0 10z"/></marker>
+        <marker id="sq-wait" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="mk-wait" d="M0 0 10 5 0 10z"/></marker>
+        <marker id="sq-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="mk-bad" d="M0 0 10 5 0 10z"/></marker>
+      </defs>
+
+      <rect class="box em" x="20" y="10" width="190" height="50" rx="9"/>
+      <text class="t" x="115" y="32" text-anchor="middle">Host process</text>
+      <text class="s" x="115" y="48" text-anchor="middle">macOS / your server</text>
+      <rect class="box" x="270" y="10" width="190" height="50" rx="9"/>
+      <text class="t" x="365" y="32" text-anchor="middle">Firecracker host</text>
+      <text class="s" x="365" y="48" text-anchor="middle">Linux + KVM, separate machine</text>
+      <rect class="box" x="520" y="10" width="210" height="50" rx="9"/>
+      <text class="t" x="625" y="32" text-anchor="middle">Sandbox guest</text>
+      <text class="s" x="625" y="48" text-anchor="middle">Firecracker microVM</text>
+      <rect class="box" x="760" y="10" width="130" height="50" rx="9"/>
+      <text class="t" x="825" y="32" text-anchor="middle">Acme API</text>
+      <text class="s" x="825" y="48" text-anchor="middle">called by host</text>
+
+      <path class="life" d="M115 60V760M365 60V760M625 60V760M825 60V760"/>
+
+      <text class="n" x="8" y="96">0</text>
+      <text class="m" x="240" y="92" text-anchor="middle">SSH: create tap, boot VM</text>
+      <path class="ln l-acc" d="M125 100H355" marker-end="url(#sq-acc)"/>
+
+      <text class="n" x="8" y="136">1</text>
+      <text class="m" x="495" y="132" text-anchor="middle">Firecracker boots the guest</text>
+      <path class="ln" d="M375 140H615" marker-end="url(#sq-a)"/>
+
+      <text class="n" x="8" y="176">2</text>
+      <text class="m" x="370" y="172" text-anchor="middle">connect out: upload eip, start eip serve --stdio</text>
+      <path class="ln l-acc" d="M125 180H615" marker-end="url(#sq-acc)"/>
+
+      <text class="n" x="8" y="216">3</text>
+      <text class="m" x="370" y="212" text-anchor="middle">box.ready (stdout/stdin)</text>
+      <path class="ln l-ok" d="M615 220H125" marker-end="url(#sq-ok)"/>
+
+      <text class="n" x="8" y="256">4</text>
+      <text class="m" x="370" y="252" text-anchor="middle">run(prompt) over the same stream</text>
+      <path class="ln" d="M125 260H615" marker-end="url(#sq-a)"/>
+
+      <text class="n" x="8" y="296">5</text>
+      <text class="m" x="370" y="292" text-anchor="middle">host.llm</text>
+      <path class="ln" d="M615 300H125" marker-end="url(#sq-a)"/>
+
+      <rect class="nb" x="20" y="312" width="190" height="34" rx="7"/>
+      <text class="s" x="115" y="333" text-anchor="middle">model provider + keys stay here</text>
+
+      <text class="n" x="8" y="376">6</text>
+      <text class="m" x="370" y="372" text-anchor="middle">model response</text>
+      <path class="ln l-ok" d="M125 380H615" marker-end="url(#sq-ok)"/>
+
+      <text class="n" x="8" y="416">7</text>
+      <text class="m" x="370" y="412" text-anchor="middle">host.secret ACME_API_TOKEN</text>
+      <path class="ln" d="M615 420H125" marker-end="url(#sq-a)"/>
+
+      <rect class="nb" x="20" y="432" width="190" height="34" rx="7"/>
+      <text class="s" x="115" y="453" text-anchor="middle">resolve; return placeholder</text>
+
+      <text class="n" x="8" y="496">8</text>
+      <text class="m c-wait" x="370" y="492" text-anchor="middle">eipsec_ placeholder (never the value)</text>
+      <path class="ln l-wait" d="M125 500H615" marker-end="url(#sq-wait)"/>
+
+      <text class="n" x="8" y="536">9</text>
+      <text class="m" x="370" y="532" text-anchor="middle">host.http GET /orders with placeholder</text>
+      <path class="ln" d="M615 540H125" marker-end="url(#sq-a)"/>
+
+      <rect class="nb" x="20" y="552" width="190" height="42" rx="7"/>
+      <text class="s" x="115" y="570" text-anchor="middle">check SecretHosts, swap value,</text>
+      <text class="s" x="115" y="584" text-anchor="middle">redact, audit sandbox.egress</text>
+
+      <text class="n" x="8" y="616">10</text>
+      <text class="m" x="470" y="612" text-anchor="middle">GET /orders Bearer real-value</text>
+      <path class="ln l-ok" d="M125 620H815" marker-end="url(#sq-ok)"/>
+
+      <text class="n" x="8" y="656">11</text>
+      <text class="m" x="470" y="652" text-anchor="middle">200 (echoes the token)</text>
+      <path class="ln l-ok" d="M815 660H125" marker-end="url(#sq-ok)"/>
+
+      <text class="n" x="8" y="696">12</text>
+      <text class="m" x="370" y="692" text-anchor="middle">redacted response</text>
+      <path class="ln l-ok" d="M125 700H615" marker-end="url(#sq-ok)"/>
+
+      <text class="n" x="8" y="736">13</text>
+      <text class="m" x="240" y="732" text-anchor="middle">kill VM, remove tap + rootfs copy</text>
+      <path class="ln l-bad" d="M125 740H355" marker-end="url(#sq-bad)"/>
+    </svg></div>
+    <figcaption>The host process runs on your machine or server; the Firecracker host is a separate Linux machine. The host creates the VM, connects out over SSH, and holds the <code>eip serve --stdio</code> stream. Every <code>host.*</code> call rides that stream; the guest never dials the host. Real values stay on the host, the guest sees only placeholders, and the host records <span class="key c-wait">placeholder</span> / <span class="key c-ok">real value</span> flows as <code>sandbox.egress</code>.</figcaption>
+  </figure>
+  <p>The connection is host to sandbox, not sandbox to host. The guest is never given a host address and the host opens no inbound port. With a hosted provider, only the provider plugin changes; the <code>host.secret</code> and <code>host.http</code> flow is the same.</p>
   <h3>A sandbox run by a third party</h3>
   <p>The same holds when the box runs on someone else's machines, in a hosted sandbox service, through a sandbox plugin with <code>Isolation: "remote"</code>. That plugin's <code>Start</code> opens the box's stdin and stdout through the service's own API: the host connects out, over TLS, authenticated with the host's key for that service. Nothing connects in to the host, so the stream the host opened is the only way to reach it.</p>
   <p>The host never has to trust the service or the code in the box with a secret. A secret is redeemed only on the host:</p>

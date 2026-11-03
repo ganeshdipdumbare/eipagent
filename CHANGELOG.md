@@ -4,6 +4,11 @@ All notable changes to eipagent. Versions follow [semantic versioning](https://s
 
 ## Unreleased
 
+### Added
+
+- `examples/firecracker` can run the host process and Firecracker on different machines with `FC_HOST` (for example, the host on macOS and Firecracker in Lima), so the host-to-sandbox link crosses a real machine boundary instead of sharing one host.
+- The sandbox docs add an SVG sequence diagram for the host/sandbox boundary: VM boot, SSH/stdio, `host.llm`, `host.secret`, `host.http`, placeholder swap, redaction, and teardown.
+
 ## v0.4.5 — 2026-11-03
 
 ### Added

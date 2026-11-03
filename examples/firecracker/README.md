@@ -22,9 +22,53 @@ your server / Lima VM (the host)
 ```
 
 The host and the sandbox are separate kernels and process trees. They are only
-on the same Mac in this local demo because Lima provides the Linux/KVM host. In
-a real deployment the host is your server and the Firecracker VM (or a hosted
-sandbox service) runs somewhere else.
+on the same machine in this local demo because Lima provides the Linux/KVM
+host. The link is still SSH over virtio-net to the guest, not a host-local
+shortcut. In a real deployment the host is your server and the Firecracker VM
+(or a hosted sandbox service) runs somewhere else; the provider connects to
+that remote host, but the host-to-guest RPC flow is unchanged.
+
+## How the host and sandbox know each other
+
+The host knows the sandbox through the provider: the Firecracker API socket and
+the guest IP on the tap network. The sandbox does **not** know the host. The
+host connects out (SSH in this example), starts `eip serve --stdio`, and keeps
+that process's stdin/stdout. All `host.*` calls are RPC frames on that stream.
+
+```mermaid
+sequenceDiagram
+    participant H as Host (eipagent + broker)
+    participant FC as Firecracker API
+    participant G as Guest eip serve --stdio
+    participant M as Host model provider
+    participant S as Host secrets
+    participant A as Acme API
+
+    H->>FC: create tap, boot microVM (kernel, rootfs, MAC)
+    H->>G: SSH out: upload eip + plugins, start eip serve --stdio
+    G-->>H: box.ready on stdout/stdin
+    H->>G: run(prompt) over stdio RPC
+    G->>H: host.llm
+    H->>M: generate
+    M-->>H: response
+    H-->>G: model response
+    G->>H: host.secret ACME_API_TOKEN
+    H->>S: resolve + grant check
+    S-->>H: real value
+    H-->>G: eipsec_ placeholder (never the value)
+    G->>H: host.http GET /orders with placeholder
+    H->>H: check SecretHosts, swap placeholder
+    H->>A: GET /orders Bearer real-value
+    A-->>H: 200 (echoes the token)
+    H->>H: redact response + sandbox.egress audit
+    H-->>G: redacted response
+    G-->>H: tool/model result
+    H->>FC: kill VM, remove tap and rootfs copy
+```
+
+The guest never dials the host and is never given a host address. It only has
+the stdin/stdout stream the host opened; that is why no inbound port is needed
+and why a fake sandbox cannot reach the host.
 
 ## How a secret is redeemed
 
@@ -48,6 +92,38 @@ sandbox service) runs somewhere else.
 That is why the example output shows a placeholder in the sandbox, the real
 token at the Acme API, and `[REDACTED]` in the reply.
 
+
+## Host on macOS, Firecracker in Lima
+
+This is the real separation: the eipagent host process runs on macOS, while the
+Firecracker VMM and the guest microVM run inside the Lima VM. The provider
+starts Firecracker over SSH and reaches the guest with an SSH `ProxyJump`; the
+host process, model keys and secrets never run inside Lima.
+
+```bash
+# once, inside Lima
+limactl shell firecracker
+cd /Users/$(whoami)/code/eipagent
+sudo env PATH=/usr/local/go/bin:$PATH examples/firecracker/setup.sh
+
+# on macOS: host process here, Firecracker in Lima
+FC_HOST=lima-firecracker \
+FC_SSH_CONFIG="$HOME/.lima/firecracker/ssh.config" \
+go run ./examples/firecracker
+```
+
+The output starts with:
+
+```text
+Host process: darwin/... (model, secrets, broker live here)
+Firecracker host: lima-firecracker (VMM and microVM live there)
+```
+
+`limactl show-ssh firecracker` prints the equivalent of
+`ssh -F ~/.lima/firecracker/ssh.config lima-firecracker`. The guest SSH key,
+kernel and rootfs are shared through the writable Lima mount. For another
+remote host, run `setup.sh` there, make its kernel/rootfs/key paths available
+to the host process, and set `FC_HOST` and `FC_SSH_CONFIG` to its SSH target.
 
 ## The same flow on a cloud-hosted sandbox
 

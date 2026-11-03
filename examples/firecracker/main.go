@@ -79,16 +79,19 @@ func Apply(p *sdk.Plugin) error {
 `
 
 func main() {
-	if _, err := os.Stat("/dev/kvm"); err != nil {
-		log.Fatal("no /dev/kvm: run this on Linux with KVM (on macOS use Lima with nested virtualization; see examples/firecracker/README.md)")
-	}
-	if _, err := exec.LookPath("firecracker"); err != nil {
-		if _, err := os.Stat("/usr/local/bin/firecracker"); err != nil {
-			log.Fatal("firecracker is not installed: run sudo examples/firecracker/setup.sh")
+	remote := os.Getenv("FC_HOST") != ""
+	if !remote {
+		if _, err := os.Stat("/dev/kvm"); err != nil {
+			log.Fatal("no /dev/kvm: run this on Linux with KVM (on macOS use Lima with nested virtualization; see examples/firecracker/README.md)")
 		}
-	}
-	if _, err := os.Stat(envOr("FC_KERNEL", ".eipagent/firecracker/vmlinux")); err != nil {
-		log.Fatal("kernel not found: run sudo examples/firecracker/setup.sh")
+		if _, err := exec.LookPath("firecracker"); err != nil {
+			if _, err := os.Stat("/usr/local/bin/firecracker"); err != nil {
+				log.Fatal("firecracker is not installed: run sudo examples/firecracker/setup.sh")
+			}
+		}
+		if _, err := os.Stat(envOr("FC_KERNEL", ".eipagent/firecracker/vmlinux")); err != nil {
+			log.Fatal("kernel not found: run sudo examples/firecracker/setup.sh")
+		}
 	}
 	tmp, err := os.MkdirTemp("", "eip-firecracker-example-*")
 	if err != nil {
@@ -112,12 +115,14 @@ func main() {
 	other := strings.Replace(api.URL, "127.0.0.1", "localhost", 1)
 
 	// Build the agent for the guest. The example runs on the same Linux arch
-	// as the Firecracker VM (aarch64 in Lima on Apple Silicon).
+	// as the Firecracker VM (aarch64 in Lima on Apple Silicon). Set
+	// FC_GUEST_ARCH when the Firecracker host has a different arch.
+	guestArch := envOr("FC_GUEST_ARCH", runtime.GOARCH)
 	bin := filepath.Join(tmp, "eip")
 	build := exec.Command("go", "build", "-o", bin, "./cmd/eip")
-	build.Env = append(os.Environ(), "GOOS=linux", "GOARCH="+runtime.GOARCH, "CGO_ENABLED=0")
+	build.Env = append(os.Environ(), "GOOS=linux", "GOARCH="+guestArch, "CGO_ENABLED=0")
 	if out, err := build.CombinedOutput(); err != nil {
-		log.Fatalf("build eip for linux/%s (run from the repo root): %v\n%s", runtime.GOARCH, err, out)
+		log.Fatalf("build eip for linux/%s (run from the repo root): %v\n%s", guestArch, err, out)
 	}
 	dir := filepath.Join(tmp, "plugins")
 	os.MkdirAll(dir, 0o755)
@@ -127,6 +132,11 @@ func main() {
 
 	step := func(tool string, args map[string]any) map[string]any {
 		return map[string]any{"tool": tool, "args": args}
+	}
+	hostname, _ := os.Hostname()
+	fmt.Printf("Host process: %s/%s (model, secrets, broker live here)\n", runtime.GOOS, hostname)
+	if remote {
+		fmt.Printf("Firecracker host: %s (VMM and microVM live there)\n", os.Getenv("FC_HOST"))
 	}
 	fmt.Println("Booting a self-hosted Firecracker microVM and starting the agent in it...")
 	a, err := eipagent.New(

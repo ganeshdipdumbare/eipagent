@@ -43,6 +43,8 @@ type fcConfig struct {
 	memMB      int
 	tapPrefix  string
 	sshTimeout time.Duration
+	remoteHost string
+	remoteConf string
 }
 
 func firecracker() eipagent.Plugin {
@@ -54,12 +56,14 @@ func firecracker() eipagent.Plugin {
 				kernel:     envOr("FC_KERNEL", ".eipagent/firecracker/vmlinux"),
 				rootfs:     envOr("FC_ROOTFS", ".eipagent/firecracker/rootfs.ext4"),
 				sshKey:     envOr("FC_SSH_KEY", ".eipagent/firecracker/id_ed25519"),
-				workdir:    envOr("FC_WORKDIR", filepath.Join(os.TempDir(), "eip-firecracker")),
+				workdir:    envOr("FC_WORKDIR", defaultWorkdir(os.Getenv("FC_HOST"))),
 				bootArgs:   envOr("FC_BOOT_ARGS", defaultBootArgs()),
 				cpus:       envInt("FC_CPUS", 1),
 				memMB:      envInt("FC_MEM_MB", 512),
 				tapPrefix:  envOr("FC_TAP_PREFIX", "fct"),
 				sshTimeout: 90 * time.Second,
+				remoteHost: os.Getenv("FC_HOST"),
+				remoteConf: envOr("FC_SSH_CONFIG", defaultSSHConfig()),
 			}
 			cfg = cfg.absolutize()
 			if err := cfg.check(); err != nil {
@@ -91,10 +95,48 @@ func (c fcConfig) absolutize() fcConfig {
 	c.rootfs = abs(c.rootfs)
 	c.sshKey = abs(c.sshKey)
 	c.workdir = abs(c.workdir)
+	c.remoteConf = abs(c.remoteConf)
 	return c
 }
 
+func defaultWorkdir(remoteHost string) string {
+	if remoteHost != "" {
+		return "/tmp/eip-firecracker"
+	}
+	return filepath.Join(os.TempDir(), "eip-firecracker")
+}
+
+func defaultSSHConfig() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	p := filepath.Join(home, ".lima", "firecracker", "ssh.config")
+	if _, err := os.Stat(p); err != nil {
+		return ""
+	}
+	return p
+}
+
 func (c fcConfig) check() error {
+	if c.remoteHost != "" {
+		if _, err := os.Stat(c.sshKey); err != nil {
+			return fmt.Errorf("firecracker: ssh key %s: %w (run examples/firecracker/setup.sh)", c.sshKey, err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		for _, args := range [][]string{
+			{"test", "-x", c.bin},
+			{"test", "-r", c.kernel},
+			{"test", "-r", c.rootfs},
+			{"test", "-e", "/dev/kvm"},
+		} {
+			if err := c.runRemote(ctx, args...); err != nil {
+				return fmt.Errorf("firecracker: remote %s: %w", c.remoteHost, err)
+			}
+		}
+		return nil
+	}
 	for name, path := range map[string]string{c.bin: "firecracker", c.kernel: "kernel", c.rootfs: "rootfs", c.sshKey: "ssh key"} {
 		if _, err := os.Stat(name); err != nil {
 			return fmt.Errorf("firecracker: %s %s: %w (run examples/firecracker/setup.sh)", path, name, err)
@@ -113,13 +155,21 @@ func createVM(ctx context.Context, p *sdk.Plugin, cfg fcConfig, spec sdk.Sandbox
 	if len(spec.Env) > 0 {
 		return nil, errors.New("firecracker: sandbox env is not supported; put config in the rootfs or upload files")
 	}
-	if err := os.MkdirAll(cfg.workdir, 0o755); err != nil {
+	if cfg.remoteHost == "" {
+		if err := os.MkdirAll(cfg.workdir, 0o755); err != nil {
+			return nil, err
+		}
+	} else if err := cfg.runRemote(ctx, "mkdir", "-p", cfg.workdir); err != nil {
 		return nil, err
 	}
 	id := "fc-" + randomHex(6)
 	idx := randomIndex()
 	dir := filepath.Join(cfg.workdir, id)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if cfg.remoteHost == "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, err
+		}
+	} else if err := cfg.runRemote(ctx, "mkdir", "-p", dir); err != nil {
 		return nil, err
 	}
 	tap := fmt.Sprintf("%s%d", cfg.tapPrefix, idx)
@@ -134,19 +184,27 @@ func createVM(ctx context.Context, p *sdk.Plugin, cfg fcConfig, spec sdk.Sandbox
 		}
 	}()
 
-	if err := runPriv(ctx, "ip", "tuntap", "add", "dev", tap, "mode", "tap"); err != nil {
+	if err := cfg.runPriv(ctx, "ip", "tuntap", "add", "dev", tap, "mode", "tap"); err != nil {
 		return nil, fmt.Errorf("firecracker: create tap %s: %w", tap, err)
 	}
-	if err := runPriv(ctx, "ip", "addr", "add", hostIP+"/30", "dev", tap); err != nil {
+	if err := cfg.runPriv(ctx, "ip", "addr", "add", hostIP+"/30", "dev", tap); err != nil {
 		return nil, fmt.Errorf("firecracker: address tap %s: %w", tap, err)
 	}
-	if err := runPriv(ctx, "ip", "link", "set", "dev", tap, "up"); err != nil {
+	if err := cfg.runPriv(ctx, "ip", "link", "set", "dev", tap, "up"); err != nil {
 		return nil, fmt.Errorf("firecracker: bring up tap %s: %w", tap, err)
 	}
 	rootfs := filepath.Join(dir, "rootfs.ext4")
-	if out, err := exec.CommandContext(ctx, "cp", "--reflink=auto", cfg.rootfs, rootfs).CombinedOutput(); err != nil {
-		if out2, err2 := exec.CommandContext(ctx, "cp", cfg.rootfs, rootfs).CombinedOutput(); err2 != nil {
-			return nil, fmt.Errorf("firecracker: copy rootfs: %v %s / %v %s", err, out, err2, out2)
+	if cfg.remoteHost == "" {
+		if out, err := exec.CommandContext(ctx, "cp", "--reflink=auto", cfg.rootfs, rootfs).CombinedOutput(); err != nil {
+			if out2, err2 := exec.CommandContext(ctx, "cp", cfg.rootfs, rootfs).CombinedOutput(); err2 != nil {
+				return nil, fmt.Errorf("firecracker: copy rootfs: %v %s / %v %s", err, out, err2, out2)
+			}
+		}
+	} else {
+		if err := cfg.runRemote(ctx, "cp", "--reflink=auto", cfg.rootfs, rootfs); err != nil {
+			if err := cfg.runRemote(ctx, "cp", cfg.rootfs, rootfs); err != nil {
+				return nil, fmt.Errorf("firecracker: remote copy rootfs: %w", err)
+			}
 		}
 	}
 	cpus, mem := cfg.cpus, cfg.memMB
@@ -156,17 +214,26 @@ func createVM(ctx context.Context, p *sdk.Plugin, cfg fcConfig, spec sdk.Sandbox
 	if spec.MemoryMB > 0 {
 		mem = spec.MemoryMB
 	}
-	if err := startFirecracker(cfg, m); err != nil {
-		return nil, err
-	}
-	if err := configureFirecracker(ctx, cfg, m, cpus, mem); err != nil {
-		return nil, err
+	if cfg.remoteHost != "" {
+		if err := writeVMConfig(ctx, cfg, m, cpus, mem); err != nil {
+			return nil, err
+		}
+		if err := startFirecrackerRemote(ctx, cfg, m); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := startFirecracker(cfg, m); err != nil {
+			return nil, err
+		}
+		if err := configureFirecracker(ctx, cfg, m, cpus, mem); err != nil {
+			return nil, err
+		}
 	}
 	if err := waitSSH(ctx, cfg, guestIP, cfg.sshTimeout); err != nil {
 		return nil, err
 	}
 	m.VCPUs, m.MemoryMB = cpus, mem
-	if err := writeMeta(m); err != nil {
+	if err := writeMeta(ctx, cfg, m); err != nil {
 		return nil, err
 	}
 	box := wrapVM(cfg, m)
@@ -193,16 +260,26 @@ type meta struct {
 	MemoryMB int    `json:"memory_mb"`
 }
 
-func writeMeta(m *meta) error {
+func writeMeta(ctx context.Context, cfg fcConfig, m *meta) error {
 	b, err := json.Marshal(m)
 	if err != nil {
 		return err
+	}
+	if cfg.remoteHost != "" {
+		return cfg.remoteWrite(ctx, filepath.Join(m.Dir, "meta.json"), b)
 	}
 	return os.WriteFile(filepath.Join(m.Dir, "meta.json"), b, 0o644)
 }
 
 func attachVM(ctx context.Context, p *sdk.Plugin, cfg fcConfig, id string) (*sdk.Sandbox, error) {
-	b, err := os.ReadFile(filepath.Join(cfg.workdir, id, "meta.json"))
+	path := filepath.Join(cfg.workdir, id, "meta.json")
+	var b []byte
+	var err error
+	if cfg.remoteHost != "" {
+		b, err = cfg.remoteRead(ctx, path)
+	} else {
+		b, err = os.ReadFile(path)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("firecracker: attach %s: %w", id, err)
 	}
@@ -245,7 +322,7 @@ func startFirecracker(cfg fcConfig, m *meta) error {
 	if _, err := os.Stat(m.Socket); err != nil {
 		return fmt.Errorf("firecracker: API socket did not appear: %w", err)
 	}
-	_ = runPriv(context.Background(), "chmod", "666", m.Socket)
+	_ = cfg.runPriv(context.Background(), "chmod", "666", m.Socket)
 	return nil
 }
 
@@ -314,21 +391,67 @@ func waitSSH(ctx context.Context, cfg fcConfig, ip string, timeout time.Duration
 	return fmt.Errorf("firecracker: guest SSH at %s not ready: %w", ip, last)
 }
 
+func writeVMConfig(ctx context.Context, cfg fcConfig, m *meta, cpus, mem int) error {
+	vm := map[string]any{
+		"boot-source": map[string]any{
+			"kernel_image_path": cfg.kernel,
+			"boot_args":         cfg.bootArgs,
+		},
+		"drives": []any{map[string]any{
+			"drive_id":       "rootfs",
+			"path_on_host":   filepath.Join(m.Dir, "rootfs.ext4"),
+			"is_root_device": true,
+			"is_read_only":   false,
+		}},
+		"machine-config": map[string]any{
+			"vcpu_count":   cpus,
+			"mem_size_mib": mem,
+		},
+		"network-interfaces": []any{map[string]any{
+			"iface_id":      "net1",
+			"guest_mac":     m.MAC,
+			"host_dev_name": m.Tap,
+		}},
+	}
+	b, err := json.MarshalIndent(vm, "", "  ")
+	if err != nil {
+		return err
+	}
+	return cfg.remoteWrite(ctx, filepath.Join(m.Dir, "vm.json"), b)
+}
+
+func startFirecrackerRemote(ctx context.Context, cfg fcConfig, m *meta) error {
+	script := fmt.Sprintf("echo $$ > %s && exec %s --config-file %s",
+		shellQuote(m.PidFile), shellQuote(cfg.bin), shellQuote(filepath.Join(m.Dir, "vm.json")))
+	cmd := fmt.Sprintf("sudo -n setsid sh -c %s </dev/null >>%s 2>&1 &",
+		shellQuote(script), shellQuote(filepath.Join(m.Dir, "firecracker.log")))
+	return cfg.runRemoteRaw(ctx, cmd)
+}
+
 func stop(m *meta, cfg fcConfig) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	if b, err := os.ReadFile(m.PidFile); err == nil {
-		pid := strings.TrimSpace(string(b))
+	var pidb []byte
+	var err error
+	if cfg.remoteHost != "" {
+		pidb, err = cfg.remoteRead(ctx, m.PidFile)
+	} else {
+		pidb, err = os.ReadFile(m.PidFile)
+	}
+	if err == nil {
+		pid := strings.TrimSpace(string(pidb))
 		if pid != "" {
-			_ = runPriv(ctx, "kill", "-TERM", pid)
+			_ = cfg.runPriv(ctx, "kill", "-TERM", pid)
 			time.Sleep(300 * time.Millisecond)
-			_ = runPriv(ctx, "kill", "-KILL", pid)
+			_ = cfg.runPriv(ctx, "kill", "-KILL", pid)
 		}
 	}
-	_ = runPriv(ctx, "pkill", "-f", m.Socket)
-	_ = runPriv(ctx, "ip", "link", "del", m.Tap)
-	if err := os.RemoveAll(m.Dir); err != nil {
-		_ = runPriv(ctx, "rm", "-rf", m.Dir)
+	_ = cfg.runPriv(ctx, "pkill", "-f", m.Socket)
+	_ = cfg.runPriv(ctx, "ip", "link", "del", m.Tap)
+	if cfg.remoteHost != "" {
+		_ = cfg.runPriv(ctx, "rm", "-rf", m.Dir)
+	} else if err := os.RemoveAll(m.Dir); err != nil {
+		_ = cfg.runPriv(ctx, "rm", "-rf", m.Dir)
 	}
 }
 
@@ -501,8 +624,16 @@ func wrapVM(cfg fcConfig, m *meta) *sdk.Sandbox {
 func sshRun(ctx context.Context, cfg fcConfig, ip, line string, stdin []byte) *exec.Cmd {
 	args := []string{"-i", cfg.sshKey,
 		"-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
-		"-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "LogLevel=ERROR",
-		"-T", "root@" + ip, "--", "bash", "-c", shellQuote(line)}
+		"-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "LogLevel=ERROR"}
+	if cfg.remoteHost != "" {
+		jump := "ssh"
+		if cfg.remoteConf != "" {
+			jump += " -F " + shellQuote(cfg.remoteConf)
+		}
+		jump += " -W %h:%p " + shellQuote(cfg.remoteHost)
+		args = append(args, "-o", "ProxyCommand="+jump)
+	}
+	args = append(args, "-T", "root@"+ip, "--", "bash", "-c", shellQuote(line))
 	cmd := exec.CommandContext(ctx, "ssh", args...)
 	if stdin != nil {
 		cmd.Stdin = bytes.NewReader(stdin)
@@ -517,7 +648,13 @@ func priv() []string {
 	return []string{"sudo", "-n"}
 }
 
-func runPriv(ctx context.Context, name string, args ...string) error {
+// runPriv runs a privileged command on this host, or on the remote
+// Firecracker host when FC_HOST is set.
+func (c fcConfig) runPriv(ctx context.Context, name string, args ...string) error {
+	if c.remoteHost != "" {
+		all := append([]string{"sudo", "-n", name}, args...)
+		return c.runRemote(ctx, all...)
+	}
 	all := append(priv(), name)
 	all = append(all, args...)
 	out, err := exec.CommandContext(ctx, all[0], all[1:]...).CombinedOutput()
@@ -525,6 +662,54 @@ func runPriv(ctx context.Context, name string, args ...string) error {
 		return fmt.Errorf("%s: %w: %s", strings.Join(all, " "), err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+func (c fcConfig) remoteSSHBase() []string {
+	args := []string{}
+	if c.remoteConf != "" {
+		args = append(args, "-F", c.remoteConf)
+	}
+	return append(args, "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no",
+		"-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR", c.remoteHost)
+}
+
+func (c fcConfig) runRemote(ctx context.Context, args ...string) error {
+	return c.runRemoteRaw(ctx, shellLine(args[0], args[1:]))
+}
+
+func (c fcConfig) runRemoteRaw(ctx context.Context, command string) error {
+	sshArgs := append(c.remoteSSHBase(), command)
+	out, err := exec.CommandContext(ctx, "ssh", sshArgs...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("ssh %s: %w: %s", c.remoteHost, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func (c fcConfig) remoteOutput(ctx context.Context, command string) ([]byte, error) {
+	sshArgs := append(c.remoteSSHBase(), command)
+	var out, errb bytes.Buffer
+	cmd := exec.CommandContext(ctx, "ssh", sshArgs...)
+	cmd.Stdout, cmd.Stderr = &out, &errb
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("ssh %s: %w: %s", c.remoteHost, err, strings.TrimSpace(errb.String()))
+	}
+	return out.Bytes(), nil
+}
+
+func (c fcConfig) remoteWrite(ctx context.Context, path string, data []byte) error {
+	sshArgs := append(c.remoteSSHBase(), "cat > "+shellQuote(path))
+	cmd := exec.CommandContext(ctx, "ssh", sshArgs...)
+	cmd.Stdin = bytes.NewReader(data)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("ssh %s: write %s: %w: %s", c.remoteHost, path, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func (c fcConfig) remoteRead(ctx context.Context, path string) ([]byte, error) {
+	return c.remoteOutput(ctx, "cat -- "+shellQuote(path))
 }
 
 func envOr(key, def string) string {
