@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -84,6 +85,16 @@ func attr(k string, v any) map[string]any {
 func Apply(p *sdk.Plugin) error {
 	endpoint := strings.TrimRight(p.ConfigString("endpoint", "http://localhost:4318"), "/")
 	headers := p.ConfigMap("headers")
+	u, err := url.Parse(endpoint)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return fmt.Errorf("trace_otlp: endpoint must be an absolute http(s) URL")
+	}
+	if u.User != nil {
+		return fmt.Errorf("trace_otlp: endpoint must not contain credentials")
+	}
+	if len(headers) > 0 && u.Scheme != "https" && !otlpLocalHost(u.Hostname()) {
+		return fmt.Errorf("trace_otlp: endpoint must be https when headers are configured")
+	}
 	service := p.ConfigString("service_name", "eipagent")
 	content := p.ConfigBool("content", false)
 	flushEvery := time.Duration(p.ConfigInt("flush_seconds", 2)) * time.Second
@@ -91,7 +102,7 @@ func Apply(p *sdk.Plugin) error {
 	if maxQueue < 1 || flushEvery <= 0 {
 		return fmt.Errorf("trace_otlp: max_queue and flush_seconds must be positive")
 	}
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{Timeout: 10 * time.Second, CheckRedirect: sdk.RefuseRedirect}
 
 	var mu sync.Mutex
 	var queue []span
@@ -236,7 +247,7 @@ func Apply(p *sdk.Plugin) error {
 		}
 		s := span{TraceID: r.trace, SpanID: randHex(8), ParentSpanID: r.id, Name: "chat " + model, Kind: 3, Start: nanos(t), End: nanos(time.Now())}
 		if err != nil {
-			s.Status = map[string]any{"code": 2, "message": sdk.Redact(err.Error())}
+			s.Status = map[string]any{"code": 2, "message": statusMessage(err.Error(), "model error", content)}
 		} else {
 			attrs = append(attrs, attr("gen_ai.usage.input_tokens", resp.Usage.InputTokens), attr("gen_ai.usage.output_tokens", resp.Usage.OutputTokens),
 				attr("eip.tool_calls", len(resp.Message.ToolCalls)))
@@ -265,11 +276,11 @@ func Apply(p *sdk.Plugin) error {
 		s := span{TraceID: r.trace, SpanID: randHex(8), ParentSpanID: r.id, Name: "execute_tool " + req.Call.Name, Kind: 1, Start: nanos(t), End: nanos(time.Now())}
 		switch {
 		case err != nil:
-			s.Status = map[string]any{"code": 2, "message": sdk.Redact(err.Error())}
+			s.Status = map[string]any{"code": 2, "message": statusMessage(err.Error(), "tool error", content)}
 		case res.Interrupt != nil:
 			attrs = append(attrs, attr("eip.interrupted", true))
 		case res.IsError:
-			s.Status = map[string]any{"code": 2, "message": sdk.Redact(res.Content)}
+			s.Status = map[string]any{"code": 2, "message": statusMessage(res.Content, "tool error", content)}
 		case content:
 			attrs = append(attrs, attr("eip.output", res.Content))
 		}
@@ -278,4 +289,20 @@ func Apply(p *sdk.Plugin) error {
 		return res, err
 	})
 	return nil
+}
+
+// statusMessage keeps error text out of spans unless content is on.
+func statusMessage(s, fallback string, content bool) string {
+	if !content {
+		return fallback
+	}
+	s = sdk.Redact(s)
+	if len(s) > 1024 {
+		s = s[:1024] + "..."
+	}
+	return s
+}
+
+func otlpLocalHost(h string) bool {
+	return h == "localhost" || h == "127.0.0.1" || h == "::1"
 }

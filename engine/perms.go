@@ -72,7 +72,7 @@ var osSyms = map[string][]string{
 	PermEnv:        {"Getenv", "LookupEnv", "Environ", "ExpandEnv", "Hostname", "UserHomeDir", "TempDir", "Getwd"},
 	PermEnvSecrets: {"Getenv", "LookupEnv", "Environ", "ExpandEnv"},
 	PermFSRead:     {"Open", "ReadFile", "ReadDir", "Stat", "Lstat", "DirFS", "Readlink", "SameFile", "Getwd", "TempDir", "UserHomeDir"},
-	PermFSWrite:    {"Create", "CreateTemp", "WriteFile", "Mkdir", "MkdirAll", "MkdirTemp", "Remove", "RemoveAll", "Rename", "OpenFile", "Chmod", "Chtimes", "Truncate", "Symlink", "Link", "CopyFS"},
+	PermFSWrite:    {"Create", "CreateTemp", "WriteFile", "Mkdir", "MkdirAll", "MkdirTemp", "Remove", "RemoveAll", "Rename", "OpenFile", "Chmod", "Chtimes", "Truncate"},
 	PermExec:       {"StartProcess", "FindProcess", "Getpid", "Executable", "ProcAttr", "Process", "ProcessState", "Signal", "Interrupt", "Kill"},
 }
 
@@ -131,8 +131,10 @@ const (
 var builtinOnly = map[string]bool{"Redact": true, "RedactMap": true, "RedactValue": true}
 
 // buildSymbols returns the symbol table for a plugin holding perms.
-// builtin is true for plugins embedded in the binary.
-func buildSymbols(perms []string, builtin bool) map[string]map[string]reflect.Value {
+// builtin is true for plugins embedded in the binary. writeDeny lists
+// paths holding the agent's own configuration and plugin store, which
+// fs:write may not modify.
+func buildSymbols(perms []string, builtin bool, writeDeny []string) map[string]map[string]reflect.Value {
 	has := map[string]bool{}
 	for _, p := range perms {
 		has[p] = true
@@ -187,11 +189,9 @@ func buildSymbols(perms []string, builtin bool) map[string]map[string]reflect.Va
 			filtered[name] = v
 		}
 	}
-	if osAllowed["OpenFile"] && !has[PermFSRead] {
-		// fs:write alone must not read: OpenFile only for writing.
-		filtered["OpenFile"] = reflect.ValueOf(writeOnlyOpenFile)
-	}
+	guardOSSymbols(filtered, has, writeDeny)
 	out["os/os"] = filtered
+	guardIoutilSymbols(out, has, writeDeny)
 	if has[PermExec] {
 		out["os/exec/exec"] = map[string]reflect.Value{
 			"Command":        reflect.ValueOf(exec.Command),
@@ -221,14 +221,6 @@ func buildSymbols(perms []string, builtin bool) map[string]map[string]reflect.Va
 		}
 	}
 	return out
-}
-
-// writeOnlyOpenFile is os.OpenFile for plugins with fs:write but not fs:read.
-func writeOnlyOpenFile(name string, flag int, perm os.FileMode) (*os.File, error) {
-	if flag&(os.O_WRONLY|os.O_RDWR) != os.O_WRONLY {
-		return nil, fmt.Errorf("open %s: reading files needs the fs:read permission (use os.O_WRONLY)", name)
-	}
-	return os.OpenFile(name, flag, perm)
 }
 
 // checkImports verifies every import is covered by perms.

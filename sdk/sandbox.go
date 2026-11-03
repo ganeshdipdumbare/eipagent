@@ -177,6 +177,21 @@ func CheckSandboxEnv(env map[string]string) error {
 // checked after resolving symlinks, and a directory is refused when it
 // directly holds a runtime socket (/var/run, /run ...).
 func CheckSandboxSpec(spec SandboxSpec) error {
+	if spec.Workdir != "" {
+		if !filepath.IsAbs(spec.Workdir) || strings.HasPrefix(spec.Workdir, "-") {
+			return fmt.Errorf("sandbox workdir %q must be an absolute path", spec.Workdir)
+		}
+		for _, r := range spec.Workdir {
+			if r < 0x20 || r == 0x7f {
+				return fmt.Errorf("sandbox workdir %q contains a control character", spec.Workdir)
+			}
+		}
+		for _, part := range strings.Split(filepath.ToSlash(spec.Workdir), "/") {
+			if part == ".." {
+				return fmt.Errorf("sandbox workdir %q must not contain ..", spec.Workdir)
+			}
+		}
+	}
 	if err := CheckSandboxEnv(spec.Env); err != nil {
 		return err
 	}

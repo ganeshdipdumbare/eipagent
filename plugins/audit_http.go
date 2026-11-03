@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -42,12 +43,23 @@ var Permissions = []string{"net"}
 var Requires = []string{"audit", "?secrets"}
 
 func Apply(p *sdk.Plugin) error {
-	url := p.ConfigString("url", "")
-	if url == "" {
+	endpoint := p.ConfigString("url", "")
+	if endpoint == "" {
 		return fmt.Errorf("audit_http: config url is required")
 	}
 	headers := p.ConfigMap("headers")
 	hmacRef := p.ConfigString("hmac_key", "")
+	u, err := url.Parse(endpoint)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return fmt.Errorf("audit_http: url must be an absolute http(s) URL")
+	}
+	if u.User != nil {
+		return fmt.Errorf("audit_http: url must not contain credentials")
+	}
+	// A custom header or an HMAC key is a credential: keep it on TLS.
+	if (len(headers) > 0 || hmacRef != "") && u.Scheme != "https" && !localHost(u.Hostname()) {
+		return fmt.Errorf("audit_http: url must be https when headers or hmac_key are configured")
+	}
 	batchSize := p.ConfigInt("batch_size", 100)
 	flushEvery := time.Duration(p.ConfigInt("flush_seconds", 2)) * time.Second
 	maxQueue := p.ConfigInt("max_queue", 10000)
@@ -58,13 +70,16 @@ func Apply(p *sdk.Plugin) error {
 	if maxQueue < batchSize {
 		return fmt.Errorf("audit_http: max_queue (%d) must be at least batch_size (%d)", maxQueue, batchSize)
 	}
-	client := &http.Client{Timeout: time.Duration(p.ConfigInt("timeout_seconds", 10)) * time.Second}
+	client := &http.Client{
+		Timeout:       time.Duration(p.ConfigInt("timeout_seconds", 10)) * time.Second,
+		CheckRedirect: sdk.RefuseRedirect,
+	}
 
 	var mu sync.Mutex
 	var queue [][]byte
 	dropped := 0
 	post := func(body []byte) error {
-		req, err := http.NewRequest("POST", url, bytes.NewReader(body))
+		req, err := http.NewRequest("POST", endpoint, bytes.NewReader(body))
 		if err != nil {
 			return err
 		}
@@ -95,7 +110,7 @@ func Apply(p *sdk.Plugin) error {
 		}
 		resp.Body.Close()
 		if resp.StatusCode >= 300 {
-			return fmt.Errorf("HTTP %d", resp.StatusCode)
+			return &httpStatusError{code: resp.StatusCode}
 		}
 		return nil
 	}
@@ -129,6 +144,13 @@ func Apply(p *sdk.Plugin) error {
 				time.Sleep(time.Duration(200*(try+1)) * time.Millisecond)
 			}
 			if err != nil {
+				if se, ok := err.(*httpStatusError); ok && !retryableStatus(se.code) {
+					// A permanent rejection (auth error, wrong endpoint) must
+					// not block every later record behind it: drop this batch
+					// and keep the stream moving.
+					p.Logf("audit_http: dropping %d records: %v", n, err)
+					continue
+				}
 				// Put them back in front, in order; if the queue is now over
 				// max_queue, the oldest go (and are counted as dropped).
 				mu.Lock()
@@ -138,9 +160,16 @@ func Apply(p *sdk.Plugin) error {
 					queue = queue[len(queue)-maxQueue:]
 				}
 				mu.Unlock()
-				p.Logf("audit_http: %d records not delivered yet: %v", n, err)
+				p.Logf("audit_http: %d records not delivered yet: %s", n, safeURLError(err))
 				return
 			}
+		}
+	}
+	wake := make(chan struct{}, 1)
+	signal := func() {
+		select {
+		case wake <- struct{}{}:
+		default:
 		}
 	}
 	p.Effect(func() func() {
@@ -155,6 +184,8 @@ func Apply(p *sdk.Plugin) error {
 				case <-stop:
 					return
 				case <-t.C:
+					flush()
+				case <-wake:
 					flush()
 				}
 			}
@@ -182,7 +213,28 @@ func Apply(p *sdk.Plugin) error {
 		full := len(queue) >= batchSize
 		mu.Unlock()
 		if full {
-			go flush()
+			signal()
 		}
 	}})
 }
+
+func localHost(h string) bool {
+	return h == "localhost" || h == "127.0.0.1" || h == "::1"
+}
+
+func safeURLError(err error) string {
+	if ue, ok := err.(*url.Error); ok {
+		host := ""
+		if u, perr := url.Parse(ue.URL); perr == nil {
+			host = u.Hostname()
+		}
+		return fmt.Sprintf("%s %s: %v", ue.Op, host, ue.Err)
+	}
+	return sdk.Redact(err.Error())
+}
+
+type httpStatusError struct{ code int }
+
+func (e *httpStatusError) Error() string { return fmt.Sprintf("HTTP %d", e.code) }
+
+func retryableStatus(code int) bool { return code == 408 || code == 429 || code >= 500 }

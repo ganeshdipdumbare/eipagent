@@ -112,15 +112,54 @@ func (r egressRule) allows(method, host, p string) bool {
 	if p == "" {
 		p = "/"
 	}
-	if ok, _ := path.Match(r.path, p); ok {
-		return true
+	if strings.HasSuffix(r.path, "*") {
+		// A trailing * matches the prefix itself and paths below it, but
+		// never a sibling that merely starts with the same text
+		// ("/orders*" must not admit "/ordersX").
+		prefix := strings.TrimSuffix(r.path, "*")
+		if p == prefix {
+			return true
+		}
+		if strings.HasSuffix(prefix, "/") {
+			return strings.HasPrefix(p, prefix)
+		}
+		return strings.HasPrefix(p, prefix+"/")
 	}
-	return strings.HasSuffix(r.path, "*") && strings.HasPrefix(p, strings.TrimSuffix(r.path, "*"))
+	ok, _ := path.Match(r.path, p)
+	return ok
 }
 
 func anyAllows(rules []egressRule, method, host, p string) bool {
 	for _, r := range rules {
 		if r.allows(method, host, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// requestPath is the decoded, cleaned path used for rule matching and
+// logging, so "/a/../b" is matched as "/b" rather than by its raw text.
+func requestPath(u *url.URL) string {
+	p := path.Clean(u.Path)
+	if p == "" || p == "." {
+		return "/"
+	}
+	if !strings.HasPrefix(p, "/") {
+		return "/" + p
+	}
+	return p
+}
+
+// ambiguousPath reports a path whose meaning can change between the rule
+// check and the destination: encoded separators or dot segments.
+func ambiguousPath(u *url.URL) bool {
+	raw := strings.ToLower(u.EscapedPath())
+	if strings.Contains(raw, "%2f") || strings.Contains(raw, "%5c") || strings.Contains(raw, "%2e") {
+		return true
+	}
+	for _, part := range strings.Split(u.Path, "/") {
+		if part == ".." {
 			return true
 		}
 	}
@@ -247,10 +286,7 @@ func (b *broker) fetch(ctx context.Context, req wireHTTPReq) (resp *wireHTTPResp
 		rec["error"] = err.Error()
 		return nil, err
 	}
-	dest, p := u.Hostname(), u.EscapedPath()
-	if p == "" {
-		p = "/"
-	}
+	dest, p := u.Hostname(), requestPath(u)
 	rec["host"], rec["path"] = dest, sdk.Redact(p)
 	deny := func(e error) (*wireHTTPResp, error) {
 		rec["decision"], rec["error"] = "denied", e.Error()
@@ -263,6 +299,9 @@ func (b *broker) fetch(ctx context.Context, req wireHTTPReq) (resp *wireHTTPResp
 	}
 	all.Write(req.Body)
 	phs := sdk.FindPlaceholders(all.String())
+	if len(phs) > 0 && ambiguousPath(u) {
+		return deny(fmt.Errorf("sandbox egress: ambiguous path %q (encoded separators or dot segments) with a secret", u.EscapedPath()))
+	}
 	values := map[string]string{}
 	for _, ph := range phs {
 		b.mu.Lock()

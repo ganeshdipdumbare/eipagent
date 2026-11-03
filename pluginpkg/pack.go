@@ -57,6 +57,14 @@ func Build(src *Source, key ed25519.PrivateKey) ([]byte, *Report, error) {
 	clean := *src.Manifest
 	clean.Files = nil // recomputed below
 	src = &Source{Name: src.Name, Manifest: &clean, Files: src.Files}
+	for n := range src.Files {
+		if n == ManifestFile || n == SignatureFile {
+			return nil, nil, fmt.Errorf("plugin %s: source file %q is reserved", src.Name, n)
+		}
+		if n == "" || n == "." || n == ".." || n != path.Base(n) || strings.ContainsAny(n, `\:`) {
+			return nil, nil, fmt.Errorf("plugin %s: unsafe source file name %q", src.Name, n)
+		}
+	}
 	rep := Lint(src)
 	if err := rep.Err(); err != nil {
 		return nil, rep, err
@@ -232,6 +240,10 @@ type VerifyOptions struct {
 	TrustedKeys []ed25519.PublicKey
 	// RequireSignature refuses unsigned packages (secure mode).
 	RequireSignature bool
+	// AllowUntrustedSignature accepts a package that carries a signature
+	// when no trusted keys are configured (dev mode). Without it such a
+	// package is refused: an unverifiable signature is not "unsigned".
+	AllowUntrustedSignature bool
 }
 
 // Verification is what Verify established.
@@ -252,6 +264,9 @@ func Verify(pkg *Package, opts VerifyOptions) (*Verification, error) {
 			return nil, err
 		}
 		v.Signer = signer
+	}
+	if pkg.Signature != nil && len(opts.TrustedKeys) == 0 && !opts.AllowUntrustedSignature {
+		return nil, fmt.Errorf("%s: package is signed but no trusted keys are configured to verify it", pkg.Name)
 	}
 	if opts.RequireSignature && v.Signer == "" {
 		if pkg.Signature == nil {

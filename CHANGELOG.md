@@ -4,6 +4,14 @@ All notable changes to eipagent. Versions follow [semantic versioning](https://s
 
 ## Unreleased
 
+### Changed
+
+- **Behavior change:** `trigger_webhook` now requires a timestamp by default. Senders sign `METHOD\nPATH\n<timestamp>\n<body>` and send the timestamp in `X-Signature-Timestamp` (override with `timestamp_header`, or set it to `""` together with `allow_replay_after_window: true` for senders that cannot send one). Binding the signature to the method and path also stops a delivery for one route being replayed against another that shares the secret. The trigger template and `hello_trigger` example use the same format and require a secret of at least 32 bytes.
+
+### Security
+
+- `audit_http` and `trace_otlp` refuse redirects, and refuse a plaintext endpoint when secret headers are configured (loopback is allowed). `audit_http` drops a permanently rejected batch instead of blocking every later record behind it. `tool_mcp` no longer holds the request mutex while writing to a stdio server.
+
 ## v0.4.3 — 2026-11-03
 
 ### Fixed

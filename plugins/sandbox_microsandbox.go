@@ -122,7 +122,7 @@ func Apply(p *sdk.Plugin) error {
 			if spec.TTLSeconds > 0 {
 				args = append(args, fmt.Sprintf("--max-duration=%ds", spec.TTLSeconds))
 			}
-			args = append(append(args, extra...), img)
+			args = append(append(args, extra...), "--", img)
 			if _, errs, code, err := run(c, nil, args...); err != nil || code != 0 {
 				return nil, fmt.Errorf("sandbox_microsandbox: %v %s", err, strings.TrimSpace(errs))
 			}
@@ -132,10 +132,13 @@ func Apply(p *sdk.Plugin) error {
 			if !validID(id) { // ids come back from saved threads; never let one become a flag
 				return nil, fmt.Errorf("sandbox_microsandbox: invalid sandbox name %q", id)
 			}
-			if _, _, code, err := run(c, nil, "inspect", id); err != nil || code != 0 {
+			if _, _, code, err := run(c, nil, "inspect", "--", id); err != nil || code != 0 {
 				return nil, fmt.Errorf("sandbox %s not found", id)
 			}
-			out, _, _, _ := run(c, nil, "exec", "-q", "--no-stdin", id, "--", "pwd")
+			out, _, code, err := run(c, nil, "exec", "-q", "--no-stdin", id, "--", "pwd")
+			if err != nil || code != 0 || strings.TrimSpace(out) == "" {
+				return nil, fmt.Errorf("sandbox %s: cannot determine the workdir", id)
+			}
 			return vm(id, name, strings.TrimSpace(out), run, start), nil
 		},
 	})

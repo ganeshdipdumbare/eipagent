@@ -322,7 +322,7 @@ func ReadDir(path string) (*Source, error) {
 		return nil, err
 	}
 	for _, e := range ents {
-		if e.IsDir() || strings.HasPrefix(e.Name(), ".") || strings.HasSuffix(e.Name(), "_test.go") || strings.HasSuffix(e.Name(), ".eip") {
+		if e.IsDir() || strings.HasPrefix(e.Name(), ".") || strings.HasSuffix(e.Name(), "_test.go") || strings.HasSuffix(e.Name(), ".eip") || e.Name() == SignatureFile {
 			continue
 		}
 		b, err := os.ReadFile(filepath.Join(path, e.Name()))

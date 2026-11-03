@@ -28,7 +28,7 @@ import (
 // directory instead of one per sandbox: every thread then shares it and
 // its files outlive sandbox_destroy, so use it only for a single user's
 // own workspace), env_allow (["PATH","HOME","LANG"]; secret-looking
-// names are never passed without the env:secrets permission).
+// names are refused unless env_secrets: true is set explicitly).
 //
 // Example:
 //
@@ -42,17 +42,21 @@ func Apply(p *sdk.Plugin) error {
 	if fixed != "" {
 		p.Logf("sandbox_local: every sandbox shares %s (fixed workdir); threads can see each other's files", fixed)
 	}
+	envSecrets := p.ConfigBool("env_secrets", false)
 	allow := p.ConfigStrings("env_allow")
 	if len(allow) == 0 {
 		allow = []string{"PATH", "HOME", "LANG", "TMPDIR"}
 	}
 	baseEnv := []string{}
 	for _, k := range allow {
+		if sdk.SecretLike(k) && !envSecrets {
+			return fmt.Errorf("sandbox_local: env_allow %s looks like a credential; set env_secrets: true if that is intended", k)
+		}
 		if v, ok := os.LookupEnv(k); ok {
 			baseEnv = append(baseEnv, k+"="+v)
 		}
 	}
-	open := func(id, dir string) *sdk.Sandbox { return box(id, dir, baseEnv) }
+	open := func(id, dir string) *sdk.Sandbox { return box(id, dir, baseEnv, envSecrets) }
 	return p.Provide("sandbox/local", &sdk.SandboxProvider{
 		Name:      "local",
 		Isolation: "none",
@@ -103,8 +107,12 @@ func validBoxID(id string) bool {
 	return len(id) > len("local-")
 }
 
-func box(id, dir string, baseEnv []string) *sdk.Sandbox {
+func box(id, dir string, baseEnv []string, envSecrets bool) *sdk.Sandbox {
 	abs, _ := filepath.Abs(dir)
+	rootReal, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		rootReal = abs
+	}
 	resolve := func(fpath string) (string, error) {
 		if !filepath.IsAbs(fpath) {
 			fpath = filepath.Join(abs, fpath)
@@ -158,7 +166,14 @@ func box(id, dir string, baseEnv []string) *sdk.Sandbox {
 			}
 			cmd.Dir = d
 		}
-		cmd.Env = append([]string{}, baseEnv...)
+		cmd.Env = nil
+		for _, kv := range baseEnv {
+			name, _, _ := strings.Cut(kv, "=")
+			if !envSecrets && sdk.SecretLike(name) {
+				continue
+			}
+			cmd.Env = append(cmd.Env, kv)
+		}
 		for k, v := range req.Env {
 			cmd.Env = append(cmd.Env, k+"="+v)
 		}
@@ -268,6 +283,13 @@ func box(id, dir string, baseEnv []string) *sdk.Sandbox {
 			}
 			if r == abs {
 				return errors.New("refusing to remove the sandbox root")
+			}
+			if id == "local" {
+				// The fixed workdir is shared: never remove the root through
+				// a path that resolves back to it.
+				if real, err := filepath.EvalSymlinks(r); err == nil && real == rootReal {
+					return errors.New("refusing to remove the shared sandbox root")
+				}
 			}
 			return os.RemoveAll(r)
 		},

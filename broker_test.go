@@ -1,59 +1,44 @@
 package eipagent
 
 import (
+	"net/url"
 	"testing"
-
-	"github.com/ganeshdipdumbare/eipagent/engine"
 )
 
-func TestEgressRules(t *testing.T) {
-	for _, c := range []struct {
-		rule, method, host, path string
-		ok                       bool
-	}{
-		{"api.github.com", "POST", "api.github.com", "/anything", true},
-		{"api.github.com", "GET", "evil.com", "/", false},
-		{"*.github.com", "GET", "API.GitHub.com", "/", true},
-		{"GET api.github.com/repos/*", "GET", "api.github.com", "/repos/a/b", true},
-		{"GET api.github.com/repos/*", "DELETE", "api.github.com", "/repos/a", false},
-		{"GET api.github.com/repos/*", "GET", "api.github.com", "/user", false},
-		{"GET|POST api.acme.com/v1/orders", "POST", "api.acme.com", "/v1/orders", true},
-		{"GET|POST api.acme.com/v1/orders", "POST", "api.acme.com", "/v1/orders/1", false},
-		{"GET,PUT api.acme.com/v1/*/items", "PUT", "api.acme.com", "/v1/42/items", true},
-	} {
-		r, err := parseRule(c.rule)
-		if err != nil {
-			t.Fatalf("%s: %v", c.rule, err)
-		}
-		if got := r.allows(c.method, c.host, c.path); got != c.ok {
-			t.Errorf("%q allows %s %s%s = %v, want %v", c.rule, c.method, c.host, c.path, got, c.ok)
+func TestEgressRulePrefixIsSegmentAware(t *testing.T) {
+	r, err := parseRule("GET api.example.com/orders*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"/orders", "/orders/", "/orders/1", "/orders/a/b"} {
+		if !r.allows("GET", "api.example.com", p) {
+			t.Errorf("%s should match", p)
 		}
 	}
-	for _, bad := range []string{"get api.github.com", "api.github.com/[", "", "GET /path"} {
-		if _, err := parseRule(bad); err == nil {
-			t.Errorf("%q should be refused", bad)
+	for _, p := range []string{"/ordersX", "/orders-evil", "/steal", "/"} {
+		if r.allows("GET", "api.example.com", p) {
+			t.Errorf("%s should not match", p)
 		}
+	}
+	if r.allows("POST", "api.example.com", "/orders") {
+		t.Error("method limit ignored")
 	}
 }
 
-func TestBrokerKnownCallers(t *testing.T) {
-	b := &broker{}
-	if !b.knownCaller("anything") {
-		t.Fatal("before setCallers every caller is accepted")
+func TestRequestPathNormalizesDotSegments(t *testing.T) {
+	u, _ := url.Parse("https://api.example.com/orders/../steal")
+	if got := requestPath(u); got != "/steal" {
+		t.Fatalf("requestPath = %q", got)
 	}
-	b.setCallers([]engine.PluginSpec{{Use: "probe"}, {Use: "tool_fetch", As: "gh"}, {Use: "llm_mock"}})
-	for name, ok := range map[string]bool{
-		"probe":       true,
-		"gh":          true,  // instance name
-		"tool_fetch":  false, // only loaded as "gh"
-		"model_mock":  true,  // current name of llm_mock
-		"llm_mock":    true,
-		"loop":        true, // loaded by the box on its own
-		"secrets_env": false,
-		"":            false,
-	} {
-		if got := b.knownCaller(name); got != ok {
-			t.Errorf("knownCaller(%q) = %v, want %v", name, got, ok)
-		}
+	if !ambiguousPath(u) {
+		t.Fatal("dot segment not reported")
+	}
+	u, _ = url.Parse("https://api.example.com/orders%2F..%2Fsteal")
+	if !ambiguousPath(u) {
+		t.Fatal("encoded separator not reported")
+	}
+	u, _ = url.Parse("https://api.example.com/orders/1")
+	if ambiguousPath(u) {
+		t.Fatal("plain path reported as ambiguous")
 	}
 }

@@ -167,23 +167,45 @@ func WriteLock(path string, l *Lock) error {
 
 var envRef = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 
-// interpolate expands ${ENV} in config strings.
-func interpolate(v any) any {
-	switch x := v.(type) {
-	case string:
-		return envRef.ReplaceAllStringFunc(x, func(m string) string { return os.Getenv(m[2 : len(m)-1]) })
-	case map[string]any:
-		out := make(map[string]any, len(x))
-		for k, e := range x {
-			out[k] = interpolate(e)
-		}
-		return out
-	case []any:
-		out := make([]any, len(x))
-		for i, e := range x {
-			out[i] = interpolate(e)
-		}
-		return out
+// interpolate expands ${ENV} in config strings. Secret-looking names
+// (SecretLike) expand only for plugins holding env:secrets; others get
+// their credentials through secret://NAME references and grants.
+func interpolate(v any, perms []string) (any, error) {
+	secrets := false
+	for _, p := range perms {
+		secrets = secrets || p == PermEnvSecrets
 	}
-	return v
+	var bad string
+	var walk func(v any) any
+	walk = func(v any) any {
+		switch x := v.(type) {
+		case string:
+			return envRef.ReplaceAllStringFunc(x, func(m string) string {
+				name := m[2 : len(m)-1]
+				if !secrets && SecretLike(name) {
+					bad = name
+					return ""
+				}
+				return os.Getenv(name)
+			})
+		case map[string]any:
+			out := make(map[string]any, len(x))
+			for k, e := range x {
+				out[k] = walk(e)
+			}
+			return out
+		case []any:
+			out := make([]any, len(x))
+			for i, e := range x {
+				out[i] = walk(e)
+			}
+			return out
+		}
+		return v
+	}
+	out := walk(v)
+	if bad != "" {
+		return nil, fmt.Errorf("config ${%s}: secret-looking variables need the env:secrets permission; use secret://%s", bad, bad)
+	}
+	return out, nil
 }
