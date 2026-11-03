@@ -4,6 +4,8 @@ All notable changes to eipagent. Versions follow [semantic versioning](https://s
 
 ## Unreleased
 
+## v0.4.2 — 2026-11-03
+
 ### Added
 
 - `hook_compact`: keeps runs inside the model's context window. It estimates the request from the tokens the provider reported, and past `max_fraction` (or `max_tokens` / `max_messages`) applies `clamp`, `clear_tool_results`, `sliding_window` and `summarize`, cheapest first, down to `target_fraction`. Optional `compact_context` tool; a `context_usage` event each step.
