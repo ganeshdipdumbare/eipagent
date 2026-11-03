@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/url"
 	"reflect"
 	"sort"
@@ -28,8 +29,11 @@ const Version = "0.4.3"
 const redacted = "[REDACTED]"
 
 var (
-	redactMu   sync.RWMutex
-	redactVals []string // longest first, so overlapping values redact fully
+	redactMu          sync.RWMutex
+	redactSet         = map[string]struct{}{}
+	redactOrder       []string // insertion order, oldest first
+	redactSorted      []string // length-desc, rebuilt when the set changes
+	redactEvictLogged bool
 )
 
 // MinRedactLen is the shortest value that can be redacted: shorter ones
@@ -60,21 +64,34 @@ func AddRedaction(v string) bool {
 		hex.EncodeToString([]byte(v)), strings.ToUpper(hex.EncodeToString([]byte(v))))
 	redactMu.Lock()
 	defer redactMu.Unlock()
-next:
+	changed := false
 	for _, f := range forms {
-		for _, x := range redactVals {
-			if x == f {
-				continue next
-			}
+		if _, ok := redactSet[f]; ok {
+			continue
 		}
-		redactVals = append(redactVals, f)
+		redactSet[f] = struct{}{}
+		redactOrder = append(redactOrder, f)
+		changed = true
 	}
-	if len(redactVals) > maxRedactions {
+	if len(redactOrder) > maxRedactions {
 		// Bounded: a long-running agent whose secrets keep rotating would
 		// otherwise grow this forever. The oldest values go first.
-		redactVals = redactVals[len(redactVals)-maxRedactions:]
+		over := len(redactOrder) - maxRedactions
+		if !redactEvictLogged {
+			redactEvictLogged = true
+			log.Printf("sdk: redaction registry full (%d forms); dropping the oldest secrets", maxRedactions)
+		}
+		for _, f := range redactOrder[:over] {
+			delete(redactSet, f)
+		}
+		redactOrder = append([]string(nil), redactOrder[over:]...)
+		changed = true
 	}
-	sort.SliceStable(redactVals, func(i, j int) bool { return len(redactVals[i]) > len(redactVals[j]) })
+	if changed {
+		redactSorted = make([]string, len(redactOrder))
+		copy(redactSorted, redactOrder)
+		sort.SliceStable(redactSorted, func(i, j int) bool { return len(redactSorted[i]) > len(redactSorted[j]) })
+	}
 	return true
 }
 
@@ -82,7 +99,7 @@ next:
 func Redact(s string) string {
 	redactMu.RLock()
 	defer redactMu.RUnlock()
-	for _, v := range redactVals {
+	for _, v := range redactSorted {
 		if strings.Contains(s, v) {
 			s = strings.ReplaceAll(s, v, redacted)
 		}
@@ -90,14 +107,15 @@ func Redact(s string) string {
 	return s
 }
 
-// RedactMap returns a deep copy of m with every string redacted.
+// RedactMap returns a deep copy of m with every string redacted,
+// including keys.
 func RedactMap(m map[string]any) map[string]any {
 	if m == nil {
 		return nil
 	}
 	out := make(map[string]any, len(m))
 	for k, v := range m {
-		out[k] = RedactValue(v)
+		out[Redact(k)] = RedactValue(v)
 	}
 	return out
 }
@@ -145,12 +163,10 @@ func RedactValue(v any) any {
 	case reflect.String:
 		return Redact(rv.String())
 	case reflect.Map:
-		if rv.Type().Key().Kind() != reflect.String {
-			break
-		}
 		out := make(map[string]any, rv.Len())
 		for it := rv.MapRange(); it.Next(); {
-			out[it.Key().String()] = RedactValue(it.Value().Interface())
+			k := Redact(fmt.Sprint(it.Key().Interface()))
+			out[k] = RedactValue(it.Value().Interface())
 		}
 		return out
 	case reflect.Slice, reflect.Array:
@@ -167,8 +183,13 @@ func RedactValue(v any) any {
 		var m any
 		json.Unmarshal(b, &m)
 		return RedactValue(m)
+	case reflect.Bool,
+		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr,
+		reflect.Float32, reflect.Float64:
+		return v
 	}
-	return v
+	return Redact(fmt.Sprint(v))
 }
 
 // Granted reads are audited once per plugin and secret every

@@ -5,11 +5,71 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func resetRedactions(t *testing.T) {
+	t.Helper()
+	redactMu.Lock()
+	redactSet = map[string]struct{}{}
+	redactOrder = nil
+	redactSorted = nil
+	redactEvictLogged = false
+	redactMu.Unlock()
+}
+
+func TestRedactionEvictionKeepsNewSecrets(t *testing.T) {
+	resetRedactions(t)
+	oldest := "oldest-secret-value-xyz"
+	if !AddRedaction(oldest) {
+		t.Fatal("oldest not registered")
+	}
+	for i := 0; len(redactOrder) < maxRedactions-20; i++ {
+		if !AddRedaction(fmt.Sprintf("filler-secret-%08d", i)) {
+			t.Fatal("filler not registered")
+		}
+	}
+	long := strings.Repeat("L", 64) + "-long-secret"
+	if !AddRedaction(long) {
+		t.Fatal("long secret not registered")
+	}
+	for i := 0; i < 25; i++ {
+		if !AddRedaction(fmt.Sprintf("newest-secret-%08d", i)) {
+			t.Fatal("newest not registered")
+		}
+	}
+	if out := Redact(long); !strings.Contains(out, "[REDACTED]") {
+		t.Fatalf("long secret was evicted: %s", out)
+	}
+	if Redact(oldest) != oldest {
+		t.Fatal("the oldest value was not evicted")
+	}
+	if out := Redact("newest-secret-00000000"); !strings.Contains(out, "[REDACTED]") {
+		t.Fatalf("newest secret not redacted: %s", out)
+	}
+}
+
+func TestRedactValueRedactsMapKeysAndOddKinds(t *testing.T) {
+	resetRedactions(t)
+	secret := "map-key-secret-value"
+	AddRedaction(secret)
+	v := RedactValue(map[int]string{1: secret})
+	b, _ := json.Marshal(v)
+	if strings.Contains(string(b), secret) {
+		t.Fatalf("map with non-string keys leaked: %s", b)
+	}
+	m := RedactMap(map[string]any{secret: "x"})
+	if _, ok := m[secret]; ok {
+		t.Fatalf("map key leaked: %v", m)
+	}
+	if _, ok := RedactValue(make(chan int)).(string); !ok {
+		t.Fatal("unhandled kind was not converted to a redactable string")
+	}
+}
 
 func TestRedactCoversEncodingsAndTypedValues(t *testing.T) {
 	secret := `pa"ss/word+1==`
