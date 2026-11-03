@@ -100,12 +100,35 @@ func (t *Thread) ResumeStream(ctx context.Context, decisions []sdk.Decision, opt
 }
 
 func (t *Thread) runAndSave(ctx context.Context, cp *sdk.Checkpointer, ts *sdk.ThreadState, st *sdk.RunState, ro *runOptions) (*Result, error) {
+	version := ts.Version
+	var stepErr error
+	if t.a.saveEachStep {
+		// Before each model call the history is whole (every tool call has
+		// its result), so a run cut short can be continued from here.
+		ro.onStep = func(st *sdk.RunState) {
+			if stepErr != nil {
+				return
+			}
+			cur := &sdk.ThreadState{ID: t.id, Messages: append([]sdk.Message(nil), st.Messages...), Values: st.Values, Updated: time.Now().UnixMilli()}
+			if err := cp.Save(ctx, cur, version); err != nil {
+				stepErr = err
+				return
+			}
+			version++
+		}
+	}
 	res, err := t.a.run(ctx, st, ro)
+	if err == nil {
+		err = stepErr
+	}
 	if err != nil {
+		if errors.Is(err, sdk.ErrVersionConflict) {
+			return nil, ErrThreadBusy
+		}
 		return nil, err
 	}
 	next := &sdk.ThreadState{ID: t.id, Messages: res.Messages, Pending: res.Interrupts, Values: st.Values, Updated: time.Now().UnixMilli()}
-	if err := cp.Save(ctx, next, ts.Version); err != nil {
+	if err := cp.Save(ctx, next, version); err != nil {
 		if errors.Is(err, sdk.ErrVersionConflict) {
 			return nil, ErrThreadBusy
 		}
@@ -113,6 +136,60 @@ func (t *Thread) runAndSave(ctx context.Context, cp *sdk.Checkpointer, ts *sdk.T
 	}
 	res.Thread = t.id
 	return res, nil
+}
+
+// Continue runs the agent on the thread's stored history without a new
+// message: for a run that was cut short (see WithSaveEachStep), or after
+// editing the history elsewhere. It fails when the last message is
+// already the model's answer.
+func (t *Thread) Continue(ctx context.Context, opts ...RunOption) (*Result, error) {
+	if t.a.remote != nil {
+		return nil, errors.New("eipagent: Thread.Continue is not supported with WithRunIn")
+	}
+	cp, ts, err := t.load(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(ts.Pending) > 0 {
+		return nil, fmt.Errorf("eipagent: thread %s is waiting on %d interrupt(s); call Resume", t.id, len(ts.Pending))
+	}
+	if n := len(ts.Messages); n == 0 || (ts.Messages[n-1].Role == sdk.RoleAssistant && len(ts.Messages[n-1].ToolCalls) == 0) {
+		return nil, fmt.Errorf("eipagent: thread %s has nothing to continue", t.id)
+	}
+	ro := t.a.runOpts(opts)
+	st := t.a.newState(ro)
+	st.Thread, st.Values = t.id, ts.Values
+	st.Messages = append([]sdk.Message{}, ts.Messages...)
+	return t.runAndSave(ctx, cp, ts, st, ro)
+}
+
+// Fork copies the thread (history, pending approvals and values) to a
+// new thread, so you can try a different direction without changing this
+// one. It fails if newID already exists.
+func (t *Thread) Fork(ctx context.Context, newID string) (*Thread, error) {
+	if t.a.remote != nil {
+		return nil, errors.New("eipagent: Thread.Fork is not supported with WithRunIn")
+	}
+	cp, ts, err := t.load(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if ts.Version == 0 {
+		return nil, fmt.Errorf("eipagent: thread %s does not exist", t.id)
+	}
+	vals := map[string]any{}
+	for k, v := range ts.Values {
+		vals[k] = v
+	}
+	cp2 := &sdk.ThreadState{ID: newID, Messages: append([]sdk.Message(nil), ts.Messages...),
+		Pending: append([]sdk.Interrupt(nil), ts.Pending...), Values: vals, Updated: time.Now().UnixMilli()}
+	if err := cp.Save(ctx, cp2, 0); err != nil {
+		if errors.Is(err, sdk.ErrVersionConflict) {
+			return nil, fmt.Errorf("eipagent: thread %s already exists", newID)
+		}
+		return nil, err
+	}
+	return t.a.Thread(newID), nil
 }
 
 // Messages returns the stored history.

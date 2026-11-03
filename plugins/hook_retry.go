@@ -17,6 +17,10 @@ import (
 // Config: max_retries (3), initial_delay_ms (500), max_delay_ms (8000),
 // backoff (2.0), jitter (true), tool_retries (0), retry_tools ([] = all).
 // Default priority 10: inside hook_fallback, outside everything else.
+//
+// Example:
+//
+//	eipagent.WithPlugin("hook_retry", map[string]any{"max_retries": 5, "initial_delay_ms": 1000, "tool_retries": 1})
 func Apply(p *sdk.Plugin) error {
 	if p.Priority() == 0 {
 		p.SetPriority(10)

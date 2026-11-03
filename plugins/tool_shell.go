@@ -13,6 +13,11 @@ import (
 // A bash tool that runs in the "workspace" world (host workspace or sandbox).
 //
 // Config: timeout_seconds (120), max_output (30000 chars).
+//
+// Example:
+//
+//	eipagent.WithPlugin("tool_shell", map[string]any{"timeout_seconds": 60, "max_output": 10000})
+//	eipagent.WithSandbox("docker") // run it in a container instead of on the host
 var Requires = []string{"workspace"}
 
 func Apply(p *sdk.Plugin) error {

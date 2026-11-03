@@ -10,6 +10,10 @@ import (
 )
 
 // Returns the current time. Config: layout (Go time layout).
+//
+// Example:
+//
+//	eipagent.WithPlugin("tool_time", map[string]any{"layout": "2006-01-02 15:04 MST"})
 func Apply(p *sdk.Plugin) error {
 	layout := p.ConfigString("layout", time.RFC1123)
 	p.AddTool(sdk.Tool{

@@ -11,6 +11,10 @@ import (
 
 // Logs every model and tool call with timing. Config: args (log tool
 // arguments, default true), results (log tool results, default false).
+//
+// Example:
+//
+//	eipagent.WithPlugin("hook_log", map[string]any{"results": true})
 func Apply(p *sdk.Plugin) error {
 	logArgs := p.ConfigBool("args", true)
 	logResults := p.ConfigBool("results", false)

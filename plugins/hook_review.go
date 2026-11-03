@@ -20,6 +20,14 @@ import (
 //	tools:   tools to review ([] = every tool not marked readonly)
 //	policy:  extra guidance for the reviewer
 //	on_error: escalate (default) | deny
+//
+// Example:
+//
+//	eipagent.WithPlugin("hook_review", map[string]any{
+//		"model":  "anthropic:claude-haiku-5-5",
+//		"tools":  []any{"bash", "write_file"},
+//		"policy": "Deny anything that deletes data or touches production.",
+//	})
 func Apply(p *sdk.Plugin) error {
 	if p.Priority() == 0 {
 		p.SetPriority(0)

@@ -17,6 +17,12 @@ import (
 // share threads safely. The table is created on first load.
 //
 // Config: table (default "eip_threads").
+//
+// Example:
+//
+//	eipagent.WithPlugin("db_sql", map[string]any{"dsn": "secret://DATABASE_URL"})
+//	eipagent.WithPlugin("threads_sql", map[string]any{"table": "agent_threads"})
+//	// Shortcut with memory_sql too: eipagent.WithPersistence("postgres", "secret://DATABASE_URL")
 var Requires = []string{"db"}
 
 var Permissions = []string{"db"}

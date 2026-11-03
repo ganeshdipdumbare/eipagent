@@ -17,6 +17,12 @@ import (
 // Search is a case-insensitive substring match over keys and values.
 //
 // Config: table (default "eip_store").
+//
+// Example:
+//
+//	eipagent.WithPlugin("db_sql", map[string]any{"dsn": "secret://DATABASE_URL"})
+//	eipagent.WithPlugin("memory_sql", map[string]any{"table": "agent_memory"})
+//	// Shortcut with threads_sql too: eipagent.WithPersistence("postgres", "secret://DATABASE_URL")
 var Requires = []string{"db"}
 
 var Permissions = []string{"db"}

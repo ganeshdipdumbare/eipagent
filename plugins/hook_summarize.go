@@ -20,6 +20,14 @@ import (
 //	keep_messages:    recent messages kept verbatim (default 10)
 //	model:            model for the summary (default: the run's model)
 //	prompt:           summary instruction
+//
+// Example:
+//
+//	eipagent.WithPlugin("hook_summarize", map[string]any{
+//		"trigger_messages": 60,
+//		"keep_messages":    12,
+//		"model":            "anthropic:claude-haiku-5-5",
+//	})
 func Apply(p *sdk.Plugin) error {
 	trigMsgs := p.ConfigInt("trigger_messages", 40)
 	trigTokens := p.ConfigInt("trigger_tokens", 0)

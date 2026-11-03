@@ -397,6 +397,12 @@ func Lint(src *Source) *Report {
 	if len(old) > 0 {
 		add(Warning, "old-name", "uses names renamed in v0.4: %s; they work until v1.0 (eip plugin fix rewrites them)", strings.Join(old, ", "))
 	}
+	for _, line := range taglessMultiCases(code) {
+		add(Warning, "interpreter", "line %d: a case with several conditions in a switch with no tag only checks the first one under Yaegi; join them with ||", line)
+	}
+	for _, line := range loopAsserts(code) {
+		add(Warning, "interpreter", "line %d: `x, _ := v.(T)` in a loop body keeps the previous iteration's value when the assertion fails (a Yaegi quirk); check ok: if y, ok := v.(T); ok { x = y }", line)
+	}
 
 	// Imports and permissions.
 	needed := map[string]bool{}
@@ -592,4 +598,70 @@ func validSecrets(refs []string) []string {
 		}
 	}
 	return out
+}
+
+// loopAsserts finds `x, _ := v.(T)` written directly in a loop body (not
+// in a function literal inside it). Under Yaegi a failed assertion there
+// leaves x holding the previous iteration's value instead of the zero
+// value; `ok` itself is reported correctly.
+func loopAsserts(src []byte) []int {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "p.go", src, 0)
+	if err != nil {
+		return nil
+	}
+	var lines []int
+	var walk func(root ast.Node, inLoop bool)
+	walk = func(root ast.Node, inLoop bool) {
+		ast.Inspect(root, func(n ast.Node) bool {
+			if n == root {
+				return true
+			}
+			switch n := n.(type) {
+			case *ast.FuncLit:
+				walk(n.Body, false)
+				return false
+			case *ast.ForStmt:
+				walk(n.Body, true)
+				return false
+			case *ast.RangeStmt:
+				walk(n.Body, true)
+				return false
+			case *ast.AssignStmt:
+				if !inLoop || len(n.Lhs) != 2 || len(n.Rhs) != 1 {
+					return true
+				}
+				id, isIdent := n.Lhs[1].(*ast.Ident)
+				_, isAssert := ast.Unparen(n.Rhs[0]).(*ast.TypeAssertExpr)
+				if isIdent && id.Name == "_" && isAssert {
+					lines = append(lines, fset.Position(n.Pos()).Line)
+				}
+			}
+			return true
+		})
+	}
+	walk(f, false)
+	return lines
+}
+
+// taglessMultiCases finds `case a, b:` in a switch with no tag. Under
+// Yaegi only the first condition is checked.
+func taglessMultiCases(src []byte) []int {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "p.go", src, 0)
+	if err != nil {
+		return nil
+	}
+	var lines []int
+	ast.Inspect(f, func(n ast.Node) bool {
+		if sw, ok := n.(*ast.SwitchStmt); ok && sw.Tag == nil {
+			for _, st := range sw.Body.List {
+				if cc, ok := st.(*ast.CaseClause); ok && len(cc.List) > 1 {
+					lines = append(lines, fset.Position(cc.Pos()).Line)
+				}
+			}
+		}
+		return true
+	})
+	return lines
 }

@@ -3,6 +3,7 @@
 //
 //	eip [repl] -model openai:gpt-4.1 -profile eip.json
 //	eip run -model ... "summarize README.md"
+//	eip eval -model ... cases.json   (grade the agent on a dataset; see package evals)
 //	eip serve --stdio ...          (used inside sandboxes by WithRunIn)
 //	eip plugin init|validate|build|inspect|keygen ...   (authoring)
 //	eip plugin install|approve|enable|update|rollback ... (lifecycle)
@@ -22,6 +23,7 @@ import (
 
 	"github.com/ganeshdipdumbare/eipagent"
 	"github.com/ganeshdipdumbare/eipagent/engine"
+	"github.com/ganeshdipdumbare/eipagent/evals"
 	"github.com/ganeshdipdumbare/eipagent/plugins"
 	"github.com/ganeshdipdumbare/eipagent/sdk"
 
@@ -100,6 +102,8 @@ func main() {
 		err = repl(ctx, args)
 	case "run":
 		err = run(ctx, args)
+	case "eval":
+		err = evalCmd(ctx, args)
 	case "serve":
 		err = serve(ctx, args)
 	case "plugin":
@@ -109,7 +113,7 @@ func main() {
 	case "trace":
 		err = traceCmd(args)
 	case "help", "-h", "--help":
-		fmt.Println("usage: eip [repl|run|serve|plugin|config|trace] [flags]")
+		fmt.Println("usage: eip [repl|run|eval|serve|plugin|config|trace] [flags]")
 	default:
 		err = fmt.Errorf("unknown command %q", cmd)
 	}
@@ -128,6 +132,41 @@ func serve(ctx context.Context, args []string) error {
 	// stdout carries the protocol; logs go to stderr.
 	opts := append(c.options(), eipagent.WithLogger(func(scope, msg string) { fmt.Fprintf(os.Stderr, "[%s] %s\n", scope, msg) }))
 	return eipagent.Serve(ctx, os.Stdin, os.Stdout, opts...)
+}
+
+func evalCmd(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("eval", flag.ExitOnError)
+	var c common
+	c.flags(fs)
+	parallel := fs.Int("parallel", 4, "cases to run at once")
+	jsonOut := fs.Bool("json", false, "print the report as JSON")
+	fs.Parse(args)
+	if fs.NArg() != 1 {
+		return fmt.Errorf("eval: give one dataset file (eip eval [flags] cases.json)")
+	}
+	ds, err := evals.Load(fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	a, err := eipagent.New(c.options()...)
+	if err != nil {
+		return err
+	}
+	defer a.Close()
+	rep, err := evals.Run(ctx, a, ds, evals.Options{Parallel: *parallel})
+	if err != nil {
+		return err
+	}
+	if *jsonOut {
+		b, _ := json.MarshalIndent(rep, "", "  ")
+		fmt.Println(string(b))
+	} else {
+		fmt.Print(rep.Summary())
+	}
+	if rep.Failed > 0 {
+		return fmt.Errorf("%d of %d cases failed", rep.Failed, rep.Passed+rep.Failed)
+	}
+	return nil
 }
 
 func run(ctx context.Context, args []string) error {

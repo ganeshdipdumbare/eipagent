@@ -29,6 +29,11 @@ import (
 // its files outlive sandbox_destroy, so use it only for a single user's
 // own workspace), env_allow (["PATH","HOME","LANG"]; secret-looking
 // names are never passed without the env:secrets permission).
+//
+// Example:
+//
+//	eipagent.WithPlugin("sandbox_local", map[string]any{"workdir": "."}) // no isolation: this project folder
+//	eipagent.WithPlugins("workspace_local", "tool_shell", "tool_fs")
 var Permissions = []string{"exec", "fs:read", "fs:write", "env"}
 
 func Apply(p *sdk.Plugin) error {

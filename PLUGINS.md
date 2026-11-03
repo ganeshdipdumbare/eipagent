@@ -179,6 +179,8 @@ Resolve secrets when you use them (`ctx.Secret("secret://NAME")` inside the requ
 - **Don't pass maps through `any` parameters or struct fields that you then `json.Marshal`.** An interpreted `any` holds a wrapper, and the value marshals as `{}`. Type parameters as `map[string]any`, and build outgoing JSON from maps.
 - **Variables declared in a loop body are shared between closures.** Build per-item closures in a helper function (`ctx.AddTool(makeTool(name))`).
 - **Don't assign untyped `nil` in a parallel assignment** (`a, b = nil, nil`). Use two statements.
+- **A failed `x, _ := v.(T)` in a loop body keeps the previous iteration's value**, instead of the zero value (`ok` is still right). Check `ok`: `x := ""; if y, ok := v.(string); ok { x = y }`. Inside a function called from the loop it is fine. `eip plugin validate` warns about it (rule `interpreter`).
+- **In a `switch` with no tag, give each `case` one condition.** In `case a, b:` only `a` is checked; write `case a || b:`. (`switch x { case "a", "b": }`, with a tag, works.) `eip plugin validate` warns about it.
 - **No `min` / `max` builtins**, and avoid `switch` on `any` values. Assert to a concrete type first.
 - Plugins see the environment as it was when they loaded (only with the `env` permission). Prefer `ctx.Secret`.
 - Plugin source is Go 1.22-era syntax and stdlib. Host code can use everything in Go 1.27.

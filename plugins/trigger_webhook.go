@@ -47,6 +47,14 @@ import (
 //
 // {body} is the raw JSON; {a.b} is a field of it. Substituted values are
 // inserted as they are and never expanded again.
+//
+// Example:
+//
+//	eipagent.WithPlugin("trigger_webhook", map[string]any{
+//		"addr": "127.0.0.1:8787",
+//		"routes": []any{map[string]any{"path": "/github", "secret": "secret://GH_WEBHOOK_TOKEN",
+//			"user": "github-bot", "thread": "gh-{repository.full_name}"}},
+//	})
 var Requires = []string{"agent"}
 
 var Permissions = []string{"net"}
@@ -246,8 +254,11 @@ func fill(t string, doc map[string]any, body string) string {
 		} else {
 			var cur any = doc
 			for _, part := range strings.Split(key, ".") {
-				m, _ := cur.(map[string]any)
-				cur = m[part]
+				var next any
+				if m, ok := cur.(map[string]any); ok {
+					next = m[part]
+				}
+				cur = next
 			}
 			if cur != nil {
 				b.WriteString(fmt.Sprint(cur))

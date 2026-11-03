@@ -23,6 +23,14 @@ import (
 //
 // Heuristics: replies to a tool result by echoing it; "time" calls
 // current_time; "remember X" calls remember; "recall" calls recall.
+//
+// Example:
+//
+//	eipagent.WithModel("mock:demo")
+//	eipagent.WithPlugin("model_mock", map[string]any{"script": []any{
+//		map[string]any{"tool": "weather", "args": map[string]any{"city": "Lisbon"}},
+//		map[string]any{"text": "Bring an umbrella."},
+//	}})
 func Apply(p *sdk.Plugin) error {
 	script := p.ConfigList("script")
 	var mu sync.Mutex
@@ -120,8 +128,14 @@ func example(s map[string]any) map[string]any {
 	out := map[string]any{}
 	props, _ := s["properties"].(map[string]any)
 	for k, v := range props {
-		prop, _ := v.(map[string]any)
-		t, _ := prop["type"].(string)
+		prop := map[string]any{}
+		if x, ok := v.(map[string]any); ok {
+			prop = x
+		}
+		t := ""
+		if x, ok := prop["type"].(string); ok {
+			t = x
+		}
 		if t == "string" {
 			out[k] = "example"
 		} else if t == "integer" || t == "number" {

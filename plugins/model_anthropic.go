@@ -28,6 +28,16 @@ import (
 //
 // Structured output uses a tool named after the schema; when the model
 // calls it, its input becomes the reply text.
+//
+// Example:
+//
+//	eipagent.WithModel("anthropic:claude-sonnet-5-5") // loads model_anthropic by itself
+//	// A proxy, another key or a bigger output limit:
+//	eipagent.WithPlugin("model_anthropic", map[string]any{
+//		"base_url":   "https://anthropic-proxy.internal",
+//		"api_key":    "secret://ANTHROPIC_KEY_TEAM_A",
+//		"max_tokens": 16000,
+//	})
 var Permissions = []string{"net"}
 
 func Apply(p *sdk.Plugin) error {
@@ -252,6 +262,16 @@ type block struct {
 type usage struct {
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
+	CacheRead    int `json:"cache_read_input_tokens"`
+	CacheWrite   int `json:"cache_creation_input_tokens"`
+}
+
+// sdkUsage counts cached input in InputTokens too, like the other
+// providers (Anthropic reports it separately).
+func (u usage) sdkUsage() sdk.Usage {
+	in := u.InputTokens + u.CacheRead + u.CacheWrite
+	return sdk.Usage{InputTokens: in, OutputTokens: u.OutputTokens, TotalTokens: in + u.OutputTokens,
+		CacheReadTokens: u.CacheRead, CacheWriteTokens: u.CacheWrite}
 }
 
 func finishOf(r string) string {
@@ -260,6 +280,8 @@ func finishOf(r string) string {
 		return "tool_calls"
 	case "max_tokens":
 		return "length"
+	case "refusal":
+		return "refusal"
 	}
 	return "stop"
 }
@@ -286,7 +308,7 @@ func parseResponse(raw []byte) (*sdk.ModelResponse, error) {
 		}
 	}
 	msg.Content = strings.Join(text, "")
-	u := sdk.Usage{InputTokens: out.Usage.InputTokens, OutputTokens: out.Usage.OutputTokens, TotalTokens: out.Usage.InputTokens + out.Usage.OutputTokens}
+	u := out.Usage.sdkUsage()
 	return &sdk.ModelResponse{Message: msg, Usage: u, FinishReason: finishOf(out.StopReason)}, nil
 }
 
@@ -297,7 +319,7 @@ type streamBlock struct {
 
 func readStream(r io.Reader, emit func(sdk.Chunk)) (*sdk.ModelResponse, error) {
 	blocks := map[int]*streamBlock{}
-	var u sdk.Usage
+	var u usage
 	stop := ""
 	var reasoning strings.Builder
 	err := sdk.ReadSSE(r, func(event, data string) error {
@@ -329,7 +351,7 @@ func readStream(r io.Reader, emit func(sdk.Chunk)) (*sdk.ModelResponse, error) {
 				return sdk.NewProviderError("anthropic", 529, ev.Error.Message)
 			}
 		case "message_start":
-			u.InputTokens = ev.Message.Usage.InputTokens
+			u = ev.Message.Usage
 		case "content_block_start":
 			blocks[ev.Index] = &streamBlock{typ: ev.ContentBlock.Type, id: ev.ContentBlock.ID, name: ev.ContentBlock.Name}
 		case "content_block_delta":
@@ -380,6 +402,5 @@ func readStream(r io.Reader, emit func(sdk.Chunk)) (*sdk.ModelResponse, error) {
 			emit(sdk.Chunk{Type: "tool_call", ToolCall: &tc})
 		}
 	}
-	u.TotalTokens = u.InputTokens + u.OutputTokens
-	return &sdk.ModelResponse{Message: msg, Usage: u, FinishReason: finishOf(stop)}, nil
+	return &sdk.ModelResponse{Message: msg, Usage: u.sdkUsage(), FinishReason: finishOf(stop)}, nil
 }

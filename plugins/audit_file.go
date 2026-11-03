@@ -40,6 +40,15 @@ import (
 // Config: path (".eipagent/audit.jsonl"; "-" keeps no local file),
 // args (log tool args, true), results (log tool results, false),
 // key (secret://NAME, optional).
+//
+// Example:
+//
+//	eipagent.WithPlugin("audit_file", map[string]any{
+//		"path":    ".eipagent/audit.jsonl",
+//		"results": true,                      // also record tool results
+//		"key":     "secret://AUDIT_HMAC_KEY", // sign each line
+//	})
+//	// Shortcut: eipagent.WithAudit(".eipagent/audit.jsonl")
 var Permissions = []string{"fs:read", "fs:write"}
 
 var Requires = []string{"?secrets"} // only for key

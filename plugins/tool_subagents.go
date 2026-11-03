@@ -24,6 +24,14 @@ import (
 //	}]
 //
 // Policy and audit hooks follow subagents (they run in the same snapshot).
+//
+// Example:
+//
+//	eipagent.WithPlugin("tool_subagents", map[string]any{"agents": []any{
+//		map[string]any{"name": "researcher", "description": "Finds facts on the web",
+//			"instructions": "Cite your sources.", "tools": []any{"web_search", "http_fetch"}, "max_steps": 8},
+//		map[string]any{"name": "billing", "description": "Handles refunds", "mode": "handoff"},
+//	}})
 var Requires = []string{"loop"}
 
 func Apply(p *sdk.Plugin) error {
@@ -33,12 +41,18 @@ func Apply(p *sdk.Plugin) error {
 	}
 	byName := map[string]map[string]any{}
 	for _, a := range agents {
-		name, _ := a["name"].(string)
+		name := ""
+		if x, ok := a["name"].(string); ok {
+			name = x
+		}
 		if name == "" {
 			return fmt.Errorf("agents: every agent needs a name")
 		}
 		byName[name] = a
-		mode, _ := a["mode"].(string)
+		mode := ""
+		if x, ok := a["mode"].(string); ok {
+			mode = x
+		}
 		if mode == "handoff" {
 			p.AddTool(handoffTool(name, a))
 		} else {

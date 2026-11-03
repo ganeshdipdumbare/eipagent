@@ -29,10 +29,16 @@ type config struct {
 	runIn               *RunIn
 	bridgedSecrets      *engine.Plugin // in a RunIn box: replaces every secrets_* plugin
 	store               *pluginpkg.Store
+	saveEachStep        bool
 }
 
 // Option configures New.
 type Option func(*config)
+
+// WithSaveEachStep makes threads save their history before every model
+// call, not only when a run ends. If the process dies mid-run, the run's
+// progress so far is kept: Thread.Continue picks it up from there.
+func WithSaveEachStep() Option { return func(c *config) { c.saveEachStep = true } }
 
 // WithModel sets the default model as "provider:model", e.g.
 // "openai:gpt-4.1", "anthropic:claude-sonnet-5-5", "deepseek:deepseek-chat".
@@ -127,6 +133,7 @@ type runOptions struct {
 	schemaName          string
 	tools               []sdk.Tool
 	result              **Result
+	onStep              func(*sdk.RunState) // threads: save before each model call (WithSaveEachStep)
 }
 
 type RunOption func(*runOptions)

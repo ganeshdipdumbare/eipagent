@@ -26,6 +26,12 @@ import (
 //	require_sandbox: true = shell/fs tools must run in an isolated exec world
 //	max_tokens_run:  token budget per run
 //	roles:           {role: {allow_tools: [...], mode: "..."}} overrides by user role
+//
+// Example:
+//
+//	// policy.json: {"locked": ["policy"], "require": [{"use": "policy"}],
+//	//               "rules": {"mode": "read-only", "deny_tools": ["bash"]}}
+//	eipagent.WithPolicyFile("policy.json")
 func Apply(p *sdk.Plugin) error {
 	p.SetPriority(sdk.PriorityReserved) // ignored unless the plugin is locked
 	if !p.Trusted() {

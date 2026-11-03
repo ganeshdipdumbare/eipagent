@@ -20,6 +20,13 @@ import (
 //	allow:  glob patterns (default ["*_API_KEY", "*_TOKEN"])
 //	grants: {plugin instance: [names]} — when set, a plugin may read only
 //	        the names granted to it (the caller is set by the core).
+//
+// Example:
+//
+//	eipagent.WithPlugin("secrets_env", map[string]any{
+//		"allow":  []any{"*_API_KEY", "GITHUB_TOKEN"},
+//		"grants": map[string]any{"tool_mcp": []any{"GITHUB_TOKEN"}},
+//	})
 var Permissions = []string{"env", "env:secrets"}
 
 func Apply(p *sdk.Plugin) error {

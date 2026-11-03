@@ -15,6 +15,10 @@ import (
 // so hosts can show a review diff.
 //
 // Config: max_read (200000 bytes), readonly (true = only read tools).
+//
+// Example:
+//
+//	eipagent.WithPlugin("tool_fs", map[string]any{"readonly": true}) // only read_file, list_dir, find_files, grep
 var Requires = []string{"workspace"}
 
 func Apply(p *sdk.Plugin) error {

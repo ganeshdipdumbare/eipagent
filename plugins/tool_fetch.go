@@ -23,6 +23,13 @@ import (
 //
 // Config: allow_hosts (required; ["*"] = any public host), allow_private
 // (false), max_bytes (500000), timeout_seconds (20).
+//
+// Example:
+//
+//	eipagent.WithPlugin("tool_fetch", map[string]any{
+//		"allow_hosts": []any{"*.wikipedia.org", "docs.python.org"},
+//		"max_bytes":   200000,
+//	})
 var Permissions = []string{"net"}
 
 func Apply(p *sdk.Plugin) error {

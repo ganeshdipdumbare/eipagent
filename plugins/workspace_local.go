@@ -13,6 +13,11 @@ import (
 // move every shell/fs tool into isolated sandboxes.
 //
 // Load sandbox_local with config {workdir: "."} to work in a project.
+//
+// Example:
+//
+//	eipagent.WithPlugin("sandbox_local", map[string]any{"workdir": "."})
+//	eipagent.WithPlugins("workspace_local", "tool_shell", "tool_fs")
 var Requires = []string{"sandbox/local"}
 
 func Apply(p *sdk.Plugin) error {

@@ -43,14 +43,26 @@ type ToolCall struct {
 	Args map[string]any
 }
 
+// Usage counts tokens. InputTokens is every input token, cached or not,
+// so it is comparable across providers; CacheReadTokens and
+// CacheWriteTokens say how many of them were read from or written to the
+// provider's prompt cache.
 type Usage struct {
-	InputTokens  int
-	OutputTokens int
-	TotalTokens  int
+	InputTokens      int
+	OutputTokens     int
+	TotalTokens      int
+	CacheReadTokens  int
+	CacheWriteTokens int
 }
 
 func (u Usage) Add(o Usage) Usage {
-	return Usage{u.InputTokens + o.InputTokens, u.OutputTokens + o.OutputTokens, u.TotalTokens + o.TotalTokens}
+	return Usage{
+		InputTokens:      u.InputTokens + o.InputTokens,
+		OutputTokens:     u.OutputTokens + o.OutputTokens,
+		TotalTokens:      u.TotalTokens + o.TotalTokens,
+		CacheReadTokens:  u.CacheReadTokens + o.CacheReadTokens,
+		CacheWriteTokens: u.CacheWriteTokens + o.CacheWriteTokens,
+	}
 }
 
 // ---- Tools ----
@@ -119,7 +131,7 @@ type Chunk struct {
 type ModelResponse struct {
 	Message      Message
 	Usage        Usage
-	FinishReason string // stop | tool_calls | length | error
+	FinishReason string // stop | tool_calls | length | refusal | error
 }
 
 type ModelHandler func(ctx context.Context, req *ModelRequest) (*ModelResponse, error)

@@ -21,6 +21,11 @@ import (
 // "threads". Safe across processes on one machine (lock files).
 //
 // Config: dir (default ".eipagent/threads").
+//
+// Example:
+//
+//	eipagent.WithPlugin("threads_file", map[string]any{"dir": ".eipagent/threads"})
+//	// Shortcut with memory_file too: eipagent.WithPersistence("file", ".eipagent")
 var Permissions = []string{"fs:read", "fs:write"}
 
 func Apply(p *sdk.Plugin) error {

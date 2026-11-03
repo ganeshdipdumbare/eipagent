@@ -16,6 +16,13 @@ import (
 //	on_error: "message" (default: tell the model) | "raise" (abort the run)
 //	template: message template; {tool} and {error} are replaced
 //	tools:    only these tools ([] = all)
+//
+// Example:
+//
+//	eipagent.WithPlugin("hook_tool_errors", map[string]any{
+//		"on_error": "message",
+//		"template": "{tool} failed: {error}. Try another way.",
+//	})
 func Apply(p *sdk.Plugin) error {
 	mode := p.ConfigString("on_error", "message")
 	tmpl := p.ConfigString("template", "Tool {tool} failed: {error}. Check the arguments and try again, or use another approach.")
