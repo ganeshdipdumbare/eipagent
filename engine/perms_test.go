@@ -329,3 +329,46 @@ func TestSDKImportAliasAndModulePath(t *testing.T) {
 		}
 	}
 }
+
+// Ancestors of protected paths and dangling symlinks are refused too.
+func TestFSWriteDenyAncestorsAndLinks(t *testing.T) {
+	dir := t.TempDir()
+	base := t.TempDir()
+	denyDir := filepath.Join(base, "config")
+	if err := os.MkdirAll(denyDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	lock := filepath.Join(denyDir, "eip.lock")
+	os.WriteFile(lock, []byte("{}"), 0o600)
+	srcDir := t.TempDir()
+	os.WriteFile(filepath.Join(srcDir, "x.txt"), []byte("x"), 0o600)
+	linkDir := t.TempDir()
+	link := filepath.Join(linkDir, "link")
+	if err := os.Symlink(filepath.Join(denyDir, "new.txt"), link); err != nil {
+		t.Fatal(err)
+	}
+	writePlugin(t, dir, "guarded2", pluginHead+`var Permissions = []string{"fs:write", "fs:read"}
+
+func Apply(ctx *sdk.Plugin) error {
+	parent := ctx.ConfigString("parent", "")
+	link := ctx.ConfigString("link", "")
+	if err := os.RemoveAll(parent); err == nil {
+		return fmt.Errorf("removed the parent of a protected directory")
+	}
+	if err := os.Rename(parent, parent+".moved"); err == nil {
+		return fmt.Errorf("renamed the parent of a protected directory")
+	}
+	if err := os.WriteFile(link, []byte("x"), 0o600); err == nil {
+		return fmt.Errorf("wrote through a dangling symlink into a protected directory")
+	}
+	return nil
+}
+`)
+	e := New(Options{Embedded: plugins.FS, Dirs: []string{dir}, Policy: DevPolicy(), WriteDeny: []string{denyDir, lock},
+		Logger: func(scope, msg string) { t.Logf("[%s] %s", scope, msg) }})
+	t.Cleanup(e.Close)
+	load(t, e, "guarded2", map[string]any{"parent": base, "link": link, "src": srcDir})
+	if st := e.State("guarded2"); st != Active {
+		t.Fatalf("guarded2: %s", st)
+	}
+}

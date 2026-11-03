@@ -15,52 +15,111 @@ import (
 // not files a plugin should change.
 var protectedWriteDirs = []string{"/proc", "/sys", "/dev"}
 
-// resolveWritePath follows symlinks as far as the path exists, so a
-// check can't be fooled by a link to a protected file or directory.
+// resolveWritePath follows symlinks component by component, including a
+// link whose target does not exist, so a dangling link can't smuggle a
+// write into a protected path.
 func resolveWritePath(p string) string {
 	abs, err := filepath.Abs(p)
 	if err != nil {
 		return filepath.Clean(p)
 	}
-	abs = filepath.Clean(abs)
-	existing, rest := abs, ""
-	for {
-		if _, err := os.Lstat(existing); err == nil {
-			break
-		}
-		parent := filepath.Dir(existing)
-		if parent == existing {
-			break
-		}
-		rest = filepath.Join(filepath.Base(existing), rest)
-		existing = parent
-	}
-	real, err := filepath.EvalSymlinks(existing)
-	if err != nil {
-		real = existing
-	}
-	return filepath.Join(real, rest)
+	return resolveParts(filepath.Clean(abs), 0)
 }
 
-// checkWritePath refuses paths under /proc, /sys, /dev and the paths
-// holding the agent's own configuration and plugin store.
-func checkWritePath(p string, deny []string) error {
+func resolveParts(abs string, depth int) string {
+	if depth > 64 {
+		return filepath.Clean(abs)
+	}
+	vol := filepath.VolumeName(abs)
+	rest := strings.TrimPrefix(abs, vol)
+	parts := strings.Split(rest, string(filepath.Separator))
+	resolved := vol
+	if resolved == "" {
+		resolved = string(filepath.Separator)
+	}
+	for i, part := range parts {
+		if part == "" || part == "." {
+			continue
+		}
+		candidate := filepath.Join(resolved, part)
+		fi, err := os.Lstat(candidate)
+		if err != nil {
+			// Nothing below this point exists: keep the rest as written.
+			out := candidate
+			for _, r := range parts[i+1:] {
+				if r != "" && r != "." {
+					out = filepath.Join(out, r)
+				}
+			}
+			return filepath.Clean(out)
+		}
+		if fi.Mode()&os.ModeSymlink != 0 {
+			target, err := os.Readlink(candidate)
+			if err != nil {
+				return filepath.Clean(candidate)
+			}
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(filepath.Dir(candidate), target)
+			}
+			next := []string{target}
+			next = append(next, parts[i+1:]...)
+			return resolveParts(filepath.Join(next...), depth+1)
+		}
+		resolved = candidate
+	}
+	return filepath.Clean(resolved)
+}
+
+// underOrAncestor reports whether target is root, under root, or an
+// ancestor of root. Ancestors matter for RemoveAll and Rename: deleting
+// or moving a directory that holds a protected file must be refused too.
+func underOrAncestor(target, root string) bool {
+	return target == root ||
+		strings.HasPrefix(target, root+string(filepath.Separator)) ||
+		strings.HasPrefix(root, target+string(filepath.Separator))
+}
+
+// writeTarget refuses paths under /proc, /sys, /dev and the paths
+// holding the agent's own configuration and plugin store. It also
+// refuses ancestors of those paths, so a recursive delete or rename
+// can't remove or move them. It returns the resolved path so callers
+// can open that instead of the original (narrowing the race between the
+// check and the operation).
+func writeTarget(p string, deny []string, protectAncestors bool) (string, error) {
 	target := resolveWritePath(p)
-	for _, root := range protectedWriteDirs {
+	match := func(root string) bool {
 		if target == root || strings.HasPrefix(target, root+string(filepath.Separator)) {
-			return fmt.Errorf("os: refusing to write %s: protected system path", p)
+			return true
+		}
+		return protectAncestors && strings.HasPrefix(root, target+string(filepath.Separator))
+	}
+	for _, root := range protectedWriteDirs {
+		if match(root) {
+			return "", fmt.Errorf("os: refusing to write %s: protected system path", p)
 		}
 	}
 	for _, d := range deny {
 		if d == "" {
 			continue
 		}
-		root := resolveWritePath(d)
-		if target == root || strings.HasPrefix(target, root+string(filepath.Separator)) {
-			return fmt.Errorf("os: refusing to write %s: protected agent path", p)
+		if match(resolveWritePath(d)) {
+			return "", fmt.Errorf("os: refusing to write %s: protected agent path", p)
 		}
 	}
-	return nil
+	return target, nil
+}
+
+// checkWritePath is for writes that can only touch the target itself.
+func checkWritePath(p string, deny []string) error {
+	_, err := writeTarget(p, deny, false)
+	return err
+}
+
+// checkWriteTree is for recursive operations (delete, rename, copy): an
+// ancestor of a protected path must be refused too.
+func checkWriteTree(p string, deny []string) error {
+	_, err := writeTarget(p, deny, true)
+	return err
 }
 
 // The wrappers below are os symbols for plugins holding fs:write. The
@@ -135,24 +194,24 @@ func guardedMkdirTemp(dir, pattern string, deny []string) (string, error) {
 }
 
 func guardedRemove(name string, deny []string) error {
-	if err := checkWritePath(name, deny); err != nil {
+	if err := checkWriteTree(name, deny); err != nil {
 		return err
 	}
 	return os.Remove(name)
 }
 
 func guardedRemoveAll(name string, deny []string) error {
-	if err := checkWritePath(name, deny); err != nil {
+	if err := checkWriteTree(name, deny); err != nil {
 		return err
 	}
 	return os.RemoveAll(name)
 }
 
 func guardedRename(oldname, newname string, deny []string) error {
-	if err := checkWritePath(oldname, deny); err != nil {
+	if err := checkWriteTree(oldname, deny); err != nil {
 		return err
 	}
-	if err := checkWritePath(newname, deny); err != nil {
+	if err := checkWriteTree(newname, deny); err != nil {
 		return err
 	}
 	return os.Rename(oldname, newname)
@@ -190,7 +249,18 @@ func guardedTruncate(name string, size int64, deny []string) error {
 }
 
 func guardedCopyFS(dir string, fsys fs.FS, deny []string) error {
-	if err := checkWritePath(dir, deny); err != nil {
+	if err := checkWriteTree(dir, deny); err != nil {
+		return err
+	}
+	if err := fs.WalkDir(fsys, ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if p == "." {
+			return nil
+		}
+		return checkWritePath(filepath.Join(dir, filepath.FromSlash(p)), deny)
+	}); err != nil {
 		return err
 	}
 	return os.CopyFS(dir, fsys)

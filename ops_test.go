@@ -85,7 +85,7 @@ func TestWebhook(t *testing.T) {
 		t.Fatalf("unsigned must be rejected, got %d", code)
 	}
 	mac := hmac.New(sha256.New, []byte("s3cret"))
-	mac.Write([]byte(ts + "."))
+	mac.Write([]byte("POST\n/gh\n" + ts + "\n"))
 	mac.Write(body)
 	if code := post("sha256=" + hex.EncodeToString(mac.Sum(nil))); code != 202 {
 		t.Fatalf("signed: %d", code)

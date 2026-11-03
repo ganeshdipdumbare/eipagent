@@ -43,7 +43,6 @@ func init() {
 		"Num":                reflect.ValueOf(sdk.Num),
 		"Object":             reflect.ValueOf(sdk.Object),
 		"PluginAliases":      reflect.ValueOf(sdk.PluginAliases),
-		"PluginRenames":      reflect.ValueOf(&sdk.PluginRenames).Elem(),
 		"PriorityReserved":   reflect.ValueOf(constant.MakeFromLiteral("1000000", token.INT, 0)),
 		"ReadSSE":            reflect.ValueOf(sdk.ReadSSE),
 		"Redact":             reflect.ValueOf(sdk.Redact),

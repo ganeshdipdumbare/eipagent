@@ -21,8 +21,10 @@ import (
 )
 
 // Starts agent runs from webhooks. Every route requires an HMAC-SHA256
-// signature ("X-Signature-256: sha256=<hex>") over "<timestamp>.<body>",
-// so only trusted senders can trigger work.
+// signature ("X-Signature-256: sha256=<hex>") over
+// "METHOD\nPATH\n<timestamp>\n<body>", so only trusted senders can
+// trigger work and a delivery for one route can't be replayed against
+// another.
 //
 // Abuse limits, per route:
 //   - replays: a signature already seen in the last replay_window_seconds
@@ -203,7 +205,7 @@ func route(p *sdk.Plugin, mux *http.ServeMux, agent *sdk.AgentService, r map[str
 				http.Error(w, "stale or missing timestamp", 401)
 				return
 			}
-			mac.Write([]byte(ts + "."))
+			mac.Write([]byte(req.Method + "\n" + req.URL.Path + "\n" + ts + "\n"))
 		}
 		mac.Write(body)
 		want := "sha256=" + hex.EncodeToString(mac.Sum(nil))

@@ -564,11 +564,12 @@ func Apply(p *sdk.Plugin) error {
 	// fresh reserves a signature only when the request is accepted. full
 	// means the cache is at its bound: refuse rather than evict (evicting
 	// would make an accepted request replayable inside the window).
-	fresh := func(sig string) (ok, full bool) {
+	fresh := func(sig string, expiry time.Time) (ok, full bool) {
 		mu.Lock()
 		defer mu.Unlock()
+		now := time.Now()
 		for k, t := range seen {
-			if time.Since(t) > 5*time.Minute {
+			if now.After(t) {
 				delete(seen, k)
 			}
 		}
@@ -578,7 +579,7 @@ func Apply(p *sdk.Plugin) error {
 		if len(seen) >= 10000 {
 			return false, true
 		}
-		seen[sig] = time.Now()
+		seen[sig] = expiry
 		return true, false
 	}
 	release := func(sig string) {
@@ -619,7 +620,7 @@ func Apply(p *sdk.Plugin) error {
 			http.Error(w, "too many runs in progress", 429)
 			return
 		}
-		ok, full := fresh(sig)
+		ok, full := fresh(sig, time.Unix(sec, 0).Add(5*time.Minute))
 		if full {
 			http.Error(w, "replay cache full", 503)
 			return

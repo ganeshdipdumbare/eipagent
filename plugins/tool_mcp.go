@@ -181,6 +181,7 @@ func stdioClient(p *sdk.Plugin, name string, s map[string]any) (*client, error) 
 		return nil, fmt.Errorf("tool_mcp %s: start: %w", name, err)
 	}
 	var mu sync.Mutex
+	var writeMu sync.Mutex
 	var seq int64
 	waiting := map[int64]chan rpcMsg{}
 	done := make(chan struct{})
@@ -204,8 +205,8 @@ func stdioClient(p *sdk.Plugin, name string, s map[string]any) (*client, error) 
 	}()
 	write := func(m map[string]any) error {
 		b, _ := json.Marshal(m)
-		mu.Lock()
-		defer mu.Unlock()
+		writeMu.Lock()
+		defer writeMu.Unlock()
 		_, err := stdin.Write(append(b, '\n'))
 		return err
 	}

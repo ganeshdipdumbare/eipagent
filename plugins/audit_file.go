@@ -191,21 +191,36 @@ func Apply(p *sdk.Plugin) error {
 		}
 		line := []byte(`{"body":` + string(body) + `,"prev":"` + prev + `","hash":"` + hash + `"` + mac + `}` + "\n")
 		if f != nil {
-			_, werr := f.Write(line)
+			size, haveSize := int64(0), false
+			if st, serr := f.Stat(); serr == nil {
+				size, haveSize = st.Size(), true
+			}
+			n, werr := f.Write(line)
+			if werr == nil && n != len(line) {
+				werr = fmt.Errorf("short write: %d of %d bytes", n, len(line))
+			}
 			if werr == nil {
 				werr = f.Sync()
 			}
 			if werr != nil {
-				// Never silent: the record still goes to the sinks, and the
-				// failure is logged (once per distinct error).
+				// Roll back any partial bytes and keep the in-memory chain on
+				// the last persisted record: a transient disk error must not
+				// leave a seq/prev gap that blocks the next startup.
+				if haveSize {
+					if terr := f.Truncate(size); terr != nil {
+						p.Logf("audit_file: cannot roll back %s: %v", logPath, terr)
+					}
+				}
+				seq--
 				if msg := werr.Error(); msg != lastErr {
 					lastErr = msg
 					p.Logf("audit_file: cannot write %s: %v (records are not reaching the local log)", logPath, werr)
 				}
-			} else {
-				lastErr = ""
-				writeHead(seq, hash)
+				mu.Unlock()
+				return
 			}
+			lastErr = ""
+			writeHead(seq, hash)
 		}
 		prev = hash
 		for _, name := range p.Services("audit/sink/") { // in chain order; sinks only enqueue

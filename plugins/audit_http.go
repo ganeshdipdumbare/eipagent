@@ -7,7 +7,6 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -111,7 +110,7 @@ func Apply(p *sdk.Plugin) error {
 		}
 		resp.Body.Close()
 		if resp.StatusCode >= 300 {
-			return fmt.Errorf("HTTP %d", resp.StatusCode)
+			return &httpStatusError{code: resp.StatusCode}
 		}
 		return nil
 	}
@@ -145,6 +144,13 @@ func Apply(p *sdk.Plugin) error {
 				time.Sleep(time.Duration(200*(try+1)) * time.Millisecond)
 			}
 			if err != nil {
+				if se, ok := err.(*httpStatusError); ok && !retryableStatus(se.code) {
+					// A permanent rejection (auth error, wrong endpoint) must
+					// not block every later record behind it: drop this batch
+					// and keep the stream moving.
+					p.Logf("audit_http: dropping %d records: %v", n, err)
+					continue
+				}
 				// Put them back in front, in order; if the queue is now over
 				// max_queue, the oldest go (and are counted as dropped).
 				mu.Lock()
@@ -217,8 +223,7 @@ func localHost(h string) bool {
 }
 
 func safeURLError(err error) string {
-	var ue *url.Error
-	if errors.As(err, &ue) {
+	if ue, ok := err.(*url.Error); ok {
 		host := ""
 		if u, perr := url.Parse(ue.URL); perr == nil {
 			host = u.Hostname()
@@ -227,3 +232,9 @@ func safeURLError(err error) string {
 	}
 	return sdk.Redact(err.Error())
 }
+
+type httpStatusError struct{ code int }
+
+func (e *httpStatusError) Error() string { return fmt.Sprintf("HTTP %d", e.code) }
+
+func retryableStatus(code int) bool { return code == 408 || code == 429 || code >= 500 }

@@ -70,7 +70,7 @@ func TestWebhookSelfReferenceAndReplay(t *testing.T) {
 	body := []byte(`{"title":"{title}","a":"{b}","b":"{a}"}`) // used to loop forever
 	ts := strconv.FormatInt(time.Now().Unix(), 10)
 	mac := hmac.New(sha256.New, []byte("hook-secret-123"))
-	mac.Write([]byte(ts + "."))
+	mac.Write([]byte("POST\n/hook\n" + ts + "\n"))
 	mac.Write(body)
 	sig := "sha256=" + hex.EncodeToString(mac.Sum(nil))
 	post := func() (int, string) {
@@ -429,13 +429,17 @@ func TestPIIRecursiveScrub(t *testing.T) {
 	}
 }
 
-func signHook(secret, ts string, body []byte) string {
+func signHookPath(secret, method, path, ts string, body []byte) string {
 	m := hmac.New(sha256.New, []byte(secret))
 	if ts != "" {
-		m.Write([]byte(ts + "."))
+		m.Write([]byte(method + "\n" + path + "\n" + ts + "\n"))
 	}
 	m.Write(body)
 	return "sha256=" + hex.EncodeToString(m.Sum(nil))
+}
+
+func signHook(secret, ts string, body []byte) string {
+	return signHookPath(secret, "POST", "/hook", ts, body)
 }
 
 func postHook(t *testing.T, addr, path, ts, sig string, body []byte) (int, string) {
@@ -584,5 +588,76 @@ func TestSandboxLocalFixedWorkdirRemove(t *testing.T) {
 	}
 	if err := box.Remove(bg, "sub/file.txt"); err != nil {
 		t.Fatalf("ordinary file: %v", err)
+	}
+}
+
+func TestWebhookSignatureBoundToRoute(t *testing.T) {
+	t.Setenv("HOOK_TOKEN", "hook-secret-123")
+	addr := freeAddr(t)
+	mockAgent(t, []any{map[string]any{"text": "ok"}},
+		eipagent.WithPlugin("secrets_env", nil),
+		eipagent.WithPlugin("trigger_webhook", map[string]any{"addr": addr, "routes": []any{
+			map[string]any{"path": "/a", "secret": "secret://HOOK_TOKEN", "user": "bot"},
+			map[string]any{"path": "/b", "secret": "secret://HOOK_TOKEN", "user": "bot"},
+		}}))
+	body := []byte(`{"n":"1"}`)
+	ts := strconv.FormatInt(time.Now().Unix(), 10)
+	sigA := signHookPath("hook-secret-123", "POST", "/a", ts, body)
+	if code, out := postHook(t, addr, "/a", ts, sigA, body); code != 202 {
+		t.Fatalf("route /a: %d %s", code, out)
+	}
+	if code, _ := postHook(t, addr, "/b", ts, sigA, body); code != 401 {
+		t.Fatalf("a signature for /a was accepted on /b: %d", code)
+	}
+}
+
+func TestAuditHTTPDropsPermanentRejection(t *testing.T) {
+	var mu sync.Mutex
+	var n int
+	var statuses []int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		n++
+		first := n == 1
+		mu.Unlock()
+		if first {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		mu.Lock()
+		statuses = append(statuses, http.StatusOK)
+		mu.Unlock()
+	}))
+	defer srv.Close()
+	a := mockAgent(t, []any{map[string]any{"text": "one"}, map[string]any{"text": "two"}},
+		eipagent.WithPlugin("audit_file", map[string]any{"path": "-"}),
+		eipagent.WithPlugin("audit_http", map[string]any{"url": srv.URL, "batch_size": 1, "retries": 0, "flush_seconds": 1}))
+	if _, err := a.Generate(bg, "one"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Generate(bg, "two"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(statuses) > 0
+	})
+	a.Close()
+	mu.Lock()
+	defer mu.Unlock()
+	if len(statuses) == 0 {
+		t.Fatal("a permanent rejection blocked every later record")
+	}
+}
+
+func TestTraceOTLPRejectsPlaintextHeaders(t *testing.T) {
+	_, err := eipagent.New(eipagent.WithModel("mock:x"),
+		eipagent.WithPlugin("model_mock", map[string]any{"script": []any{}}),
+		eipagent.WithPlugin("secrets_env", nil),
+		eipagent.WithPlugin("trace_otlp", map[string]any{"endpoint": "http://example.com", "headers": map[string]any{"x-api-key": "secret://OTLP_KEY"}}),
+		eipagent.WithLogger(func(string, string) {}))
+	if err == nil {
+		t.Fatal("plaintext OTLP endpoint with a secret header was accepted")
 	}
 }
