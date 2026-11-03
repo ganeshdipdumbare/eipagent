@@ -129,9 +129,16 @@ func serve(ctx context.Context, args []string) error {
 	c.flags(fs)
 	fs.Bool("stdio", true, "serve JSON-RPC on stdin/stdout")
 	fs.Parse(args)
-	// stdout carries the protocol; logs go to stderr.
+	// stdin and stdout carry the protocol and nothing else: a plugin that
+	// prints goes to stderr (the host's [box] log), and one that reads
+	// stdin gets EOF instead of the host's messages.
+	in, out := os.Stdin, os.Stdout
+	os.Stdout = os.Stderr
+	if null, err := os.Open(os.DevNull); err == nil {
+		os.Stdin = null
+	}
 	opts := append(c.options(), eipagent.WithLogger(func(scope, msg string) { fmt.Fprintf(os.Stderr, "[%s] %s\n", scope, msg) }))
-	return eipagent.Serve(ctx, os.Stdin, os.Stdout, opts...)
+	return eipagent.Serve(ctx, in, out, opts...)
 }
 
 func evalCmd(ctx context.Context, args []string) error {

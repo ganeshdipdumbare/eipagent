@@ -5,6 +5,7 @@ package rpc
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -125,7 +126,7 @@ func (c *Conn) Serve() error {
 	sc.Buffer(make([]byte, 64*1024), 64*1024*1024)
 	for sc.Scan() {
 		var m msg
-		if err := json.Unmarshal(sc.Bytes(), &m); err != nil {
+		if !decode(sc.Bytes(), &m) {
 			continue // ignore stray output
 		}
 		if m.Method == "" && m.ID != nil { // response
@@ -172,6 +173,23 @@ func (c *Conn) Serve() error {
 	c.err = sc.Err()
 	c.Close()
 	return c.err
+}
+
+// msgStart is how every message this package writes begins.
+var msgStart = []byte(`{"jsonrpc":`)
+
+// decode reads one line. Output printed without a trailing newline
+// ends up in front of the next message on the same line; the message
+// is still read from where it starts, so its caller isn't left waiting.
+func decode(line []byte, m *msg) bool {
+	if json.Unmarshal(line, m) == nil {
+		return true
+	}
+	if i := bytes.Index(line, msgStart); i > 0 {
+		*m = msg{}
+		return json.Unmarshal(line[i:], m) == nil
+	}
+	return false
 }
 
 // Done is closed when the connection ends.

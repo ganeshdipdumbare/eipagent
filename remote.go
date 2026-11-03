@@ -53,7 +53,19 @@ type remote struct {
 	subs   map[string]func(sdk.Event)
 	seq    int
 	broker *broker
+
+	// What start needs to make a box again after one exits.
+	prov      *sdk.SandboxProvider
+	ri        *RunIn
+	hostTools []sdk.Tool
+	configs   map[string]any    // box path -> JSON written there (profile, policy, lock)
+	uploads   map[string]string // host file -> box path (eip binary, plugin sources)
+	startMu   sync.Mutex
 }
+
+// errBoxExited is returned to a call the box didn't answer because it
+// exited; the next run starts a new box.
+var errBoxExited = errors.New("eipagent: the agent in the sandbox exited (see [box] logs); the next run starts a new sandbox")
 
 func newRemote(cfg *config) (*Agent, error) {
 	ri := cfg.runIn
@@ -114,69 +126,75 @@ func newRemote(cfg *config) (*Agent, error) {
 	if !ok {
 		return fail(fmt.Errorf("eipagent: no sandbox/%s provider on the host", ri.Provider))
 	}
-	ctx := context.Background()
-	box, err := prov.Create(ctx, ri.Spec)
-	if err != nil {
-		return fail(err)
-	}
-	r := &remote{host: host, box: box, subs: map[string]func(sdk.Event){}}
+	r := &remote{host: host, prov: prov, ri: ri, hostTools: cfg.tools, subs: map[string]func(sdk.Event){},
+		configs: map[string]any{"eip/profile.json": prof, "eip/policy.json": pol, "eip/eip.lock": lock},
+		uploads: map[string]string{ri.Binary: "eip/eip"}}
 	r.broker, _ = newBroker(host, ri) // rules checked above
 	r.broker.setCallers(append(append([]engine.PluginSpec{}, prof.Plugins...), pol.Require...))
-	fail = func(err error) (*Agent, error) { r.close(); return nil, err }
-
-	tmp, err := os.MkdirTemp("", "eip-runin-")
-	if err != nil {
-		return fail(err)
-	}
-	defer os.RemoveAll(tmp)
-	write := func(name string, v any) (string, error) {
-		b, err := json.MarshalIndent(v, "", "  ")
-		if err != nil {
-			return "", err
-		}
-		p := filepath.Join(tmp, name)
-		return p, os.WriteFile(p, b, 0o600)
-	}
-	pf, err := write("profile.json", prof)
-	if err != nil {
-		return fail(err)
-	}
-	polf, err := write("policy.json", pol)
-	if err != nil {
-		return fail(err)
-	}
-	lockf, err := write("eip.lock", lock)
-	if err != nil {
-		return fail(err)
-	}
-	uploads := map[string]string{ri.Binary: "eip/eip", pf: "eip/profile.json", polf: "eip/policy.json", lockf: "eip/eip.lock"}
-	for _, d := range cfg.dirs {
-		ri.PluginDirs = append(ri.PluginDirs, d)
-	}
-	for _, d := range ri.PluginDirs {
+	for _, d := range append(append([]string{}, ri.PluginDirs...), cfg.dirs...) {
 		files, _ := filepath.Glob(filepath.Join(d, "*.go"))
 		for _, f := range files {
-			uploads[f] = "eip/plugins/" + filepath.Base(f)
+			r.uploads[f] = "eip/plugins/" + filepath.Base(f)
 		}
+	}
+	if err := r.start(); err != nil {
+		r.close()
+		return nil, err
+	}
+
+	a := &Agent{eng: host.eng, model: prof.Model, instructions: prof.Instructions, maxSteps: prof.MaxSteps,
+		user: cfg.user, roles: cfg.roles, stop: make(chan struct{}), remote: r}
+	return a, nil
+}
+
+// start creates a box, uploads the agent and starts it, at New and
+// again when a run finds the previous box gone. The box outlives any
+// one run, so it doesn't take a run's context.
+func (r *remote) start() error {
+	ctx := context.Background()
+	box, err := r.prov.Create(ctx, r.ri.Spec)
+	if err != nil {
+		return err
+	}
+	r.box = box
+	if box.Start == nil {
+		return fmt.Errorf("eipagent: sandbox/%s can't run long-lived processes", r.ri.Provider)
+	}
+	tmp, err := os.MkdirTemp("", "eip-runin-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmp)
+	uploads := map[string]string{}
+	for src, dst := range r.uploads {
+		uploads[src] = dst
+	}
+	for dst, v := range r.configs {
+		b, err := json.MarshalIndent(v, "", "  ")
+		if err != nil {
+			return err
+		}
+		p := filepath.Join(tmp, filepath.Base(dst))
+		if err := os.WriteFile(p, b, 0o600); err != nil {
+			return err
+		}
+		uploads[p] = dst
 	}
 	for src, dst := range uploads {
 		if err := box.Upload(ctx, src, dst); err != nil {
-			return fail(fmt.Errorf("eipagent: upload %s: %w", dst, err))
+			return fmt.Errorf("eipagent: upload %s: %w", dst, err)
 		}
-	}
-	if box.Start == nil {
-		return fail(fmt.Errorf("eipagent: sandbox/%s can't run long-lived processes", ri.Provider))
 	}
 	proc, err := box.Start(ctx, sdk.ExecRequest{Cmd: "./eip/eip", Args: []string{"serve", "--stdio",
 		"--profile", "eip/profile.json", "--policy", "eip/policy.json", "--lock", "eip/eip.lock", "--plugins", "eip/plugins"}})
 	if err != nil {
-		return fail(err)
+		return err
 	}
 	r.proc = proc
 	go func() { // box stderr -> host log
 		sc := bufio.NewScanner(proc.Stderr)
 		for sc.Scan() {
-			host.eng.Root().Logf("[box] %s", sc.Text())
+			r.host.eng.Root().Logf("[box] %s", sc.Text())
 		}
 	}()
 	r.conn = rpc.New(proc.Stdout, proc.Stdin, func() { proc.Stdin.Close(); proc.Kill() })
@@ -188,26 +206,59 @@ func newRemote(cfg *config) (*Agent, error) {
 		ready <- errors.New(msg)
 		return nil, nil
 	})
-	r.handle(ri.NoBridgeTools, cfg.tools)
+	r.handle(r.ri.NoBridgeTools, r.hostTools)
 	go r.conn.Serve()
 	select {
 	case err := <-ready:
 		if err != nil {
-			return fail(fmt.Errorf("eipagent: agent in sandbox failed to start: %w", err))
+			return fmt.Errorf("eipagent: agent in sandbox failed to start: %w", err)
 		}
 	case <-r.conn.Done():
-		return fail(errors.New("eipagent: agent in sandbox exited during startup (see [box] logs)"))
+		return errors.New("eipagent: agent in sandbox exited during startup (see [box] logs)")
 	case <-time.After(60 * time.Second):
-		return fail(errors.New("eipagent: agent in sandbox did not start within 60s"))
+		return errors.New("eipagent: agent in sandbox did not start within 60s")
 	}
+	return nil
+}
 
-	a := &Agent{eng: host.eng, model: prof.Model, instructions: prof.Instructions, maxSteps: prof.MaxSteps,
-		user: cfg.user, roles: cfg.roles, stop: make(chan struct{}), remote: r}
-	return a, nil
+// live returns the connection to the box. When the box has exited, it
+// starts a new one first; threads kept in the old box are gone with it
+// unless their store is outside the box.
+func (r *remote) live() (*rpc.Conn, error) {
+	r.startMu.Lock()
+	defer r.startMu.Unlock()
+	if r.conn != nil {
+		select {
+		case <-r.conn.Done():
+		default:
+			return r.conn, nil
+		}
+	}
+	r.host.eng.Root().Logf("the agent in the sandbox exited; starting a new sandbox")
+	r.stop()
+	if err := r.start(); err != nil {
+		r.stop()
+		return nil, fmt.Errorf("eipagent: restarting the sandbox: %w", err)
+	}
+	return r.conn, nil
+}
+
+// call makes one call on the live box.
+func (r *remote) call(ctx context.Context, method string, params, out any) error {
+	conn, err := r.live()
+	if err != nil {
+		return err
+	}
+	if err := conn.Call(ctx, method, params, out); errors.Is(err, rpc.ErrClosed) {
+		return errBoxExited
+	} else {
+		return err
+	}
 }
 
 func (r *remote) handle(noTools bool, hostTools []sdk.Tool) {
-	r.conn.Handle("host.hello", func(context.Context, json.RawMessage) (any, error) {
+	conn := r.conn // this box's connection; a restarted box gets its own
+	conn.Handle("host.hello", func(context.Context, json.RawMessage) (any, error) {
 		snap := r.host.eng.Root().Snapshot()
 		_, hasSecrets := snap.Services["secrets"].(*sdk.Secrets)
 		h := wireHello{Secrets: hasSecrets, Egress: true}
@@ -221,7 +272,7 @@ func (r *remote) handle(noTools bool, hostTools []sdk.Tool) {
 		}
 		return h, nil
 	})
-	r.conn.Handle("host.llm", func(c context.Context, raw json.RawMessage) (any, error) {
+	conn.Handle("host.llm", func(c context.Context, raw json.RawMessage) (any, error) {
 		var wr wireModelReq
 		if err := json.Unmarshal(raw, &wr); err != nil {
 			return nil, err
@@ -234,7 +285,7 @@ func (r *remote) handle(noTools bool, hostTools []sdk.Tool) {
 			req.Tools = append(req.Tools, sdk.Tool{Name: t.Name, Description: t.Description, Schema: t.Schema, Meta: t.Meta})
 		}
 		if wr.Stream {
-			req.Stream = func(ch sdk.Chunk) { r.conn.Notify("host.llm.chunk", wireChunk{CallID: wr.CallID, Chunk: ch}) }
+			req.Stream = func(ch sdk.Chunk) { conn.Notify("host.llm.chunk", wireChunk{CallID: wr.CallID, Chunk: ch}) }
 		}
 		base := func(c context.Context, req *sdk.ModelRequest) (*sdk.ModelResponse, error) {
 			prov, id := sdk.SplitModel(req.Model)
@@ -247,21 +298,21 @@ func (r *remote) handle(noTools bool, hostTools []sdk.Tool) {
 		}
 		return snap.ModelChain(base)(c, req) // host middleware & policy apply
 	})
-	r.conn.Handle("host.secret", func(c context.Context, raw json.RawMessage) (any, error) {
+	conn.Handle("host.secret", func(c context.Context, raw json.RawMessage) (any, error) {
 		var req wireSecretReq
 		if err := json.Unmarshal(raw, &req); err != nil {
 			return nil, err
 		}
 		return r.broker.placeholder(c, req.Caller, req.Name)
 	})
-	r.conn.Handle("host.http", func(c context.Context, raw json.RawMessage) (any, error) {
+	conn.Handle("host.http", func(c context.Context, raw json.RawMessage) (any, error) {
 		var req wireHTTPReq
 		if err := json.Unmarshal(raw, &req); err != nil {
 			return nil, err
 		}
 		return r.broker.fetch(c, req)
 	})
-	r.conn.Handle("host.tool", func(c context.Context, raw json.RawMessage) (any, error) {
+	conn.Handle("host.tool", func(c context.Context, raw json.RawMessage) (any, error) {
 		var call wireToolCall
 		if err := json.Unmarshal(raw, &call); err != nil {
 			return nil, err
@@ -273,7 +324,7 @@ func (r *remote) handle(noTools bool, hostTools []sdk.Tool) {
 		}
 		return nil, fmt.Errorf("no host tool %q", call.Name)
 	})
-	r.conn.Handle("agent.event", func(_ context.Context, raw json.RawMessage) (any, error) {
+	conn.Handle("agent.event", func(_ context.Context, raw json.RawMessage) (any, error) {
 		var ev wireEvent
 		if json.Unmarshal(raw, &ev) == nil {
 			r.mu.Lock()
@@ -309,7 +360,7 @@ func (r *remote) run(ctx context.Context, st *sdk.RunState, ro *runOptions) (*Re
 	id, done := r.subscribe(ro.onEvent)
 	defer done()
 	var res Result
-	if err := r.conn.Call(ctx, "agent.run", toWire(st, id, ro.onEvent != nil), &res); err != nil {
+	if err := r.call(ctx, "agent.run", toWire(st, id, ro.onEvent != nil), &res); err != nil {
 		return nil, err
 	}
 	return &res, nil
@@ -325,7 +376,7 @@ func (r *remote) thread(ctx context.Context, thread, prompt string, decisions []
 	wr := wireRun{RunID: id, Thread: thread, Prompt: prompt, Decisions: decisions, User: ro.user, Roles: ro.roles,
 		MaxSteps: ro.maxSteps, Streaming: ro.onEvent != nil}
 	var res Result
-	if err := r.conn.Call(ctx, "agent.thread", wr, &res); err != nil {
+	if err := r.call(ctx, "agent.thread", wr, &res); err != nil {
 		return nil, err
 	}
 	return &res, nil
@@ -333,13 +384,23 @@ func (r *remote) thread(ctx context.Context, thread, prompt string, decisions []
 
 func (r *remote) threadState(ctx context.Context, thread string) (*wireThreadState, error) {
 	var ts wireThreadState
-	err := r.conn.Call(ctx, "thread.get", wireRun{Thread: thread}, &ts)
+	err := r.call(ctx, "thread.get", wireRun{Thread: thread}, &ts)
 	return &ts, err
 }
 
 func (r *remote) statusErr() ([]string, error) {
 	var rows []string
-	err := r.conn.Call(context.Background(), "agent.status", struct{}{}, &rows)
+	// Status reports on the box as it is; it doesn't start a new one.
+	r.startMu.Lock()
+	conn := r.conn
+	r.startMu.Unlock()
+	if conn == nil {
+		return nil, errBoxExited
+	}
+	err := conn.Call(context.Background(), "agent.status", struct{}{}, &rows)
+	if errors.Is(err, rpc.ErrClosed) {
+		err = errBoxExited
+	}
 	return rows, err
 }
 
@@ -355,7 +416,8 @@ func (r *remote) status() []engine.PluginStatus {
 	return append(out, r.host.eng.Status()...)
 }
 
-func (r *remote) close() {
+// stop ends the box's process and removes the box.
+func (r *remote) stop() {
 	if r.conn != nil {
 		r.conn.Close()
 	}
@@ -365,5 +427,10 @@ func (r *remote) close() {
 	if r.box != nil {
 		r.box.Close(context.Background())
 	}
+	r.conn, r.proc, r.box = nil, nil, nil
+}
+
+func (r *remote) close() {
+	r.stop()
 	r.host.Close()
 }
