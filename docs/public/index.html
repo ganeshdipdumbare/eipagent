@@ -386,7 +386,7 @@ td code { white-space: nowrap; }
 <aside class="side" id="side" aria-label="Documentation">
   <div class="version">
     <span class="logo"><svg viewBox="0 0 32 32" aria-hidden="true"><rect x="3" y="3" width="11" height="11" rx="2.5" fill="var(--bg)"/><rect x="18" y="3" width="11" height="11" rx="2.5" fill="none" stroke="var(--bg)" stroke-width="2.4"/><rect x="3" y="18" width="11" height="11" rx="2.5" fill="none" stroke="var(--bg)" stroke-width="2.4"/><rect x="18" y="18" width="11" height="11" rx="2.5" fill="var(--accent)"/></svg></span>
-    <span><b>v0.4.0</b><small>Go 1.27 · latest</small></span>
+    <span><b>v0.4.2</b><small>Go 1.27 · latest</small></span>
   </div>
   <nav id="sidenav"></nav>
 </aside>
@@ -469,12 +469,12 @@ fmt.Println(res.Text)</code></pre></div></div></div>
 <section id="installation" class="page">
   <h1>Installation</h1>
   <p>eipagent needs Go 1.27 or newer. Add a tagged release to your module:</p>
-  <div class="code" data-title="terminal"><pre><code class="language-bash">go get github.com/ganeshdipdumbare/eipagent@v0.4.0</code></pre></div>
+  <div class="code" data-title="terminal"><pre><code class="language-bash">go get github.com/ganeshdipdumbare/eipagent@v0.4.2</code></pre></div>
   <p>The repository is private, so tell Go and give git access once:</p>
   <div class="code" data-title="terminal"><pre><code class="language-bash">go env -w GOPRIVATE=github.com/ganeshdipdumbare/*
 gh auth setup-git        # or use an SSH key for github.com</code></pre></div>
   <p>The CLI installs the same way:</p>
-  <div class="code" data-title="terminal"><pre><code class="language-bash">go install github.com/ganeshdipdumbare/eipagent/cmd/eip@v0.4.0</code></pre></div>
+  <div class="code" data-title="terminal"><pre><code class="language-bash">go install github.com/ganeshdipdumbare/eipagent/cmd/eip@v0.4.2</code></pre></div>
   <h2>Versions</h2>
   <p>Releases are git tags that follow semantic versioning. While the major version is 0, patch releases (<code>v0.4.x</code>) only fix bugs and security issues, and minor releases (<code>v0.x.0</code>) may break the API. Each break is listed with what to change in <a href="https://github.com/ganeshdipdumbare/eipagent/blob/main/CHANGELOG.md">CHANGELOG.md</a>. Interpreted plugins import the SDK as <code>"eipagent/sdk"</code>, an alias that stays the same across releases, so plugin files never change for it.</p>
   <p>Check that everything works from a checkout. The test suite runs offline, using a mock model that needs no API key.</p>
