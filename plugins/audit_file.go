@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -74,16 +75,45 @@ func Apply(p *sdk.Plugin) error {
 			return err
 		}
 		if old, err := os.Open(logPath); err == nil { // continue an existing chain
+			// A partial trailing line (a crash mid-write) can't be
+			// continued safely: appending would fuse it with the next
+			// record. Refuse rather than silently truncate an audit log.
+			if st, serr := old.Stat(); serr == nil && st.Size() > 0 {
+				last := make([]byte, 1)
+				if _, rerr := old.ReadAt(last, st.Size()-1); rerr != nil {
+					old.Close()
+					return fmt.Errorf("audit_file: reading %s: %v", logPath, rerr)
+				}
+				if last[0] != '\n' {
+					old.Close()
+					return fmt.Errorf("audit_file: %s ends in a partial line; refusing to continue the chain", logPath)
+				}
+			}
 			sc := bufio.NewScanner(old)
 			sc.Buffer(make([]byte, 1024*1024), 64*1024*1024)
+			line := 0
 			for sc.Scan() {
-				var line struct {
+				line++
+				var rec struct {
 					Hash string `json:"hash"`
+					Body struct {
+						Seq int `json:"seq"`
+					} `json:"body"`
 				}
-				if json.Unmarshal(sc.Bytes(), &line) == nil {
-					prev = line.Hash
-					seq++
+				if err := json.Unmarshal(sc.Bytes(), &rec); err != nil {
+					old.Close()
+					return fmt.Errorf("audit_file: %s line %d is not valid JSON; refusing to continue the chain", logPath, line)
 				}
+				if rec.Body.Seq != line {
+					old.Close()
+					return fmt.Errorf("audit_file: %s line %d has seq %d; refusing to continue a broken chain", logPath, line, rec.Body.Seq)
+				}
+				prev = rec.Hash
+				seq = line
+			}
+			if err := sc.Err(); err != nil {
+				old.Close()
+				return fmt.Errorf("audit_file: reading %s: %v", logPath, err)
 			}
 			old.Close()
 		}
@@ -96,6 +126,56 @@ func Apply(p *sdk.Plugin) error {
 	}
 	var mu sync.Mutex
 	lastErr := ""
+	headMAC := func(seq int, hash string) string {
+		m := hmac.New(sha256.New, chainKey)
+		m.Write([]byte(strconv.Itoa(seq)))
+		m.Write([]byte("|"))
+		m.Write([]byte(hash))
+		return hex.EncodeToString(m.Sum(nil))
+	}
+	// writeHead keeps <log>.head in step with the last line, so a
+	// truncated tail is detectable (eip audit verify / audit.VerifyKeyed).
+	writeHead := func(seq int, hash string) {
+		if f == nil {
+			return
+		}
+		mac := ""
+		if len(chainKey) > 0 {
+			mac = headMAC(seq, hash)
+		}
+		b, _ := json.Marshal(struct {
+			Seq  int    `json:"seq"`
+			Hash string `json:"hash"`
+			Mac  string `json:"mac"`
+		}{seq, hash, mac})
+		b = append(b, '\n')
+		tmp, err := os.CreateTemp(filepath.Dir(logPath), ".head-*")
+		if err != nil {
+			p.Logf("audit_file: cannot write the head checkpoint: %v", err)
+			return
+		}
+		name := tmp.Name()
+		if _, err := tmp.Write(b); err != nil {
+			tmp.Close()
+			os.Remove(name)
+			p.Logf("audit_file: cannot write the head checkpoint: %v", err)
+			return
+		}
+		if err := tmp.Close(); err != nil {
+			os.Remove(name)
+			p.Logf("audit_file: cannot write the head checkpoint: %v", err)
+			return
+		}
+		if err := os.Chmod(name, 0o600); err != nil {
+			os.Remove(name)
+			p.Logf("audit_file: cannot write the head checkpoint: %v", err)
+			return
+		}
+		if err := os.Rename(name, logPath+".head"); err != nil {
+			os.Remove(name)
+			p.Logf("audit_file: cannot write the head checkpoint: %v", err)
+		}
+	}
 	record := func(kind string, data map[string]any) {
 		data = sdk.RedactMap(data)
 		mu.Lock()
@@ -124,6 +204,7 @@ func Apply(p *sdk.Plugin) error {
 				}
 			} else {
 				lastErr = ""
+				writeHead(seq, hash)
 			}
 		}
 		prev = hash

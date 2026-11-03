@@ -146,6 +146,30 @@ func TestKeyedAuditChain(t *testing.T) {
 	}
 }
 
+func TestAuditFileRefusesPartialTrailingLine(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "audit.jsonl")
+	a := mockAgent(t, nil, eipagent.WithPlugin("audit_file", map[string]any{"path": p}))
+	a.Close()
+	f, err := os.OpenFile(p, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(`{"body":{"seq":99`); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	_, err = eipagent.New(eipagent.WithModel("mock:x"),
+		eipagent.WithPlugin("model_mock", map[string]any{"script": []any{}}),
+		eipagent.WithPlugin("audit_file", map[string]any{"path": p}),
+		eipagent.WithLogger(func(string, string) {}))
+	if err == nil {
+		t.Fatal("a partial trailing line was accepted")
+	}
+	if !strings.Contains(err.Error(), "partial line") {
+		t.Fatalf("want a partial-line error, got %v", err)
+	}
+}
+
 func TestMCPReadOnlyHintNeedsTrust(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "DELETE" {
