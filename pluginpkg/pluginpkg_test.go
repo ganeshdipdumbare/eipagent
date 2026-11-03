@@ -491,3 +491,17 @@ func TestInstallSourceVersionsAndReports(t *testing.T) {
 		t.Fatal("bad source installed, or no report for the UI")
 	}
 }
+
+func TestTemplatesCompile(t *testing.T) {
+	for _, kind := range TemplateNames() {
+		t.Run(kind, func(t *testing.T) {
+			src, err := RenderTemplate(kind, "my_"+kind)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := engine.Check("my_"+kind, src); err != nil {
+				t.Fatalf("template %s does not compile: %v", kind, err)
+			}
+		})
+	}
+}

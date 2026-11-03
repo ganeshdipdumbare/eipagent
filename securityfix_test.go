@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -67,11 +68,14 @@ func TestWebhookSelfReferenceAndReplay(t *testing.T) {
 			"path": "/hook", "secret": "secret://HOOK_TOKEN", "user": "bot", "thread": "t-{title}", "prompt": "{title} {a} {b}",
 		}}}))
 	body := []byte(`{"title":"{title}","a":"{b}","b":"{a}"}`) // used to loop forever
+	ts := strconv.FormatInt(time.Now().Unix(), 10)
 	mac := hmac.New(sha256.New, []byte("hook-secret-123"))
+	mac.Write([]byte(ts + "."))
 	mac.Write(body)
 	sig := "sha256=" + hex.EncodeToString(mac.Sum(nil))
 	post := func() (int, string) {
 		req, _ := http.NewRequest("POST", "http://"+addr+"/hook", bytes.NewReader(body))
+		req.Header.Set("X-Signature-Timestamp", ts)
 		req.Header.Set("X-Signature-256", sig)
 		resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
 		if err != nil {
@@ -422,5 +426,125 @@ func TestPIIRecursiveScrub(t *testing.T) {
 		if strings.Contains(string(b), raw) {
 			t.Fatalf("%s reached the model: %s", raw, b)
 		}
+	}
+}
+
+func signHook(secret, ts string, body []byte) string {
+	m := hmac.New(sha256.New, []byte(secret))
+	if ts != "" {
+		m.Write([]byte(ts + "."))
+	}
+	m.Write(body)
+	return "sha256=" + hex.EncodeToString(m.Sum(nil))
+}
+
+func postHook(t *testing.T, addr, path, ts, sig string, body []byte) (int, string) {
+	t.Helper()
+	req, _ := http.NewRequest("POST", "http://"+addr+path, bytes.NewReader(body))
+	if ts != "" {
+		req.Header.Set("X-Signature-Timestamp", ts)
+	}
+	req.Header.Set("X-Signature-256", sig)
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var b bytes.Buffer
+	b.ReadFrom(resp.Body)
+	return resp.StatusCode, b.String()
+}
+
+func TestWebhook429DoesNotBurnSignature(t *testing.T) {
+	t.Setenv("HOOK_TOKEN", "hook-secret-123")
+	addr := freeAddr(t)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	block := eipagent.Tool("block", "block", func(ctx context.Context, in struct{}) (string, error) {
+		once.Do(func() {
+			close(started)
+			<-release
+		})
+		return "", nil
+	})
+	a := mockAgent(t, []any{
+		map[string]any{"tool": "block", "args": map[string]any{}},
+		map[string]any{"text": "done"},
+	}, eipagent.WithTools(block), eipagent.WithPlugin("secrets_env", nil),
+		eipagent.WithPlugin("trigger_webhook", map[string]any{"addr": addr, "routes": []any{map[string]any{
+			"path": "/hook", "secret": "secret://HOOK_TOKEN", "user": "bot", "thread": "t-{n}", "max_concurrent": 1,
+		}}}))
+	send := func(n string) int {
+		body := []byte(`{"n":"` + n + `"}`)
+		ts := strconv.FormatInt(time.Now().Unix(), 10)
+		code, _ := postHook(t, addr, "/hook", ts, signHook("hook-secret-123", ts, body), body)
+		return code
+	}
+	if got := send("1"); got != 202 {
+		t.Fatalf("first: %d", got)
+	}
+	<-started
+	if got := send("2"); got != 429 {
+		t.Fatalf("while busy: %d", got)
+	}
+	close(release)
+	waitFor(t, func() bool {
+		msgs, _ := a.Thread("t-1").Messages(bg)
+		return len(msgs) > 0
+	})
+	if got := send("2"); got != 202 {
+		t.Fatalf("retry after 429 was refused: %d", got)
+	}
+	if got := send("1"); got != 409 {
+		t.Fatalf("an accepted signature was replayed: %d", got)
+	}
+}
+
+func TestWebhookReplayCacheFull(t *testing.T) {
+	t.Setenv("HOOK_TOKEN", "hook-secret-123")
+	addr := freeAddr(t)
+	mockAgent(t, []any{map[string]any{"text": "done"}},
+		eipagent.WithPlugin("secrets_env", nil),
+		eipagent.WithPlugin("trigger_webhook", map[string]any{"addr": addr, "routes": []any{map[string]any{
+			"path": "/hook", "secret": "secret://HOOK_TOKEN", "user": "bot", "thread": "t-{n}", "replay_max": 1,
+		}}}))
+	send := func(n string) (int, string) {
+		body := []byte(`{"n":"` + n + `"}`)
+		ts := strconv.FormatInt(time.Now().Unix(), 10)
+		return postHook(t, addr, "/hook", ts, signHook("hook-secret-123", ts, body), body)
+	}
+	if code, _ := send("1"); code != 202 {
+		t.Fatalf("first: %d", code)
+	}
+	code, out := send("2")
+	if code != 503 || !strings.Contains(out, "replay cache full") {
+		t.Fatalf("full cache: %d %s", code, out)
+	}
+}
+
+func TestWebhookTimestampDefaultAndOptOut(t *testing.T) {
+	t.Setenv("HOOK_TOKEN", "hook-secret-123")
+	addr := freeAddr(t)
+	mockAgent(t, []any{map[string]any{"text": "done"}},
+		eipagent.WithPlugin("secrets_env", nil),
+		eipagent.WithPlugin("trigger_webhook", map[string]any{"addr": addr, "routes": []any{map[string]any{
+			"path": "/hook", "secret": "secret://HOOK_TOKEN", "user": "bot",
+		}}}))
+	body := []byte(`{"n":"1"}`)
+	// A body-only signature is not enough by default.
+	if code, _ := postHook(t, addr, "/hook", "", signHook("hook-secret-123", "", body), body); code != 401 {
+		t.Fatalf("missing timestamp accepted: %d", code)
+	}
+
+	addr2 := freeAddr(t)
+	mockAgent(t, []any{map[string]any{"text": "done"}},
+		eipagent.WithPlugin("secrets_env", nil),
+		eipagent.WithPlugin("trigger_webhook", map[string]any{"addr": addr2, "routes": []any{map[string]any{
+			"path": "/hook", "secret": "secret://HOOK_TOKEN", "user": "bot",
+			"timestamp_header": "", "allow_replay_after_window": true,
+		}}}))
+	if code, out := postHook(t, addr2, "/hook", "", signHook("hook-secret-123", "", body), body); code != 202 {
+		t.Fatalf("opt-out failed: %d %s", code, out)
 	}
 }

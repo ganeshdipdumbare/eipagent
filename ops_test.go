@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -68,8 +69,10 @@ func TestWebhook(t *testing.T) {
 		"addr": addr, "routes": []any{map[string]any{"path": "/gh", "secret": "secret://HOOK_TOKEN", "user": "bot", "thread": "gh-{repo.name}", "prompt": "event {action}"}},
 	}))
 	body := []byte(`{"action":"opened","repo":{"name":"eip"}}`)
+	ts := strconv.FormatInt(time.Now().Unix(), 10)
 	post := func(sig string) int {
 		req, _ := http.NewRequest("POST", "http://"+addr+"/gh", bytes.NewReader(body))
+		req.Header.Set("X-Signature-Timestamp", ts)
 		req.Header.Set("X-Signature-256", sig)
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
@@ -82,6 +85,7 @@ func TestWebhook(t *testing.T) {
 		t.Fatalf("unsigned must be rejected, got %d", code)
 	}
 	mac := hmac.New(sha256.New, []byte("s3cret"))
+	mac.Write([]byte(ts + "."))
 	mac.Write(body)
 	if code := post("sha256=" + hex.EncodeToString(mac.Sum(nil))); code != 202 {
 		t.Fatalf("signed: %d", code)
