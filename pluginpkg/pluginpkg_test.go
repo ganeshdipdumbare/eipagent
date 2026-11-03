@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/ganeshdipdumbare/eipagent/engine"
@@ -503,5 +504,136 @@ func TestTemplatesCompile(t *testing.T) {
 				t.Fatalf("template %s does not compile: %v", kind, err)
 			}
 		})
+	}
+}
+
+func TestQuarantineRequiresVersion(t *testing.T) {
+	st, _ := OpenStore(t.TempDir(), StoreOptions{})
+	must(t, func() error { _, err := st.Install(buildPkg(t, "1.0.0", goodSrc, ""), "a"); return err }())
+	if err := st.Quarantine("greet", "", "because"); err == nil {
+		t.Fatal("an empty version was quarantined")
+	}
+}
+
+func TestEnableEmptyDoesNotDowngrade(t *testing.T) {
+	st, _ := OpenStore(t.TempDir(), StoreOptions{})
+	must(t, func() error { _, err := st.Install(buildPkg(t, "1.0.0", goodSrc, ""), "a"); return err }())
+	must(t, st.Approve("greet", "1.0.0", "a"))
+	must(t, st.Enable("greet", "1.0.0"))
+	must(t, func() error {
+		_, err := st.Install(buildPkg(t, "1.1.0", strings.Replace(goodSrc, `"hi"`, `"hello"`, 1), ""), "a")
+		return err
+	}())
+	must(t, st.Approve("greet", "1.1.0", "a"))
+	must(t, st.Enable("greet", "1.1.0"))
+	must(t, st.Enable("greet", ""))
+	p, _ := st.Get("greet")
+	if p.Active != "1.1.0" {
+		t.Fatalf("enable with no version downgraded to %s", p.Active)
+	}
+}
+
+func TestSemverPrecedenceIsDeterministic(t *testing.T) {
+	if !semverLess("1.0.0-rc.2", "1.0.0-rc.10") {
+		t.Fatal("rc.2 should sort before rc.10")
+	}
+	if !semverLess("1.0.0-rc.1", "1.0.0") {
+		t.Fatal("a prerelease should sort before the release")
+	}
+	p := &Plugin{Versions: map[string]*Version{
+		"1.0.0":      {Version: "1.0.0", State: StateApproved},
+		"1.0.0-rc.1": {Version: "1.0.0-rc.1", State: StateApproved},
+	}}
+	for i := 0; i < 20; i++ {
+		if got := newest(p, StateApproved); got != "1.0.0" {
+			t.Fatalf("newest = %q", got)
+		}
+	}
+}
+
+func TestBuildRejectsReservedSourceNames(t *testing.T) {
+	src := &Source{Name: "greet", Manifest: &Manifest{Name: "greet", Version: "1.0.0"},
+		Files: map[string][]byte{ManifestFile: []byte("x")}}
+	if _, _, err := Build(src, nil); err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("reserved manifest name accepted: %v", err)
+	}
+	src.Files = map[string][]byte{SignatureFile: []byte("x")}
+	if _, _, err := Build(src, nil); err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("reserved signature name accepted: %v", err)
+	}
+}
+
+func TestReadDirSkipsSignature(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "greet.go"), []byte(goodSrc), 0o600)
+	os.WriteFile(filepath.Join(dir, SignatureFile), []byte("{}"), 0o600)
+	src, err := ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := src.Files[SignatureFile]; ok {
+		t.Fatal("ReadDir kept plugin.sig")
+	}
+}
+
+func TestVerifySignedWithoutTrustedKeys(t *testing.T) {
+	_, priv, _ := GenerateKey()
+	pkg, _ := Open(buildPkg(t, "1.0.0", goodSrc, priv))
+	if _, err := Verify(pkg, VerifyOptions{}); err == nil {
+		t.Fatal("a signed package with no trusted keys was accepted")
+	}
+	if _, err := Verify(pkg, VerifyOptions{AllowUntrustedSignature: true}); err != nil {
+		t.Fatalf("explicit opt-in refused: %v", err)
+	}
+}
+
+func TestInstallSourceConcurrent(t *testing.T) {
+	st, _ := OpenStore(t.TempDir(), StoreOptions{})
+	codes := [][]byte{[]byte(goodSrc), []byte(strings.Replace(goodSrc, `"hi"`, `"hello"`, 1))}
+	var wg sync.WaitGroup
+	errs := make(chan error, len(codes))
+	for _, code := range codes {
+		wg.Add(1)
+		go func(c []byte) {
+			defer wg.Done()
+			_, _, err := st.InstallSource("greet", c, nil, "sam")
+			errs <- err
+		}(code)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	p, _ := st.Get("greet")
+	if len(p.Versions) != 2 {
+		t.Fatalf("versions: %v", p.Versions)
+	}
+}
+
+type failingRuntime struct{}
+
+func (failingRuntime) Activate(string, string) error { return errors.New("start failed") }
+func (failingRuntime) Deactivate(string) error       { return nil }
+
+func TestEnableRestoresStateWhenStartFails(t *testing.T) {
+	dir := t.TempDir()
+	st, _ := OpenStore(dir, StoreOptions{Runtime: failingRuntime{}})
+	must(t, func() error { _, err := st.Install(buildPkg(t, "1.0.0", goodSrc, ""), "a"); return err }())
+	must(t, st.Approve("greet", "1.0.0", "a"))
+	if err := st.Enable("greet", "1.0.0"); err == nil {
+		t.Fatal("a failing runtime was reported as success")
+	}
+	p, _ := st.Get("greet")
+	if p.Active != "" || p.Versions["1.0.0"].State != StateFailed {
+		t.Fatalf("state not restored: active=%q state=%s", p.Active, p.Versions["1.0.0"].State)
+	}
+	if _, err := os.Stat(filepath.Join(st.ActiveDir(), "greet.go")); err == nil {
+		t.Fatal("failed source was left in the active dir")
+	}
+	if b, err := os.ReadFile(st.LockPath()); err == nil && strings.Contains(string(b), "greet") {
+		t.Fatalf("failed version stayed pinned: %s", b)
 	}
 }

@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -37,8 +39,9 @@ const (
 )
 
 var (
-	ErrNotFound    = errors.New("plugin not installed")
-	ErrNotApproved = errors.New("plugin version is not approved")
+	ErrNotFound      = errors.New("plugin not installed")
+	ErrNotApproved   = errors.New("plugin version is not approved")
+	ErrVersionExists = errors.New("plugin version already installed")
 )
 
 // Runtime is a live engine the store activates plugins in. Activate
@@ -122,10 +125,12 @@ type StoreOptions struct {
 //	dir/active/NAME.go        what the engine loads (WithPluginDir)
 //	dir/eip.lock              pins for the active sources
 type Store struct {
-	dir  string
-	opts StoreOptions
-	mu   sync.Mutex
-	st   struct {
+	dir      string
+	opts     StoreOptions
+	mu       sync.Mutex
+	installM sync.Mutex
+	installs map[string]*sync.Mutex
+	st       struct {
 		Plugins map[string]*Plugin `json:"plugins"`
 	}
 }
@@ -167,6 +172,22 @@ func (s *Store) SetAudit(fn func(string, map[string]any)) {
 func (s *Store) ActiveDir() string { return filepath.Join(s.dir, "active") }
 func (s *Store) LockPath() string  { return filepath.Join(s.dir, "eip.lock") }
 func (s *Store) Dir() string       { return s.dir }
+
+// nameLock returns the per-plugin lock that serializes version allocation
+// and install for one name.
+func (s *Store) nameLock(name string) *sync.Mutex {
+	s.installM.Lock()
+	defer s.installM.Unlock()
+	if s.installs == nil {
+		s.installs = map[string]*sync.Mutex{}
+	}
+	l := s.installs[name]
+	if l == nil {
+		l = &sync.Mutex{}
+		s.installs[name] = l
+	}
+	return l
+}
 
 // Pins returns the sha256 of every active source (name -> hash).
 func (s *Store) Pins() map[string]string {
@@ -253,7 +274,7 @@ func (s *Store) Install(data []byte, by string) (*Version, error) {
 			cp := *old
 			return &cp, nil
 		}
-		return nil, fmt.Errorf("%s %s is already installed with different contents; bump the version", m.Name, m.Version)
+		return nil, fmt.Errorf("%s %s is already installed with different contents; bump the version: %w", m.Name, m.Version, ErrVersionExists)
 	}
 	dir := filepath.Join(s.dir, "packages", m.Name)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -309,12 +330,18 @@ func (s *Store) Enable(name, version string) error {
 		return fmt.Errorf("%s: %w", name, ErrNotFound)
 	}
 	if version == "" {
-		version = newest(p, StateApproved)
-		if version == "" {
-			if p.Active != "" {
+		if p.Active != "" {
+			// Never downgrade an active plugin by accident: only a newer
+			// approved version is eligible.
+			version = newestAfter(p, StateApproved, p.Active)
+			if version == "" {
 				return nil
 			}
-			return fmt.Errorf("%s: no approved version to enable", name)
+		} else {
+			version = newest(p, StateApproved)
+			if version == "" {
+				return fmt.Errorf("%s: no approved version to enable", name)
+			}
 		}
 	}
 	v, ok := p.Versions[version]
@@ -360,23 +387,37 @@ func (s *Store) Enable(name, version string) error {
 	prevVer := p.Active
 	p.Active = version
 	if err := s.writeLockLocked(); err != nil {
-		return err
+		// Put the previous source and pin back before returning.
+		p.Active = prevVer
+		var restoreErr error
+		if hadOld {
+			restoreErr = writeFileAtomic(activeFile, oldSrc)
+		} else {
+			restoreErr = os.Remove(activeFile)
+		}
+		lockErr := s.writeLockLocked()
+		return errors.Join(err, restoreErr, lockErr)
 	}
 	if rt := s.opts.Runtime; rt != nil {
 		if err := rt.Activate(name, v.Source); err != nil {
 			// Put the previous source and pin back; the engine kept the
 			// previous instance running.
+			var restoreErr error
 			if hadOld {
-				writeFileAtomic(activeFile, oldSrc)
+				restoreErr = writeFileAtomic(activeFile, oldSrc)
 			} else {
-				os.Remove(activeFile)
+				restoreErr = os.Remove(activeFile)
 			}
 			p.Active = prevVer
-			s.writeLockLocked()
-			v.State, v.Error = StateFailed, err.Error()
-			s.saveLocked()
-			s.audit("plugin.enable_failed", map[string]any{"plugin": name, "version": version, "error": err.Error(), "kept": prevVer})
-			return err
+			lockErr := s.writeLockLocked()
+			v.State = StateFailed
+			v.Error = err.Error()
+			if restoreErr != nil || lockErr != nil {
+				v.Error = fmt.Sprintf("store inconsistent after a failed enable: %v; %v", restoreErr, lockErr)
+			}
+			saveErr := s.saveLocked()
+			s.audit("plugin.enable_failed", map[string]any{"plugin": name, "version": version, "error": v.Error, "kept": prevVer})
+			return errors.Join(err, restoreErr, lockErr, saveErr)
 		}
 	}
 	if prev := p.Versions[prevVer]; prev != nil && prevVer != version {
@@ -409,16 +450,19 @@ func (s *Store) disableLocked(name string, newState State) error {
 		}
 	}
 	os.Remove(filepath.Join(s.ActiveDir(), name+".go"))
-	if v := p.Versions[p.Active]; v != nil {
+	old := p.Active
+	p.Active = ""
+	if err := s.writeLockLocked(); err != nil {
+		// Keep the in-memory state in step with the pin on disk.
+		p.Active = old
+		lockErr := s.writeLockLocked()
+		return errors.Join(err, lockErr)
+	}
+	if v := p.Versions[old]; v != nil {
 		v.State = StateApproved
 		if newState != "" {
 			v.State = newState
 		}
-	}
-	old := p.Active
-	p.Active = ""
-	if err := s.writeLockLocked(); err != nil {
-		return err
 	}
 	s.audit("plugin.disable", map[string]any{"plugin": name, "version": old})
 	return s.saveLocked()
@@ -464,6 +508,9 @@ func (s *Store) Rollback(name string) error {
 func (s *Store) Quarantine(name, version, reason string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if version == "" {
+		return fmt.Errorf("%s: a version is required to quarantine", name)
+	}
 	v, err := s.versionLocked(name, version)
 	if err != nil {
 		return err
@@ -564,13 +611,105 @@ func newestAny(p *Plugin) string {
 	return best
 }
 
+// newestAfter is newest, restricted to versions strictly newer than after.
+func newestAfter(p *Plugin, st State, after string) string {
+	best := ""
+	for ver, v := range p.Versions {
+		if v.State != st || !semverLess(after, ver) {
+			continue
+		}
+		if best == "" || semverLess(best, ver) {
+			best = ver
+		}
+	}
+	return best
+}
+
+type parsedSemver struct {
+	nums [3]int
+	pre  []string
+}
+
+func parseSemverFull(s string) (parsedSemver, error) {
+	m := semverRe.FindStringSubmatch(s)
+	if m == nil {
+		return parsedSemver{}, fmt.Errorf("%q is not semver", s)
+	}
+	var v parsedSemver
+	for i := range v.nums {
+		v.nums[i], _ = strconv.Atoi(m[i+1])
+	}
+	if m[4] != "" {
+		v.pre = strings.Split(m[4], ".")
+	}
+	return v, nil
+}
+
+// compareSemver implements semver precedence, including prerelease
+// ordering (1.0.0 > 1.0.0-rc.1; rc.2 > rc.10 numerically; numeric
+// identifiers sort before alphanumeric ones).
+func compareSemver(a, b parsedSemver) int {
+	for i := range a.nums {
+		if a.nums[i] != b.nums[i] {
+			if a.nums[i] < b.nums[i] {
+				return -1
+			}
+			return 1
+		}
+	}
+	if len(a.pre) == 0 && len(b.pre) == 0 {
+		return 0
+	}
+	if len(a.pre) == 0 {
+		return 1
+	}
+	if len(b.pre) == 0 {
+		return -1
+	}
+	for i := 0; i < len(a.pre) && i < len(b.pre); i++ {
+		x, y := a.pre[i], b.pre[i]
+		xn, xerr := strconv.Atoi(x)
+		yn, yerr := strconv.Atoi(y)
+		switch {
+		case xerr == nil && yerr == nil:
+			if xn != yn {
+				if xn < yn {
+					return -1
+				}
+				return 1
+			}
+		case xerr == nil:
+			return -1 // numeric identifiers have lower precedence
+		case yerr == nil:
+			return 1
+		default:
+			if x != y {
+				if x < y {
+					return -1
+				}
+				return 1
+			}
+		}
+	}
+	if len(a.pre) < len(b.pre) {
+		return -1
+	}
+	if len(a.pre) > len(b.pre) {
+		return 1
+	}
+	return 0
+}
+
 func semverLess(a, b string) bool {
-	va, ea := parseSemver(a)
-	vb, eb := parseSemver(b)
+	va, ea := parseSemverFull(a)
+	vb, eb := parseSemverFull(b)
 	if ea != nil || eb != nil {
 		return a < b
 	}
-	return cmpSemver(va, vb) < 0
+	if c := compareSemver(va, vb); c != 0 {
+		return c < 0
+	}
+	return a < b // deterministic tie-break on the full version string
 }
 
 func writeFileAtomic(p string, b []byte) error {
@@ -623,19 +762,30 @@ func (s *Store) InstallSource(name string, code []byte, key ed25519.PrivateKey, 
 		return nil, rep, rep.Err()
 	}
 	m := Infer(name, fa)
-	m.Version = "0.1.0"
-	s.mu.Lock()
-	if p := s.st.Plugins[name]; p != nil {
-		if v, err := parseSemver(newestAny(p)); err == nil {
-			m.Version = fmt.Sprintf("%d.%d.%d", v[0], v[1], v[2]+1)
+	lock := s.nameLock(name)
+	lock.Lock()
+	defer lock.Unlock()
+	var rep *Report
+	for attempt := 0; attempt < 2; attempt++ {
+		m.Version = "0.1.0"
+		s.mu.Lock()
+		if p := s.st.Plugins[name]; p != nil {
+			if v, err := parseSemverFull(newestAny(p)); err == nil {
+				m.Version = fmt.Sprintf("%d.%d.%d", v.nums[0], v.nums[1], v.nums[2]+1)
+			}
 		}
+		s.mu.Unlock()
+		src := &Source{Name: name, Manifest: m, Files: map[string][]byte{name + ".go": code}}
+		data, r, err := Build(src, key)
+		if err != nil {
+			return nil, r, err
+		}
+		rep = r
+		v, err := s.Install(data, by)
+		if errors.Is(err, ErrVersionExists) && attempt == 0 {
+			continue // another process allocated the same version
+		}
+		return v, rep, err
 	}
-	s.mu.Unlock()
-	src := &Source{Name: name, Manifest: m, Files: map[string][]byte{name + ".go": code}}
-	data, rep, err := Build(src, key)
-	if err != nil {
-		return nil, rep, err
-	}
-	v, err := s.Install(data, by)
-	return v, rep, err
+	return nil, rep, ErrVersionExists
 }

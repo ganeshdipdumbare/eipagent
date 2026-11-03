@@ -2,7 +2,9 @@ package pluginpkg
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -66,12 +68,22 @@ func Init(dir, name, kind string) ([]string, error) {
 	for n := range files {
 		if _, err := os.Stat(filepath.Join(dir, n)); err == nil {
 			return nil, fmt.Errorf("%s already exists", filepath.Join(dir, n))
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return nil, err
 		}
 	}
 	var wrote []string
 	for _, n := range []string{name + ".go", ManifestFile, "README.md"} {
 		p := filepath.Join(dir, n)
-		if err := os.WriteFile(p, files[n], 0o644); err != nil {
+		f, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if err != nil {
+			return wrote, err
+		}
+		if _, err := f.Write(files[n]); err != nil {
+			f.Close()
+			return wrote, err
+		}
+		if err := f.Close(); err != nil {
 			return wrote, err
 		}
 		wrote = append(wrote, p)

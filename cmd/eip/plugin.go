@@ -406,7 +406,7 @@ func openStore(dir string, trustFiles []string, allowUnsigned bool) (*pluginpkg.
 	if err != nil {
 		return nil, err
 	}
-	return pluginpkg.OpenStore(dir, pluginpkg.StoreOptions{Verify: pluginpkg.VerifyOptions{TrustedKeys: keys, RequireSignature: !allowUnsigned}})
+	return pluginpkg.OpenStore(dir, pluginpkg.StoreOptions{Verify: pluginpkg.VerifyOptions{TrustedKeys: keys, RequireSignature: !allowUnsigned, AllowUntrustedSignature: allowUnsigned}})
 }
 
 func pluginLifecycle(sub string, args []string) error {
