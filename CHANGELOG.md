@@ -4,6 +4,8 @@ All notable changes to eipagent. Versions follow [semantic versioning](https://s
 
 ## Unreleased
 
+## v0.4.7 — 2026-11-03
+
 ### Added
 
 - `examples/tensorlake`: the agent runs inside a real Tensorlake cloud sandbox with `WithRunIn`. The host keeps the model provider, secrets and broker; Tensorlake runs the microVM. The example exercises the same placeholder, `host.http` swap, redaction and `sandbox.egress` flow, and cleans the sandbox up on exit.
