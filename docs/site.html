@@ -1,349 +1,44 @@
-<title>eipagent Docs</title>
-<meta name="claude:viewport-fit-sides" content="cover">
-<meta name="description" content="eipagent: the everything-is-a-plugin agent SDK for Go. Guides, examples, lifecycles and reference.">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap">
-<style>
-/* Layout: docs app shell — 64px top bar; 280px sidebar of collapsible groups; one page at a time in a 720px article; 240px "On this page" rail. Monochrome Geist palette, one Go-cyan accent kept for the mark and focus. */
-:root {
-  --bg: #ffffff;
-  --bg-2: #fafafa;
-  --fg: #171717;
-  --fg-2: #4d4d4d;
-  --fg-3: #8f8f8f;
-  --line: #ebebeb;
-  --line-2: #e0e0e0;
-  --hover: #f2f2f2;
-  --active: #ededed;
-  --code-bg: #fafafa;
-  --accent: #0b8eb3;
-  --ok: #16833a; --wait: #a35f00; --bad: #c62a3a; --info: #0b6fb3;
-  --syn-kw: #c41562; --syn-str: #107d32; --syn-num: #a35200; --syn-com: #8f8f8f; --syn-fn: #6f3dc4; --syn-type: #0a6ebd;
-  --shadow: 0 1px 2px rgba(0,0,0,.04), 0 8px 24px rgba(0,0,0,.06);
-  --f-sans: "Geist", ui-sans-serif, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
-  --f-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  --top: 64px; --side: 280px; --toc: 240px;
-}
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
-  --bg: #0a0a0a; --bg-2: #111111; --fg: #ededed; --fg-2: #a1a1a1; --fg-3: #707070;
-  --line: #1f1f1f; --line-2: #2e2e2e; --hover: #1a1a1a; --active: #232323; --code-bg: #0f0f0f;
-  --accent: #3cc8ec; --ok: #3fbf6b; --wait: #e5a23c; --bad: #ff6369; --info: #52a8ff;
-  --syn-kw: #ff4d8d; --syn-str: #62c073; --syn-num: #f4a14a; --syn-com: #707070; --syn-fn: #c09cf7; --syn-type: #52a8ff;
-  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.5);
-  color-scheme: dark;
-} }
-:root[data-theme="dark"] {
-  --bg: #0a0a0a; --bg-2: #111111; --fg: #ededed; --fg-2: #a1a1a1; --fg-3: #707070;
-  --line: #1f1f1f; --line-2: #2e2e2e; --hover: #1a1a1a; --active: #232323; --code-bg: #0f0f0f;
-  --accent: #3cc8ec; --ok: #3fbf6b; --wait: #e5a23c; --bad: #ff6369; --info: #52a8ff;
-  --syn-kw: #ff4d8d; --syn-str: #62c073; --syn-num: #f4a14a; --syn-com: #707070; --syn-fn: #c09cf7; --syn-type: #52a8ff;
-  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.5);
-  color-scheme: dark;
-}
-* { box-sizing: border-box; }
-body { background: var(--bg); color: var(--fg); font: 15px/1.7 var(--f-sans); -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
-a { color: var(--fg); text-decoration: underline; text-decoration-color: var(--line-2); text-underline-offset: 4px; text-decoration-thickness: 1px; }
-a:hover { text-decoration-color: var(--fg); }
-:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
-button { font: inherit; color: inherit; }
-kbd { font: 500 11px var(--f-mono); color: var(--fg-3); border: 1px solid var(--line-2); border-radius: 5px; padding: 1px 5px; background: var(--bg); }
-
-/* ---- top bar ---- */
-body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 40; background: var(--bg); }
-.topbar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 30; height: var(--top); background: color-mix(in srgb, var(--bg) 85%, transparent);
-  backdrop-filter: saturate(180%) blur(12px); border-bottom: 1px solid var(--line); }
-.topbar .in { height: 100%; display: flex; align-items: center; gap: 20px; max-width: 1600px; margin: 0 auto;
-  padding-left: max(24px, env(safe-area-inset-left, 0px)); padding-right: max(24px, env(safe-area-inset-right, 0px)); }
-.mark { display: flex; align-items: center; gap: 10px; text-decoration: none; color: var(--fg); font: 600 16px/1 var(--f-sans); letter-spacing: -0.02em; }
-.mark svg { width: 22px; height: 22px; }
-.mark .sep { color: var(--line-2); font-weight: 300; font-size: 22px; margin: 0 2px; }
-.mark .pill { font: 500 11px/1 var(--f-mono); color: var(--fg-2); border: 1px solid var(--line-2); border-radius: 999px; padding: 4px 8px; }
-.toplinks { display: flex; gap: 4px; }
-.toplinks a { text-decoration: none; color: var(--fg-2); font-size: 14px; padding: 6px 10px; border-radius: 6px; }
-.toplinks a:hover, .toplinks a[aria-current="page"] { color: var(--fg); }
-.toplinks a[aria-current="page"] { font-weight: 500; }
-.grow { flex: 1; }
-.searchbtn { display: flex; align-items: center; gap: 10px; height: 36px; width: 240px; padding: 0 8px 0 12px; border: 1px solid var(--line-2); border-radius: 8px;
-  background: var(--bg-2); color: var(--fg-3); cursor: pointer; font-size: 14px; }
-.searchbtn:hover { border-color: var(--fg-3); }
-.searchbtn span { flex: 1; text-align: left; }
-.iconbtn { display: inline-grid; place-items: center; width: 36px; height: 36px; border-radius: 8px; border: 1px solid var(--line-2); background: var(--bg); cursor: pointer; color: var(--fg-2); }
-.iconbtn:hover { color: var(--fg); border-color: var(--fg-3); }
-.iconbtn svg { width: 16px; height: 16px; }
-.menubtn { display: none; }
-
-/* ---- shell ---- */
-.shell { display: grid; grid-template-columns: var(--side) minmax(0, 1fr) var(--toc); max-width: 1600px; margin: 0 auto; }
-.side { position: sticky; top: calc(var(--top) + env(safe-area-inset-top, 0px)); align-self: start; height: calc(100vh - var(--top) - env(safe-area-inset-top, 0px));
-  overflow-y: auto; padding: 20px 12px 40px max(16px, env(safe-area-inset-left, 0px)); border-right: 1px solid var(--line); }
-.version { display: flex; align-items: center; gap: 10px; padding: 8px 10px; margin-bottom: 14px; border: 1px solid var(--line); border-radius: 10px; }
-.version .logo { width: 28px; height: 28px; border-radius: 7px; display: grid; place-items: center; background: var(--fg); }
-.version .logo svg { width: 16px; height: 16px; }
-.version b { display: block; font-size: 13.5px; font-weight: 600; line-height: 1.2; }
-.version small { color: var(--fg-3); font-size: 12px; }
-.group { margin-bottom: 2px; }
-.group > button { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; border: 0; background: none;
-  border-radius: 6px; cursor: pointer; font-size: 14px; color: var(--fg-2); text-align: left; }
-.group > button:hover { background: var(--hover); color: var(--fg); }
-.group > button svg { width: 14px; height: 14px; transition: transform .15s ease; color: var(--fg-3); }
-.group[data-open="true"] > button svg { transform: rotate(90deg); }
-.group[data-open="true"] > button { color: var(--fg); }
-.group .items { display: none; margin: 2px 0 8px 10px; padding-left: 10px; border-left: 1px solid var(--line); }
-.group[data-open="true"] .items { display: block; }
-.side a.item { display: block; padding: 5px 10px; border-radius: 6px; text-decoration: none; color: var(--fg-2); font-size: 14px; line-height: 1.45; }
-.side a.item:hover { background: var(--hover); color: var(--fg); }
-.side a.item[aria-current="page"] { background: var(--active); color: var(--fg); font-weight: 500; }
-.side a.top-item { margin-bottom: 4px; }
-
-main { min-width: 0; padding: 40px 56px 96px; }
-article { max-width: 720px; margin: 0 auto; }
-.crumbs { display: flex; gap: 8px; align-items: center; font-size: 13.5px; color: var(--fg-3); margin-bottom: 14px; }
-.crumbs svg { width: 12px; height: 12px; }
-.titlerow { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 8px; }
-.titlerow h1 { margin: 0; }
-.copypage { flex: none; display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--bg);
-  font-size: 13.5px; font-weight: 500; cursor: pointer; margin-top: 6px; }
-.copypage:hover { background: var(--hover); }
-.copypage svg { width: 14px; height: 14px; }
-.lede { font-size: 17px; color: var(--fg-2); line-height: 1.65; margin: 10px 0 28px; }
-
-/* pages */
-.page[hidden] { display: none; }
-.page h1 { font: 600 36px/1.15 var(--f-sans); letter-spacing: -0.035em; text-wrap: balance; }
-.page h2 { font: 600 26px/1.25 var(--f-sans); letter-spacing: -0.025em; margin: 48px 0 14px; text-wrap: balance; scroll-margin-top: calc(var(--top) + 24px); }
-.page h3 { font: 600 22px/1.3 var(--f-sans); letter-spacing: -0.02em; margin: 44px 0 12px; text-wrap: balance; scroll-margin-top: calc(var(--top) + 24px); }
-.page h4 { font: 600 16px/1.4 var(--f-sans); margin: 28px 0 8px; }
-.page p, .page li { color: var(--fg-2); max-width: 70ch; }
-.page p { margin: 0 0 16px; }
-.page b, .page strong { color: var(--fg); font-weight: 600; }
-.page ul, .page ol { padding-left: 22px; margin: 0 0 18px; }
-.page li { margin-bottom: 8px; }
-.page li::marker { color: var(--fg-3); }
-.page :not(pre) > code { font: 0.86em var(--f-mono); color: var(--fg); background: var(--bg-2); border: 1px solid var(--line); padding: 2px 6px; border-radius: 6px; white-space: nowrap; }
-.page .lede code { white-space: normal; }
-/* On phones long inline code (option calls, secret refs) wraps instead of running off the screen; tables scroll instead. */
-@media (max-width: 640px) { .page :not(pre):not(td) > code { white-space: normal; overflow-wrap: anywhere; } }
-
-/* code blocks */
-.code { margin: 20px 0 26px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--code-bg); }
-.code .bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; height: 44px; padding: 0 8px 0 14px; border-bottom: 1px solid var(--line); background: var(--bg); }
-.code .file { display: flex; align-items: center; gap: 8px; font: 500 13px var(--f-mono); color: var(--fg-2); min-width: 0; }
-.code .file svg { width: 14px; height: 14px; flex: none; color: var(--fg-3); }
-.code .body { display: grid; grid-template-columns: auto minmax(0, 1fr); overflow-x: auto; }
-.code .nums { padding: 16px 0 16px 16px; text-align: right; font: 13px/1.7 var(--f-mono); color: var(--fg-3); user-select: none; opacity: .7; white-space: pre; }
-.code pre { margin: 0; padding: 16px 20px 16px 16px; font: 13px/1.7 var(--f-mono); tab-size: 4; color: var(--fg); }
-.code pre code { font: inherit; background: none; border: 0; padding: 0; }
-.code.plain .nums { display: none; }
-.code.plain pre { padding-left: 20px; }
-.copy { display: inline-grid; place-items: center; width: 30px; height: 30px; border: 0; border-radius: 6px; background: none; color: var(--fg-3); cursor: pointer; }
-.copy:hover { background: var(--hover); color: var(--fg); }
-.copy svg { width: 15px; height: 15px; }
-.hljs-keyword, .hljs-built_in, .hljs-literal { color: var(--syn-kw); }
-.hljs-string { color: var(--syn-str); }
-.hljs-number { color: var(--syn-num); }
-.hljs-comment { color: var(--syn-com); }
-.hljs-title, .hljs-title.function_ { color: var(--syn-fn); }
-.hljs-type, .hljs-title.class_ { color: var(--syn-type); }
-.hljs-attr { color: var(--syn-type); }
-.hljs-meta { color: var(--syn-com); }
-
-/* tabs (code with provider switch) */
-.tabs { margin: 20px 0 26px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--code-bg); }
-.tabs [role="tablist"] { display: flex; gap: 2px; padding: 0 8px; height: 44px; align-items: stretch; border-bottom: 1px solid var(--line); background: var(--bg); overflow-x: auto; }
-.tabs [role="tab"] { border: 0; background: none; padding: 0 10px; font-size: 13.5px; font-weight: 500; color: var(--fg-3); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; }
-.tabs [role="tab"]:hover { color: var(--fg); }
-.tabs [role="tab"][aria-selected="true"] { color: var(--fg); border-bottom-color: var(--fg); }
-.tabs .code { margin: 0; border: 0; border-radius: 0; }
-.tabs .code .bar { display: none; }
-.tabs .tabcopy { margin-left: auto; align-self: center; }
-
-/* callouts */
-.note { display: flex; gap: 12px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg-2); margin: 22px 0 26px; font-size: 14.5px; }
-.note > b { flex: none; display: inline-flex; align-items: center; gap: 6px; font-weight: 600; color: var(--fg); height: 24px; }
-.note > b::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--info); }
-.note.warn > b::before { background: var(--wait); }
-.note p { margin: 0 0 6px; }
-.note p:last-child { margin: 0; }
-
-/* cards */
-.cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 20px 0 28px; }
-.card { border: 1px solid var(--line); border-radius: 12px; padding: 18px; background: var(--bg); min-width: 0; text-decoration: none; display: block; color: inherit; transition: border-color .15s, background .15s; }
-a.card:hover { border-color: var(--line-2); background: var(--bg-2); }
-.card h5 { margin: 0 0 6px; font: 600 15px/1.35 var(--f-sans); color: var(--fg); letter-spacing: -0.01em; }
-.card p { margin: 0; font-size: 14px; color: var(--fg-2); }
-.card .model { font: 12.5px var(--f-mono); color: var(--fg-3); margin: 2px 0 12px; }
-.chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.chip { display: inline-flex; align-items: center; gap: 6px; font: 500 12px/1 var(--f-sans); color: var(--fg-2); padding: 6px 9px; border: 1px solid var(--line-2); border-radius: 999px; background: var(--bg); }
-.chip::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: var(--ok); }
-.chip.no { color: var(--fg-3); }
-.chip.no::before { background: var(--line-2); }
-.chip.maybe::before { background: var(--wait); }
-
-/* lifecycle diagrams in HTML */
-.flow { border: 1px solid var(--line); border-radius: 12px; padding: 22px; margin: 18px 0 26px; background: var(--bg-2); overflow-x: auto; }
-.flow .row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-.flow .row + .row { margin-top: 14px; }
-.node { display: inline-flex; align-items: center; gap: 8px; padding: 7px 12px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--bg); font: 500 13px var(--f-mono); color: var(--fg); white-space: nowrap; }
-.node.ok { border-color: color-mix(in srgb, var(--ok) 45%, var(--line-2)); color: var(--ok); }
-.node.wait { border-color: color-mix(in srgb, var(--wait) 45%, var(--line-2)); color: var(--wait); }
-.node.bad { border-color: color-mix(in srgb, var(--bad) 45%, var(--line-2)); color: var(--bad); }
-.node.info { border-color: color-mix(in srgb, var(--info) 45%, var(--line-2)); color: var(--info); }
-.edge { color: var(--fg-3); font-size: 12.5px; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
-.edge::after { content: "→"; font-size: 14px; }
-.flow .branch { font-size: 13px; color: var(--fg-2); }
-.timeline { list-style: none; padding: 0 !important; margin: 18px 0 26px !important; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
-.timeline li { display: grid; grid-template-columns: 40px 200px minmax(0, 1fr); gap: 0 14px; align-items: baseline; padding: 12px 16px; margin: 0 !important; border-bottom: 1px solid var(--line); max-width: none !important; }
-.timeline li:last-child { border-bottom: 0; }
-.timeline .n { font: 500 12px var(--f-mono); color: var(--fg-3); }
-.timeline .h { font: 500 13px var(--f-mono); color: var(--fg); }
-.timeline .d { font-size: 14px; color: var(--fg-2); }
-.timeline li.loop { background: var(--bg-2); }
-.timeline li.end .h { color: var(--ok); }
-
-/* diagrams: inline SVG drawn with the page's tokens, so they follow the theme; scroll sideways on phones */
-.diagram { margin: 22px 0 28px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
-.dg-scroll { overflow-x: auto; padding: 18px 16px 12px; }
-.dg { display: block; width: 100%; min-width: 600px; height: auto; }
-.diagram figcaption { padding: 12px 16px 14px; border-top: 1px solid var(--line); background: var(--bg-2); font-size: 13.5px; color: var(--fg-2); }
-.diagram .key { display: inline-flex; align-items: center; gap: 6px; margin-left: 10px; font: 500 12px var(--f-mono); white-space: nowrap; }
-.diagram .key::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
-.dg text { font-family: var(--f-sans); font-size: 11.5px; fill: var(--fg-2); }
-.dg .t { font-size: 13px; font-weight: 600; fill: var(--fg); }
-.dg .m { font-family: var(--f-mono); font-size: 11px; }
-.dg .cap { font: 600 10.5px var(--f-mono); letter-spacing: .08em; fill: var(--fg-3); }
-.dg .n { font: 600 11px var(--f-mono); fill: var(--fg-3); }
-.dg .box { fill: var(--bg-2); stroke: var(--line-2); }
-.dg .box.em { stroke: var(--accent); }
-.dg .nb { fill: var(--bg); stroke: var(--line-2); stroke-dasharray: 3 3; }
-.dg .zone { fill: none; stroke: var(--fg-3); stroke-dasharray: 5 4; }
-.dg .zone.host { stroke: var(--accent); stroke-dasharray: none; }
-.dg .ln { fill: none; stroke: var(--fg-3); stroke-width: 1.4; }
-.dg .life { stroke: var(--line-2); stroke-dasharray: 4 4; }
-.dg .sep { stroke: var(--line-2); }
-.dg .x { stroke-width: 2.2; }
-.dg .mk { fill: var(--fg-3); } .dg .mk-acc { fill: var(--accent); } .dg .l-acc { stroke: var(--accent); } .dg .mk-ok { fill: var(--ok); } .dg .mk-wait { fill: var(--wait); } .dg .mk-bad { fill: var(--bad); }
-.dg .l-ok { stroke: var(--ok); } .dg .l-wait { stroke: var(--wait); } .dg .l-bad { stroke: var(--bad); }
-.dg .c-ok, .diagram .c-ok { fill: var(--ok); color: var(--ok); }
-.dg .c-wait, .diagram .c-wait { fill: var(--wait); color: var(--wait); }
-.dg .c-bad, .diagram .c-bad { fill: var(--bad); color: var(--bad); }
-.dg .l-bad:not(.x) { stroke-dasharray: 4 3; }
-
-/* tables */
-.table { overflow-x: auto; margin: 20px 0 26px; border: 1px solid var(--line); border-radius: 12px; }
-table { border-collapse: collapse; width: 100%; font-size: 14px; }
-th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; color: var(--fg-2); }
-th { font-weight: 500; color: var(--fg); background: var(--bg-2); font-size: 13px; }
-tr:last-child td { border-bottom: 0; }
-td code { white-space: nowrap; }
-
-/* plugin anatomy / states */
-.states { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 14px 0 22px; }
-.perm { display: inline-block; font: 500 12.5px var(--f-mono); padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line-2); color: var(--fg); margin: 0 4px 6px 0; background: var(--bg); }
-.hero-actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 32px; }
-.btn { display: inline-flex; align-items: center; gap: 8px; height: 38px; padding: 0 16px; border-radius: 8px; font-size: 14px; font-weight: 500; text-decoration: none; border: 1px solid var(--line-2); color: var(--fg); background: var(--bg); }
-.btn:hover { background: var(--hover); }
-.btn.primary { background: var(--fg); color: var(--bg); border-color: var(--fg); }
-.btn.primary:hover { opacity: .9; background: var(--fg); }
-
-.demo-frame { position: relative; margin: 8px 0 10px; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; box-shadow: var(--shadow); background: var(--bg); height: 640px; }
-.demo-frame iframe { display: block; width: 100%; height: 100%; border: 0; }
-.demo-frame.scaled iframe { position: absolute; top: 0; left: 0; width: 1280px; height: 820px; transform-origin: 0 0; }
-.demo-cap { font-size: 13.5px; color: var(--fg-3) !important; }
-/* prev / next */
-.pager { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 56px; padding-top: 24px; border-top: 1px solid var(--line); }
-.pager a { display: block; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; text-decoration: none; transition: border-color .15s; }
-.pager a:hover { border-color: var(--fg-3); }
-.pager small { display: block; font-size: 12.5px; color: var(--fg-3); margin-bottom: 2px; }
-.pager b { font-weight: 500; color: var(--fg); }
-.pager .next { text-align: right; grid-column: 2; }
-
-/* on this page */
-.toc { position: sticky; top: calc(var(--top) + env(safe-area-inset-top, 0px)); align-self: start; padding: 40px max(24px, env(safe-area-inset-right, 0px)) 40px 8px; font-size: 13.5px;
-  max-height: calc(100vh - var(--top)); overflow-y: auto; }
-.toc h6 { margin: 0 0 10px; font: 500 13.5px var(--f-sans); color: var(--fg); }
-.toc a { display: block; padding: 4px 0; color: var(--fg-3); text-decoration: none; line-height: 1.4; }
-.toc a:hover { color: var(--fg); }
-.toc a.on { color: var(--fg); font-weight: 500; }
-.toc .extra { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
-.toc .extra button, .toc .extra a { display: flex; align-items: center; gap: 8px; background: none; border: 0; padding: 4px 0; color: var(--fg-3); cursor: pointer; font-size: 13.5px; text-decoration: none; }
-.toc .extra button:hover, .toc .extra a:hover { color: var(--fg); }
-.toc .extra svg { width: 14px; height: 14px; }
-.toc .promo { margin-top: 20px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg-2); }
-.toc .promo b { display: block; font-size: 14px; margin-bottom: 4px; }
-.toc .promo p { margin: 0 0 12px; color: var(--fg-2); font-size: 13px; line-height: 1.5; }
-.toc .promo code { font: 12px var(--f-mono); }
-
-/* command palette */
-.palette[hidden] { display: none; }
-.palette { position: fixed; inset: 0; z-index: 50; background: color-mix(in srgb, var(--bg) 40%, rgba(0,0,0,.45)); display: grid; place-items: start center;
-  padding: max(10vh, env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) 16px max(16px, env(safe-area-inset-left, 0px)); }
-.palette .box { width: min(620px, 100%); background: var(--bg); border: 1px solid var(--line-2); border-radius: 14px; box-shadow: var(--shadow); overflow: hidden; }
-.palette input { width: 100%; height: 52px; border: 0; border-bottom: 1px solid var(--line); padding: 0 18px; background: none; font: 16px var(--f-sans); color: var(--fg); outline: none; }
-.palette ul { list-style: none; margin: 0; padding: 6px; max-height: 50vh; overflow-y: auto; }
-.palette li a { display: flex; justify-content: space-between; gap: 12px; padding: 9px 12px; border-radius: 8px; text-decoration: none; color: var(--fg); font-size: 14px; }
-.palette li a small { color: var(--fg-3); }
-.palette li a[aria-selected="true"] { background: var(--active); }
-.palette .none { padding: 18px; color: var(--fg-3); font-size: 14px; }
-
-@media (max-width: 1240px) { .shell { grid-template-columns: var(--side) minmax(0, 1fr); } .toc { display: none; } main { padding: 36px 40px 80px; } }
-@media (max-width: 900px) {
-  .shell { grid-template-columns: minmax(0, 1fr); }
-  .menubtn { display: inline-grid; }
-  .toplinks { display: none; }
-  .searchbtn { width: auto; }
-  .searchbtn span, .searchbtn kbd { display: none; }
-  /* Drawer: a fixed height (a grid item with top+bottom would shrink to its content and never scroll), hidden when closed, a scrim behind it. */
-  .side { position: fixed; z-index: 35; top: calc(var(--top) + env(safe-area-inset-top, 0px)); left: 0; align-self: auto; width: min(320px, 86vw);
-    height: calc(100vh - var(--top) - env(safe-area-inset-top, 0px)); height: calc(100dvh - var(--top) - env(safe-area-inset-top, 0px));
-    overscroll-behavior: contain; padding-bottom: calc(40px + env(safe-area-inset-bottom, 0px));
-    background: var(--bg); transform: translateX(-102%); visibility: hidden; transition: transform .2s ease, visibility 0s linear .2s; box-shadow: var(--shadow); }
-  body.nav-open .side { transform: none; visibility: visible; transition: transform .2s ease; }
-  .scrim { display: block; position: fixed; z-index: 34; inset: calc(var(--top) + env(safe-area-inset-top, 0px)) 0 0 0; background: rgba(0, 0, 0, .45);
-    opacity: 0; pointer-events: none; transition: opacity .2s ease; }
-  body.nav-open .scrim { opacity: 1; pointer-events: auto; }
-  body.nav-open { overflow: hidden; }
-  main { padding: 28px max(16px, env(safe-area-inset-right, 0px)) 72px max(16px, env(safe-area-inset-left, 0px)); }
-  .topbar .in { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); gap: 12px; }
-  .cards { grid-template-columns: minmax(0, 1fr); }
-  .timeline li { grid-template-columns: 28px minmax(0, 1fr); }
-  .timeline .d { grid-column: 2; }
-  .page h1 { font-size: 30px; }
-}
-.scrim { display: none; }
-/* Phones: table rows become stacked cards, each value under its column name, so nothing is squeezed or clipped. */
-@media (max-width: 640px) {
-  .table { overflow: visible; }
-  .table table, .table tbody, .table tr, .table td { display: block; width: 100%; }
-  .table thead { display: none; }
-  .table tr { padding: 12px 14px; border-bottom: 1px solid var(--line); }
-  .table tr:last-child { border-bottom: 0; }
-  .table td { padding: 0; border: 0; }
-  .table td + td { margin-top: 8px; }
-  .table td[data-label]::before { content: attr(data-label); display: block; margin-bottom: 2px; font-size: 12px; font-weight: 500; color: var(--fg-3); }
-  .table td:first-child::before { display: none; }
-  .table td:first-child { color: var(--fg); font-weight: 500; }
-  .table td code { white-space: normal; overflow-wrap: anywhere; }
-  .page h1 { font-size: 28px; }
-  .page h2 { font-size: 22px; margin-top: 40px; }
-  .page h3 { font-size: 19px; margin-top: 36px; }
-  .lede { font-size: 16px; }
-  .code pre, .code .nums { font-size: 12.5px; }
-}
-@media (max-width: 520px) { .copypage span { display: none; } .mark .pill, .mark .sep { display: none; } .pager { grid-template-columns: 1fr; } .pager .next { grid-column: 1; } }
-@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
-
-/* Generated built-in plugin reference (internal/docgen). */
-.builtins { display: grid; gap: 10px; margin: 12px 0 18px; }
-.builtin { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; background: var(--bg); }
-.builtin .bhead { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: baseline; }
-.builtin .bhead code { font-weight: 600; }
-.builtin .bsum { color: var(--fg-3); font-size: 13px; }
-.builtin p { margin: 6px 0 0; }
-.builtin details { margin-top: 8px; }
-.builtin summary { cursor: pointer; color: var(--fg-2); font-size: 13px; }
-.builtin pre { white-space: pre-wrap; font-family: var(--f-mono, ui-monospace, monospace); font-size: 12.5px; line-height: 1.55; margin: 8px 0 0; color: var(--fg-2); }
-</style>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>eipagent Docs — the everything-is-a-plugin agent SDK for Go</title>
+<meta name="description" content="eipagent is the Go toolkit for building secure, production-ready AI agents where everything is a plugin. Guides, examples, lifecycles and reference.">
+<link rel="canonical" href="https://eipagent-docs.vercel.app/">
+<meta name="robots" content="index,follow">
+<meta name="author" content="eipagent">
+<meta name="theme-color" content="#f6f4ee" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0e0e0d" media="(prefers-color-scheme: dark)">
+<meta name="color-scheme" content="light dark">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="eipagent Docs">
+<meta property="og:title" content="eipagent Docs — everything is a plugin">
+<meta property="og:description" content="The Go toolkit for building secure, production-ready AI agents. Swap the loop, models, tools, memory and policy as plugins.">
+<meta property="og:url" content="https://eipagent-docs.vercel.app/">
+<meta property="og:image" content="https://eipagent-docs.vercel.app/assets/img/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="eipagent Docs — everything is a plugin">
+<meta name="twitter:description" content="Build secure, production-ready AI agents in Go. The loop, providers, tools, memory and policy are all plugins.">
+<meta name="twitter:image" content="https://eipagent-docs.vercel.app/assets/img/og.png">
+<link rel="icon" href="assets/img/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="assets/img/favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="assets/img/apple-touch-icon.png">
+<link rel="manifest" href="site.webmanifest">
+<link rel="stylesheet" href="assets/fonts/fonts.css">
+<link rel="preload" href="assets/fonts/geist-400-normal-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="assets/fonts/geist-500-normal-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="assets/fonts/instrument-serif-400-italic-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="assets/site.css">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"WebSite","name":"eipagent Docs","url":"https://eipagent-docs.vercel.app/","description":"The Go toolkit for building secure, production-ready AI agents where everything is a plugin.","publisher":{"@type":"Organization","name":"eipagent"}}
+</script>
+<script>(function(){try{var t=localStorage.getItem("eip-theme");if(t)document.documentElement.dataset.theme=t;}catch(e){}})();</script>
+</head>
+<body data-page="introduction">
+<a class="skip" href="#main">Skip to content</a>
 
 <header class="topbar">
   <div class="in">
@@ -351,12 +46,12 @@ td code { white-space: nowrap; }
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
     </button>
     <a class="mark" href="#introduction" aria-label="eipagent docs home">
-      <svg viewBox="0 0 32 32" aria-hidden="true"><rect x="3" y="3" width="11" height="11" rx="2.5" fill="currentColor"/><rect x="18" y="3" width="11" height="11" rx="2.5" fill="none" stroke="currentColor" stroke-width="2.2"/><rect x="3" y="18" width="11" height="11" rx="2.5" fill="none" stroke="currentColor" stroke-width="2.2"/><rect x="18" y="18" width="11" height="11" rx="2.5" fill="var(--accent)"/></svg>
+      <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8.5" fill="var(--fg)"/><path d="M16 9.5v13M9.5 16h13" stroke="var(--bg)" stroke-width="1.3" stroke-linecap="round" opacity=".45"/><circle cx="16" cy="9.5" r="2.5" fill="var(--bg)"/><circle cx="16" cy="22.5" r="2.5" fill="var(--bg)"/><circle cx="9.5" cy="16" r="2.5" fill="var(--bg)"/><circle cx="22.5" cy="16" r="2.5" fill="var(--accent)"/></svg>
       eipagent <span class="sep">/</span> <span class="pill">docs</span>
     </a>
     <nav class="toplinks" aria-label="Sections">
       <a href="#introduction" data-top="docs" aria-current="page">Docs</a>
-      <a href="#fullstack" data-top="demo">Demo</a>
+      <a href="#plugin-lab" data-top="lab">Lab</a>
       <a href="#providers" data-top="providers">Providers</a>
       <a href="#reference-options" data-top="reference">Reference</a>
     </nav>
@@ -377,10 +72,10 @@ td code { white-space: nowrap; }
 <div class="scrim" id="scrim" aria-hidden="true"></div>
 <div class="shell">
 <aside class="side" id="side" aria-label="Documentation">
-  <div class="version">
-    <span class="logo"><svg viewBox="0 0 32 32" aria-hidden="true"><rect x="3" y="3" width="11" height="11" rx="2.5" fill="var(--bg)"/><rect x="18" y="3" width="11" height="11" rx="2.5" fill="none" stroke="var(--bg)" stroke-width="2.4"/><rect x="3" y="18" width="11" height="11" rx="2.5" fill="none" stroke="var(--bg)" stroke-width="2.4"/><rect x="18" y="18" width="11" height="11" rx="2.5" fill="var(--accent)"/></svg></span>
-    <span><b>v0.4.7</b><small>Go 1.27 · latest</small></span>
-  </div>
+  <a class="version" href="https://github.com/ganeshdipdumbare/eipagent/blob/main/CHANGELOG.md" aria-label="Release notes">
+    <span class="logo"><svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8.5" fill="var(--fg)"/><path d="M16 9.5v13M9.5 16h13" stroke="var(--bg)" stroke-width="1.3" stroke-linecap="round" opacity=".45"/><circle cx="16" cy="9.5" r="2.5" fill="var(--bg)"/><circle cx="16" cy="22.5" r="2.5" fill="var(--bg)"/><circle cx="9.5" cy="16" r="2.5" fill="var(--bg)"/><circle cx="22.5" cy="16" r="2.5" fill="var(--accent)"/></svg></span>
+    <span><b>v0.4.7</b><small>latest</small></span>
+  </a>
   <nav id="sidenav"></nav>
 </aside>
 
@@ -390,72 +85,151 @@ td code { white-space: nowrap; }
 
 
 <section id="introduction" class="page" data-nav="Introduction">
-  <h1>eipagent</h1>
-  <p class="lede">eipagent is the Go toolkit for building AI agents where everything is a plugin. The core only loads plugins and routes calls between them: the agent loop, every model provider, tools, memory, middleware, sandboxes and security rules are plugins you can add, swap or remove, even while the agent runs.</p>
-  <div class="hero-actions">
-    <a class="btn primary" href="#quickstart">Get started</a>
-    <a class="btn" href="#fullstack">See the full-stack demo</a>
+  <div class="hero">
+    <div class="hero-eyebrow"><span class="dot"></span> Go agent SDK <span class="sep">/</span> latest <span class="sep">/</span> everything is a plugin</div>
+    <h1 class="hero-title">Build agents where everything is a <em>plugin.</em></h1>
+    <p class="hero-sub">eipagent is the production-grade Go toolkit for AI agents. The loop, models, tools, memory and policy are all plugins — add, swap or remove them while the agent runs.</p>
+    <div class="hero-actions">
+      <a class="btn primary" href="#quickstart">Get started <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
+      <a class="btn" href="#plugin-lab">Try the sandbox lab</a>
+    </div>
+    <div class="hero-install"><span style="color:var(--fg-3)">$</span><code>go get github.com/ganeshdipdumbare/eipagent@v0.4.7</code><button class="copy" type="button" data-copy="go get github.com/ganeshdipdumbare/eipagent@v0.4.7" aria-label="Copy install command"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div>
+    <div class="hero-meta"><span><i></i> Go 1.27</span><span><i></i> Anthropic · OpenAI · Gemini · DeepSeek · Ollama</span><span><i></i> Secure by default</span></div>
   </div>
-  <h3>Why eipagent?</h3>
-  <p>Building agents for a company means juggling providers, tools, memory, approvals, sandboxes and security reviews. eipagent gives you one small API for the common path, and a plugin for everything else, so you change behavior by changing configuration instead of forking the framework.</p>
-  <p>Here is the same agent on four providers. Only the model string changes:</p>
-  <div class="tabs" data-tabs><div role="tablist" aria-label="Provider"><button role="tab" aria-selected="true">Anthropic</button><button role="tab" aria-selected="false">OpenAI</button><button role="tab" aria-selected="false">Gemini</button><button role="tab" aria-selected="false">Ollama</button></div><div role="tabpanel"><div class="code" data-title="main.go"><pre><code class="language-go">agent, err := eipagent.New(
-	eipagent.WithModel("anthropic:claude-sonnet-5-5"),
-	eipagent.WithTools(weather),
-)
-if err != nil {
-	log.Fatal(err)
-}
-defer agent.Close()
 
-res, err := agent.Generate(ctx, "What's the weather in Lisbon?")
-fmt.Println(res.Text)</code></pre></div></div><div role="tabpanel" hidden><div class="code" data-title="main.go"><pre><code class="language-go">agent, err := eipagent.New(
-	eipagent.WithModel("openai:gpt-4.1"),
-	eipagent.WithTools(weather),
-)
-if err != nil {
-	log.Fatal(err)
-}
-defer agent.Close()
+  <div class="hero-art reveal" aria-label="The eipagent plugin engine and its plugins">
+    <div class="scroll">
+      <svg class="dg" viewBox="0 0 1100 360" role="img" aria-hidden="true">
+        <text class="cap" x="0" y="18">PLUGIN ENGINE / ONE AGENT</text>
+        <path class="ln" d="M260 72 C360 72 380 150 410 164"/>
+        <path class="ln" d="M840 72 C740 72 720 150 690 164"/>
+        <path class="ln" d="M260 288 C360 288 380 220 410 208"/>
+        <path class="ln" d="M840 288 C740 288 720 220 690 208"/>
+        <path class="ln" d="M550 300 L550 240"/>
+        <path class="ln" d="M550 60 L550 110"/>
+        <path class="ln" d="M260 180 H410"/>
+        <rect class="box em" x="410" y="110" width="280" height="130" rx="4"/>
+        <text class="t" x="550" y="162" text-anchor="middle">plugin engine</text>
+        <text class="m" x="550" y="184" text-anchor="middle">loads plugins</text>
+        <text class="m" x="550" y="204" text-anchor="middle">routes every call</text>
+        <rect class="box" x="80" y="40" width="180" height="64" rx="3"/>
+        <text class="t" x="170" y="68" text-anchor="middle">model</text>
+        <text class="m" x="170" y="88" text-anchor="middle">anthropic · openai · ollama</text>
+        <rect class="box" x="840" y="40" width="180" height="64" rx="3"/>
+        <text class="t" x="930" y="68" text-anchor="middle">tools</text>
+        <text class="m" x="930" y="88" text-anchor="middle">typed Go functions</text>
+        <rect class="box" x="80" y="148" width="180" height="64" rx="3"/>
+        <text class="t" x="170" y="176" text-anchor="middle">agent loop</text>
+        <text class="m" x="170" y="196" text-anchor="middle">a plugin, like the rest</text>
+        <rect class="box" x="80" y="256" width="180" height="64" rx="3"/>
+        <text class="t" x="170" y="284" text-anchor="middle">memory</text>
+        <text class="m" x="170" y="304" text-anchor="middle">threads · long-term</text>
+        <rect class="box" x="840" y="256" width="180" height="64" rx="3"/>
+        <text class="t" x="930" y="284" text-anchor="middle">policy</text>
+        <text class="m" x="930" y="304" text-anchor="middle">permissions · approvals</text>
+        <rect class="box" x="470" y="300" width="160" height="44" rx="3"/>
+        <text class="t" x="550" y="327" text-anchor="middle">sandbox</text>
+        <rect class="box" x="470" y="16" width="160" height="44" rx="3"/>
+        <text class="t" x="550" y="43" text-anchor="middle">audit + traces</text>
+      </svg>
+    </div>
+    <div class="cap"><span>Swap any node</span><span>Pin every plugin</span><span>Run the whole agent in a sandbox</span></div>
+  </div>
 
-res, err := agent.Generate(ctx, "What's the weather in Lisbon?")
-fmt.Println(res.Text)</code></pre></div></div><div role="tabpanel" hidden><div class="code" data-title="main.go"><pre><code class="language-go">agent, err := eipagent.New(
-	eipagent.WithModel("gemini:gemini-2.5-pro"),
-	eipagent.WithTools(weather),
-)
-if err != nil {
-	log.Fatal(err)
-}
-defer agent.Close()
+  <div class="section" id="plugin-lab">
+    <div class="section-head reveal"><span class="section-label">02 / Plugin lab</span><h2 data-toc="Plugin lab">Change one plugin.<br>Watch the sandbox run.</h2></div>
+    <p class="section-lede reveal">The agent runs in a cloud sandbox. The host keeps the keys; the sandbox gets placeholders. Toggle a plugin and the run, config and diff update live. <em>This is the whole idea.</em></p>
 
-res, err := agent.Generate(ctx, "What's the weather in Lisbon?")
-fmt.Println(res.Text)</code></pre></div></div><div role="tabpanel" hidden><div class="code" data-title="main.go"><pre><code class="language-go">agent, err := eipagent.New(
-	eipagent.WithModel("ollama:lfm3"),
-	eipagent.WithTools(weather),
-)
-if err != nil {
-	log.Fatal(err)
-}
-defer agent.Close()
+    <div class="lab reveal" data-lab>
+      <div class="lab-top">
+        <div class="lab-topline">
+          <span class="tag">Illustrative cloud run</span><span class="lab-cloud">Tensorlake sandbox</span>
+          <span class="lab-run-status" data-lab-status style="font:500 10.5px var(--f-mono);color:var(--fg-3);letter-spacing:.08em;text-transform:uppercase">Ready</span>
+          <div class="lab-presets" role="group" aria-label="Plugin presets">
+            <button type="button" data-preset="prototype" aria-pressed="false">Prototype</button>
+            <button type="button" data-preset="team" aria-pressed="true">Team</button>
+            <button type="button" data-preset="production" aria-pressed="false">Production</button>
+          </div>
+        </div>
+        <div class="lab-livebar" data-lab-livebar>
+          <span class="live-dot" aria-hidden="true"></span>
+          <span data-lab-live>Ready · toggle a plugin</span>
+          <span class="live-progress" aria-hidden="true"><i data-lab-progress></i></span>
+          <div class="lab-controls">
+            <div class="lab-mode" role="group" aria-label="Playback mode">
+              <button type="button" data-lab-mode="auto" aria-pressed="true">Auto</button>
+              <button type="button" data-lab-mode="step" aria-pressed="false">Step</button>
+            </div>
+            <button class="lab-btn mini" type="button" data-lab-run>Run</button>
+            <button class="lab-btn mini" type="button" data-lab-step hidden>Next</button>
+            <button class="lab-btn mini" type="button" data-lab-reset>Reset</button>
+          </div>
+        </div>
+      </div>
+      <div class="lab-mobile-tabs" role="tablist" aria-label="Lab view">
+        <button type="button" role="tab" data-lab-view="plugins" aria-selected="false">Plugins</button>
+        <button type="button" role="tab" data-lab-view="run" aria-selected="true">Run</button>
+      </div>
+      <div class="lab-grid">
+        <div class="lab-panel" data-lab-view-panel="plugins">
+          <div class="lab-panel-head"><h4>Compose</h4><span class="count" data-lab-count>0 selected</span></div>
+          <div class="lab-plugins" data-lab-plugins></div>
+        </div>
+        <div class="lab-panel lab-run" data-lab-view-panel="run">
+          <div class="lab-run-body">
+            <div class="lab-map" data-lab-map aria-label="Where the agent and plugins run">
+              <div class="map-node host" data-plane-node="host">
+                <span class="map-kicker">Host</span>
+                <b>Your process</b>
+                <small>model · secrets</small>
+              </div>
+              <div class="map-link" data-plane-node="boundary">
+                <span class="map-line"></span><span class="map-pulse" aria-hidden="true"></span>
+                <small>TLS</small>
+              </div>
+              <div class="map-node cloud" data-plane-node="cloud">
+                <span class="map-kicker">Cloud</span>
+                <b>Tensorlake</b>
+                <div class="map-node sandbox" data-plane-node="sandbox">
+                  <span class="map-kicker">Sandbox</span>
+                  <b>agent · tools</b>
+                </div>
+              </div>
+            </div>
+            <div class="lab-run-main">
+              <div class="lab-scenario"><div class="who"><i></i> Scenario / cloud sandbox run</div><p class="prompt">“Run the tests, read the log, open a PR.”</p></div>
+              <div class="lab-trace" data-lab-trace aria-live="polite"></div>
+              <div class="lab-side" data-lab-view-panel="config">
+                <div class="lab-tabs" role="tablist" aria-label="Lab details">
+                  <button type="button" role="tab" aria-selected="true" data-lab-tab="config">Config</button>
+                  <button type="button" role="tab" aria-selected="false" data-lab-tab="diff">Diff</button>
+                </div>
+                <div class="lab-side-body">
+                  <div class="lab-pane" data-lab-pane="config">
+                    <div class="lab-summary" data-lab-summary></div>
+                    <div class="lab-config" data-lab-config></div>
+                  </div>
+                  <div class="lab-pane" data-lab-pane="diff" hidden>
+                    <div class="lab-diff" data-lab-diff></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="lab-foot">
+        <button class="lab-btn" type="button" data-lab-copy>Copy config</button>
+        <a class="lab-btn" href="#plugin-hook_approval">Plugin reference</a>
+        <span class="note-mini">Simulated cloud run. <a href="https://github.com/ganeshdipdumbare/eipagent/blob/main/examples/tensorlake/main.go">See the real Tensorlake example</a>.</span>
+      </div>
+    </div>
+  </div>
 
-res, err := agent.Generate(ctx, "What's the weather in Lisbon?")
-fmt.Println(res.Text)</code></pre></div></div></div>
-  <p><code>weather</code> is a typed Go function turned into a tool. See <a href="#tools">Tools</a>.</p>
-  <h3>What you get</h3>
-  <div class="cards"><a class="card" href="#generating-text"><h5>Simple API</h5><p>Generate, Stream, GenerateObject[T] and typed tools, with one import for most apps.</p></a><a class="card" href="#plugins"><h5>Everything is a plugin</h5><p>Swap the loop, providers, memory or policy from a profile. Add, update or remove plugins at runtime.</p></a><a class="card" href="#human-in-the-loop"><h5>Durable approvals</h5><p>Pause before risky tools and resume later, even from another process.</p></a><a class="card" href="#kind-sandboxes"><h5>Pluggable sandboxes</h5><p>Tools run in per-thread sandboxes, or the whole agent runs inside one with keys kept on the host.</p></a><a class="card" href="#security"><h5>Secure by default</h5><p>Pinned plugins, scoped permissions, a locked policy layer and a tamper-evident audit log.</p></a><a class="card" href="#kind-threads-memory"><h5>Stateless and scalable</h5><p>Threads and memory live in Postgres, so any replica can serve any conversation.</p></a></div>
-  <h3>Model providers</h3>
-  <p>eipagent supports the major providers and anything that speaks the OpenAI API, including local models.</p>
-  <div class="cards"><a class="card" href="#providers"><h5>Anthropic</h5><p>Claude models through the Messages API.</p></a><a class="card" href="#providers"><h5>OpenAI</h5><p>GPT models, plus any OpenAI-compatible server.</p></a><a class="card" href="#providers"><h5>Google Gemini</h5><p>Gemini models through generateContent.</p></a><a class="card" href="#ollama"><h5>Ollama</h5><p>Local models with no API key.</p></a></div>
-  <h3>Next steps</h3>
-  <ul>
-    <li><a href="#quickstart">Quickstart</a>: your first agent with a tool, in one file.</li>
-    <li><a href="#concepts">Concepts</a>: the words used across these docs (plugin, service, hook, thread …), in one table.</li>
-    <li><a href="#fullstack">Full-stack demo</a>: a support desk with approvals, redaction and an audit trail, and how its Go backend is written.</li>
-    <li><a href="#lifecycles">Lifecycles</a>: exactly what happens, in what order, during a run.</li>
-    <li><a href="#plugins">Writing a plugin</a>: one Go file, no compile step.</li>
-    <li><a href="#plugin-packages">Shipping plugins</a>: validate, sign, install, approve, update and roll back.</li>
-    <li><a href="#production-examples">Production examples</a>: secrets, audit export, tracing and plugin verification, as runnable programs.</li>
-  </ul>
+  <div class="cta-band">
+    <div><h2>Start with one file.<br>Ship the whole platform.</h2><p>Install the SDK, pick a provider, and add your first tool in the Quickstart. The same plugin model scales to approvals, sandboxes, Postgres threads and signed plugin packages.</p></div>
+    <div class="hero-actions"><a class="btn primary" href="#quickstart">Read the Quickstart</a><a class="btn" href="#production-checklist">Production checklist</a></div>
+  </div>
 </section>
 
 
@@ -477,7 +251,18 @@ cd eipagent && go test ./...</code></pre></div>
 
 <section id="quickstart" class="page">
   <h1>Quickstart</h1>
-  <p>Pick a provider, export its key, and give your agent a tool. The model string is <code>provider:model</code>, and the matching provider plugin loads automatically.</p>
+  <p class="lede">From an empty folder to a working agent with a tool, in one file. This page is self-contained; Installation covers the same setup in more detail.</p>
+
+  <h2>1. Create a module</h2>
+  <p>You need Go 1.27 or newer.</p>
+  <div class="code" data-title="terminal"><pre><code class="language-bash">mkdir hello-agent &amp;&amp; cd hello-agent
+go mod init example.com/hello-agent
+go env -w GOPRIVATE=github.com/ganeshdipdumbare/*   # the repo is private
+gh auth setup-git                                    # or add an SSH key
+go get github.com/ganeshdipdumbare/eipagent@v0.4.7</code></pre></div>
+
+  <h2>2. Pick a provider and set its key</h2>
+  <p>The model string is <code>provider:model</code>. The matching provider plugin loads automatically.</p>
   <div class="tabs" data-tabs>
     <div role="tablist" aria-label="Provider">
       <button role="tab" aria-selected="true">Anthropic</button>
@@ -497,6 +282,9 @@ cd eipagent && go test ./...</code></pre></div>
     <div role="tabpanel" hidden><div class="code" data-title="terminal"><pre><code class="language-bash">ollama pull lfm3
 # model: "ollama:lfm3"   (no key needed)</code></pre></div></div>
   </div>
+  <p>No key yet? Replace the model with <code>mock:demo</code> to run the same program offline.</p>
+
+  <h2>3. Write the agent</h2>
   <div class="code" data-title="main.go"><pre><code class="language-go">package main
 
 import (
@@ -535,7 +323,21 @@ func main() {
 	}
 	fmt.Println(res.Text)
 }</code></pre></div>
-  <p>The model decides to call <code>weather</code>, the agent runs it, sends the result back, and returns the final answer. The argument schema comes from <code>WeatherIn</code>.</p>
+
+  <h2>4. Run it</h2>
+  <div class="code" data-title="terminal"><pre><code class="language-bash">go run .
+# 18°C and light rain in Lisbon. Pack a light rain jacket.</code></pre></div>
+  <p>The model decides to call <code>weather</code>, the agent runs it, sends the result back, and returns the final answer. The argument schema comes from <code>WeatherIn</code>. You did not describe the tool to the model by hand.</p>
+
+  <h2>What to add next</h2>
+  <ul>
+    <li><b>A conversation:</b> <code>agent.Thread("customer-42")</code> keeps history across runs. <a href="#threads">Threads and memory</a>.</li>
+    <li><b>Streaming:</b> range over <code>agent.Stream(ctx, prompt).Text()</code>. <a href="#streaming">Streaming</a>.</li>
+    <li><b>An approval:</b> load <code>hook_approval</code> and resume with <code>Thread.Resume</code>. <a href="#human-in-the-loop">Human in the loop</a>.</li>
+    <li><b>Production state:</b> move threads and memory to Postgres. <a href="#production-checklist">Production checklist</a>.</li>
+    <li><b>A plugin:</b> one Go file with <code>func Apply(p *sdk.Plugin) error</code>. <a href="#plugins">Plugins in five minutes</a>.</li>
+  </ul>
+  <div class="note"><b>Stuck?</b><div><p>See <a href="#troubleshooting">Troubleshooting &amp; FAQ</a> for private module errors, missing keys, Ollama and thread issues.</p></div></div>
 </section>
 
 <section id="concepts" class="page">
@@ -579,6 +381,70 @@ go run ./examples/ollama                 # every demo</code></pre></div>
 </section>
 
 
+<section id="troubleshooting" class="page">
+  <h1>Troubleshooting &amp; FAQ</h1>
+  <p class="lede">The fastest fixes for the problems new projects hit first. If yours is not here, open an issue with the error and the model string you used.</p>
+
+  <h2>Install and module problems</h2>
+  <div class="table"><table>
+    <thead><tr><th>Symptom</th><th>Fix</th></tr></thead>
+    <tbody>
+      <tr><td><code>401</code>, <code>404</code> or <code>unknown revision</code> from <code>go get</code></td><td>The repository is private. Run <code>go env -w GOPRIVATE=github.com/ganeshdipdumbare/*</code> once, then <code>gh auth setup-git</code> or add an SSH key.</td></tr>
+      <tr><td><code>go: module ... requires go &gt;= 1.27</code></td><td>Upgrade Go to 1.27 or newer. Check with <code>go version</code>.</td></tr>
+      <tr><td>Imports cannot find <code>eipagent/sdk</code> in a plugin file</td><td>That import is an engine alias for plugin sources. Host programs import <code>github.com/ganeshdipdumbare/eipagent</code>.</td></tr>
+      <tr><td>The CLI is not found</td><td><code>go install github.com/ganeshdipdumbare/eipagent/cmd/eip@v0.4.7</code>, then make sure <code>$(go env GOPATH)/bin</code> is on <code>PATH</code>.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Model and provider problems</h2>
+  <div class="table"><table>
+    <thead><tr><th>Symptom</th><th>Fix</th></tr></thead>
+    <tbody>
+      <tr><td><code>no model plugin for "x:y"</code></td><td>The prefix selects the plugin. Use <code>anthropic:</code>, <code>openai:</code>, <code>gemini:</code>, <code>deepseek:</code>, <code>ollama:</code> or <code>mock:</code>.</td></tr>
+      <tr><td>Authentication failed</td><td>Set the provider key: <code>ANTHROPIC_API_KEY</code>, <code>OPENAI_API_KEY</code>, <code>GEMINI_API_KEY</code> or <code>DEEPSEEK_API_KEY</code>. Ollama needs none.</td></tr>
+      <tr><td><code>connection refused</code> from Ollama</td><td>Start <code>ollama serve</code>, pull the model, and check <code>OLLAMA_HOST</code> if Ollama is on another machine.</td></tr>
+      <tr><td>Tool calls are ignored by a local model</td><td>Use a tool-capable model of 4B parameters or more. Very small models often answer instead of calling tools.</td></tr>
+      <tr><td>Structured output never parses</td><td>Use a model with JSON or tool support. eipagent retries once, then returns <code>eipagent.ErrNoObject</code>; simplify the schema if it keeps failing.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Threads, approvals and concurrency</h2>
+  <div class="table"><table>
+    <thead><tr><th>Symptom</th><th>Fix</th></tr></thead>
+    <tbody>
+      <tr><td><code>ErrThreadBusy</code></td><td>Another writer saved this thread first. Reload the thread and retry; optimistic locking prevents silent overwrites.</td></tr>
+      <tr><td>A paused approval disappeared after a restart</td><td>Use <code>threads_sql</code> or <code>threads_file</code>, not <code>threads_inmem</code>. The pause is saved with the thread.</td></tr>
+      <tr><td>Another replica cannot resume an approval</td><td>All replicas must share the same <code>threads</code> store. Use <code>WithPersistence("postgres", "secret://DATABASE_URL")</code>.</td></tr>
+      <tr><td><code>Generate</code> is refused after an interrupt</td><td>Call <code>Resume</code> with a decision first. A waiting thread does not accept a new message.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Plugins</h2>
+  <div class="table"><table>
+    <thead><tr><th>Symptom</th><th>Fix</th></tr></thead>
+    <tbody>
+      <tr><td>A plugin is refused at load</td><td>Run <code>eip plugin validate PATH</code>. Check that <code>var Permissions</code> and <code>var Requires</code> match its manifest and config.</td></tr>
+      <tr><td><code>manifest</code> or <code>compat</code> error</td><td>The SDK version is outside the plugin's <code>eipagent</code> range. Rebuild the package or widen the range.</td></tr>
+      <tr><td>A plugin needs a service that is missing</td><td>Load the provider of that service first, for example <code>db_sql</code> before <code>threads_sql</code>, or <code>sandbox_docker</code> before <code>workspace_sandbox</code>.</td></tr>
+      <tr><td>Old names stop working after an upgrade</td><td>The old names load until v1.0, but run <code>eip plugin fix PATH</code> to rewrite them now.</td></tr>
+      <tr><td>The docs generator check fails in CI</td><td>Run <code>go run ./docs/gen</code> after changing a built-in plugin, then commit <code>docs/site.html</code>.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>FAQ</h2>
+  <h3>Can I run everything offline?</h3>
+  <p>Yes. Use <code>mock:demo</code> for deterministic tests or <code>ollama:&lt;model&gt;</code> for a local model. The test suite runs offline.</p>
+  <h3>Can I use my own provider or gateway?</h3>
+  <p>Yes. Any OpenAI-compatible server works through <code>model_openai</code>: set <code>base_url</code> and an optional key in <code>eip.json</code>. See <a href="#providers">Providers</a>.</p>
+  <h3>Where does conversation state live?</h3>
+  <p>In the <code>threads</code> service. It is in-memory by default; use <code>threads_file</code> for one machine or <code>threads_sql</code> for shared Postgres storage.</p>
+  <h3>Is the agent safe with untrusted plugins?</h3>
+  <p>Permissions and the trust gate are defense in depth, not a hard boundary. For untrusted code, run the agent in a container or microVM with <code>WithRunIn</code>. See <a href="#security">Security</a>.</p>
+  <h3>How do I get production-ready?</h3>
+  <p>Work through the <a href="#production-checklist">production checklist</a>.</p>
+</section>
+
+
 <section id="fullstack" class="page">
   <h1>Full-stack demo: a support desk</h1>
   <p class="lede">A complete app built on eipagent: a Go backend and a web UI for Acme, an online shop. The assistant tracks orders, answers policy questions, issues refunds and emails customers. Refunds over $50 and every email wait for a supervisor, card numbers never reach the model, and every action lands in a tamper-evident audit log.</p>
@@ -589,7 +455,7 @@ go run ./examples/fullstack -model ollama:qwen3.5:4b  # the same app on a real l
 go test ./examples/fullstack/...                      # every flow, end to end over HTTP</code></pre></div>
   <p>Act as Sam (support agent) to chat as the customer, then switch to Ada (supervisor) to approve, edit or reject. Threads and the audit log live in <code>.eipagent/support-desk</code>, so stop the server mid-approval, start it again, and the request is still waiting.</p>
   <h3>Architecture</h3>
-  <div class="flow" role="img" aria-label="Architecture"><div class="row"><span class="node ">Browser UI</span><span class="edge">POST, server-sent events</span><span class="node info">Go net/http server</span><span class="edge">Stream · ResumeStream</span><span class="node ok">eipagent Agent</span></div><div class="row"><span class="node ok">eipagent Agent</span><span class="edge">plugins</span><span class="node ">tools</span><span class="node wait">refund_policy</span><span class="node wait">hook_approval</span><span class="node ">hook_pii</span><span class="node ">hook_limits</span><span class="node ">mailer</span></div><div class="row"><span class="node ok">eipagent Agent</span><span class="edge">services</span><span class="node ">threads_file</span><span class="node ">audit_file</span><span class="node ">secrets_env</span><span class="node info">llm/demo or llm/ollama</span></div></div>
+  <div class="flow" role="img" aria-label="Architecture"><div class="row"><span class="node ">Browser UI</span><span class="edge">POST, server-sent events</span><span class="node info">Go net/http server</span><span class="edge">Stream · ResumeStream</span><span class="node ok">eipagent Agent</span></div><div class="row"><span class="node ok">eipagent Agent</span><span class="edge">plugins</span><span class="node ">tools</span><span class="node wait">refund_policy</span><span class="node wait">hook_approval</span><span class="node ">hook_pii</span><span class="node ">hook_limits</span><span class="node ">mailer</span></div><div class="row"><span class="node ok">eipagent Agent</span><span class="edge">services</span><span class="node ">threads_file</span><span class="node ">audit_file</span><span class="node ">secrets_env</span><span class="node info">model/demo or model/ollama</span></div></div>
   <p>The backend is one Go package (<code>examples/fullstack/app</code>) of about 500 lines. The browser talks to it with plain JSON and server-sent events.</p>
   <div class="table"><table>
     <thead><tr><th>Endpoint</th><th>What it does</th><th>SDK call</th></tr></thead>
@@ -1095,7 +961,7 @@ unsigned package: hello_tool: package is not signed (signatures are required)</c
   <div class="code" data-title="eip.json"><pre><code class="language-json">{
   "model": "local:llama-3.3-70b",
   "plugins": [
-    { "use": "model_openai", "as": "llm_local",
+    { "use": "model_openai", "as": "local_model",
       "config": { "name": "local", "base_url": "http://vllm:8000/v1", "api_key": "" } }
   ]
 }</code></pre></div>
@@ -3296,7 +3162,7 @@ rotating a secret in Vault reaches running plugins without a restart.
 If Vault can&#39;t be reached once the cache expires, lookups fail (closed).
 
 NAME maps to &lt;mount&gt;/data/&lt;prefix&gt;/&lt;NAME&gt;, field &lt;field&gt;, unless paths
-maps it explicitly: {&#34;OPENAI_API_KEY&#34;: &#34;llm/openai#api_key&#34;}.
+maps it explicitly: {&#34;OPENAI_API_KEY&#34;: &#34;model/openai#api_key&#34;}.
 
 Config:
 
@@ -3575,6 +3441,72 @@ st.Quarantine("weather", "0.1.0", "security advisory")</code></pre></div>
 
 
 
+<section id="production-checklist" class="page">
+  <h1>Production checklist</h1>
+  <p class="lede">A practical pass before an agent handles real users. Each row names the development default, the production choice, and where to read more.</p>
+  <div class="table"><table>
+    <thead><tr><th>Area</th><th>Development default</th><th>Production choice</th><th>Read</th></tr></thead>
+    <tbody>
+      <tr><td><b>Secrets</b></td><td>Environment variables or a key in config</td><td><code>secrets_vault</code> or <code>secrets_env</code> with per-plugin <code>grants</code>; rotate with a TTL</td><td><a href="#kind-secrets">Secrets</a></td></tr>
+      <tr><td><b>Threads</b></td><td><code>threads_inmem</code></td><td><code>threads_sql</code> on Postgres, with <code>WithSaveEachStep</code> for long runs</td><td><a href="#kind-threads-memory">Threads</a></td></tr>
+      <tr><td><b>Memory</b></td><td><code>memory_inmem</code></td><td><code>memory_sql</code> when several replicas serve the same users</td><td><a href="#kind-threads-memory">Memory</a></td></tr>
+      <tr><td><b>Policy</b></td><td>Secure preset</td><td><code>WithPolicyFile</code> with required, allowed and denied plugins; lock <code>policy</code></td><td><a href="#kind-policy">Policy</a></td></tr>
+      <tr><td><b>Approvals</b></td><td>Inline approver</td><td><code>hook_approval</code> plus a durable queue; <code>hook_review</code> for a first pass</td><td><a href="#human-in-the-loop">Human in the loop</a></td></tr>
+      <tr><td><b>Audit</b></td><td>Console logs</td><td><code>audit_file</code> with a key, shipped by <code>audit_http</code>; verify the chain</td><td><a href="#kind-telemetry">Telemetry and audit</a></td></tr>
+      <tr><td><b>Traces</b></td><td><code>trace_file</code></td><td><code>trace_otlp</code> to your OpenTelemetry collector</td><td><a href="#kind-telemetry">Telemetry and audit</a></td></tr>
+      <tr><td><b>Sandboxing</b></td><td><code>workspace_local</code></td><td><code>sandbox_docker</code> or a microVM; <code>WithRunIn</code> to run the agent inside one</td><td><a href="#kind-sandboxes">Sandboxes</a></td></tr>
+      <tr><td><b>Limits</b></td><td>Defaults</td><td><code>hook_limits</code>, <code>MaxSteps</code>, tool-call and token caps per run and thread</td><td><a href="#kind-hooks">Hooks</a></td></tr>
+      <tr><td><b>Reliability</b></td><td>No retry</td><td><code>hook_retry</code>, <code>hook_fallback</code>, timeouts, graceful <code>agent.Close()</code></td><td><a href="#kind-hooks">Hooks</a></td></tr>
+      <tr><td><b>Scaling</b></td><td>One process</td><td>Stateless replicas sharing Postgres; handle <code>ErrThreadBusy</code></td><td><a href="#threads">Threads</a></td></tr>
+      <tr><td><b>Supply chain</b></td><td>Local plugin files</td><td>Signed <code>.eip</code> packages, sha256 pins, approval and rollback</td><td><a href="#plugin-packages">Shipping plugins</a></td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>A minimal production configuration</h2>
+  <div class="code" data-title="main.go"><pre><code class="language-go">agent, err := eipagent.New(
+	eipagent.WithModel("anthropic:claude-sonnet-5-5"),
+	eipagent.WithInstructions("You are Acme support. Be concise and never invent policy."),
+	eipagent.WithPolicyFile("policy.json"),
+	eipagent.WithLockFile("eip.lock"),
+
+	// Shared state: any replica can serve any thread or approval.
+	eipagent.WithPersistence("postgres", "secret://DATABASE_URL"),
+	eipagent.WithSaveEachStep(),
+
+	// Secrets are granted per plugin and read at use.
+	eipagent.WithPlugin("secrets_vault", map[string]any{
+		"address": "https://vault.internal:8200",
+		"prefix":  "eipagent",
+		"grants":  map[string]any{"model_anthropic": []any{"ANTHROPIC_API_KEY"}},
+	}),
+
+	// Safety, limits and evidence.
+	eipagent.WithPlugin("hook_approval", map[string]any{"interrupt_on": map[string]any{"issue_refund": true}}),
+	eipagent.WithPlugin("hook_pii", map[string]any{"types": []any{"credit_card", "email"}, "strategy": "mask"}),
+	eipagent.WithPlugin("hook_limits", map[string]any{"tool_calls_run": 12}),
+	eipagent.WithPlugin("hook_retry", nil),
+	eipagent.WithPlugin("audit_file", map[string]any{"path": "/var/log/eipagent/audit.jsonl"}),
+	eipagent.WithTracing("http://otel-collector:4318"),
+)
+if err != nil {
+	return err
+}
+defer agent.Close()</code></pre></div>
+
+  <h3>Before you ship</h3>
+  <ul>
+    <li>Every secret is a <code>secret://</code> reference with a grant, never a literal in config.</li>
+    <li>Threads and memory use shared storage, and a restart does not lose a paused approval.</li>
+    <li>The policy is loaded, locked, and tested with a denied tool call.</li>
+    <li>Audit verification runs in CI or on a schedule; traces reach the collector.</li>
+    <li>Untrusted tools run in a container or microVM, not on the host.</li>
+    <li>Limits, retries and timeouts are set; <code>Close</code> runs on shutdown.</li>
+    <li>Plugins are pinned by sha256 and signed; rollback has been rehearsed.</li>
+  </ul>
+  <div class="note"><b>Next</b><div><p>For a runnable version of these pieces, see <a href="#production-examples">Production examples</a>.</p></div></div>
+</section>
+
+
 <section id="reference-options" class="page">
   <h1>Agent options</h1>
   <p>Passed to <code>eipagent.New</code>.</p>
@@ -3684,6 +3616,19 @@ eip plugin list</code></pre></div>
 </section>
 
   <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
+
+  <footer class="site-footer">
+    <div class="cols">
+      <div>
+        <div class="brandline"><svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8.5" fill="var(--fg)"/><path d="M16 9.5v13M9.5 16h13" stroke="var(--bg)" stroke-width="1.3" stroke-linecap="round" opacity=".45"/><circle cx="16" cy="9.5" r="2.5" fill="var(--bg)"/><circle cx="16" cy="22.5" r="2.5" fill="var(--bg)"/><circle cx="9.5" cy="16" r="2.5" fill="var(--bg)"/><circle cx="22.5" cy="16" r="2.5" fill="var(--accent)"/></svg>eipagent</div>
+        <p>The Go SDK for AI agents where everything is a plugin. Built for teams that need to ship safely.</p>
+      </div>
+      <div><h6>Docs</h6><a href="#quickstart">Quickstart</a><a href="#concepts">Concepts</a><a href="#lifecycles">Lifecycles</a><a href="#reference-options">Reference</a></div>
+      <div><h6>Project</h6><a href="https://github.com/ganeshdipdumbare/eipagent">GitHub</a><a href="https://github.com/ganeshdipdumbare/eipagent/releases">Releases</a><a href="https://github.com/ganeshdipdumbare/eipagent/blob/main/CHANGELOG.md">Changelog</a><a href="https://github.com/ganeshdipdumbare/eipagent/blob/main/SECURITY.md">Security</a></div>
+      <div><h6>Help</h6><a href="#troubleshooting">Troubleshooting</a><a href="#production-checklist">Production checklist</a><a href="https://github.com/ganeshdipdumbare/eipagent/issues">Report an issue</a><a href="https://github.com/ganeshdipdumbare/eipagent/edit/main/docs/site.html">Edit this page</a></div>
+    </div>
+    <div class="bottom"><span>© 2026 eipagent · docs</span><span>Built with Go · <a href="#introduction">Back to top</a></span></div>
+  </footer>
 </article>
 </main>
 
@@ -3709,286 +3654,8 @@ eip plugin list</code></pre></div>
   </div>
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/go.min.js"></script>
-<script>
-(function () {
-  var NAV = [
-    { pages: ["introduction"] },
-    { title: "Getting Started", pages: ["installation", "quickstart", "concepts", "ollama"] },
-    { title: "Examples", pages: ["fullstack", "production-examples"] },
-    { title: "Foundations", pages: ["providers", "generating-text", "streaming", "tools", "structured-output", "threads", "human-in-the-loop"] },
-    { title: "Agents", pages: ["agent-loop", "multi-agent", "evals", "lifecycles"] },
-    { title: "Plugins", pages: ["plugins", "plugins-choose", "kind-tools", "kind-hooks", "kind-models", "kind-threads-memory", "kind-sandboxes", "kind-triggers", "kind-telemetry", "kind-secrets", "kind-policy", "plugin-permissions", "runtime-plugins", "plugin-packages", "plugin-api"] },
-    { title: "Security", pages: ["security"] },
-    { title: "Reference", pages: ["reference-options", "reference-run", "reference-result", "cli"] }
-  ];
-  var ICON = {
-    copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>',
-    check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg>',
-    chev: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>',
-    file: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>',
-    term: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m5 8 4 4-4 4M12 17h7"/></svg>'
-  };
-
-  var pages = Object.create(null), order = [], groupOf = Object.create(null);
-  document.querySelectorAll("section.page").forEach(function (s) { pages[s.id] = s; });
-  NAV.forEach(function (g) { g.pages.forEach(function (id) { if (pages[id]) { order.push(id); groupOf[id] = g.title || ""; } }); });
-  function title(id) { var p = pages[id]; if (p.dataset.nav) return p.dataset.nav; var h = p.querySelector("h1"); return h ? h.textContent.trim() : id; }
-
-  // ---- sidebar ----
-  var sidenav = document.getElementById("sidenav");
-  NAV.forEach(function (g) {
-    if (!g.title) {
-      g.pages.forEach(function (id) { sidenav.insertAdjacentHTML("beforeend", '<a class="item top-item" href="#' + id + '">' + title(id) + "</a>"); });
-      return;
-    }
-    var html = '<div class="group" data-open="false"><button type="button" aria-expanded="false">' + g.title + ICON.chev + '</button><div class="items">';
-    g.pages.forEach(function (id) { if (pages[id]) html += '<a class="item" href="#' + id + '">' + title(id) + "</a>"; });
-    sidenav.insertAdjacentHTML("beforeend", html + "</div></div>");
-  });
-  sidenav.querySelectorAll(".group > button").forEach(function (b) {
-    b.addEventListener("click", function () {
-      var g = b.parentNode, open = g.dataset.open !== "true";
-      g.dataset.open = String(open); b.setAttribute("aria-expanded", String(open));
-    });
-  });
-
-  // ---- page chrome: title row with Copy page ----
-  order.forEach(function (id) {
-    var h1 = pages[id].querySelector("h1");
-    if (!h1) return;
-    var row = document.createElement("div");
-    row.className = "titlerow";
-    h1.parentNode.insertBefore(row, h1);
-    row.appendChild(h1);
-    var b = document.createElement("button");
-    b.type = "button"; b.className = "copypage";
-    b.innerHTML = ICON.copy + "<span>Copy page</span>";
-    b.addEventListener("click", function () { copyText(pages[id].innerText.replace(/\nCopy page\n/, "\n"), b, "<span>Copied</span>", "<span>Copy page</span>"); });
-    row.appendChild(b);
-  });
-
-  // ---- code blocks: file bar, line numbers, highlighting, copy ----
-  document.querySelectorAll(".code").forEach(function (box) {
-    var pre = box.querySelector("pre"), code = box.querySelector("code");
-    var title = box.dataset.title || "";
-    var isTerm = title === "terminal";
-    if (isTerm) box.classList.add("plain");
-    try { if (window.hljs && code.className.indexOf("language-") === 0) hljs.highlightElement(code); } catch (e) {}
-    var lines = code.textContent.replace(/\n$/, "").split("\n").length;
-    var bar = document.createElement("div");
-    bar.className = "bar";
-    bar.innerHTML = '<span class="file">' + (isTerm ? ICON.term : ICON.file) + "<span></span></span>";
-    bar.querySelector(".file span").textContent = title;
-    var btn = document.createElement("button");
-    btn.type = "button"; btn.className = "copy"; btn.setAttribute("aria-label", "Copy code"); btn.innerHTML = ICON.copy;
-    btn.addEventListener("click", function () { copyText(code.innerText, btn, ICON.check, ICON.copy); });
-    bar.appendChild(btn);
-    var body = document.createElement("div");
-    body.className = "body";
-    var nums = document.createElement("div");
-    nums.className = "nums"; nums.setAttribute("aria-hidden", "true");
-    var n = []; for (var i = 1; i <= lines; i++) n.push(i);
-    nums.textContent = n.join("\n");
-    box.insertBefore(bar, pre);
-    box.insertBefore(body, pre);
-    body.appendChild(nums); body.appendChild(pre);
-  });
-
-  // ---- tabs ----
-  document.querySelectorAll("[data-tabs]").forEach(function (group) {
-    var list = group.querySelector('[role="tablist"]');
-    var tabs = group.querySelectorAll('[role="tab"]'), panels = group.querySelectorAll('[role="tabpanel"]');
-    var cp = document.createElement("button");
-    cp.type = "button"; cp.className = "copy tabcopy"; cp.setAttribute("aria-label", "Copy code"); cp.innerHTML = ICON.copy;
-    cp.addEventListener("click", function () {
-      var vis = Array.prototype.filter.call(panels, function (p) { return !p.hidden; })[0];
-      if (vis) copyText(vis.querySelector("code").innerText, cp, ICON.check, ICON.copy);
-    });
-    list.appendChild(cp);
-    tabs.forEach(function (tab, i) {
-      tab.addEventListener("click", function () {
-        tabs.forEach(function (t, j) { t.setAttribute("aria-selected", String(i === j)); panels[j].hidden = i !== j; });
-      });
-    });
-  });
-
-  function copyText(text, btn, done, idle) {
-    var ok = function () { btn.innerHTML = btn.innerHTML.replace(idle, done); setTimeout(function () { btn.innerHTML = btn.innerHTML.replace(done, idle); }, 1400); };
-    try { navigator.clipboard.writeText(text).then(ok, function () {}); } catch (e) {}
-  }
-
-  // ---- routing: one page at a time ----
-  var crumbs = document.getElementById("crumbs"), pager = document.getElementById("pager"), toc = document.getElementById("toc");
-  var current = null;
-  // Pages merged into the Plugins section in v0.4; old links keep working.
-  var MOVED = Object.assign(Object.create(null), { "writing-plugins": "plugins", "middleware": "kind-hooks", "sandboxes": "kind-sandboxes", "persistence": "kind-threads-memory",
-    "integrations": "kind-tools", "automation": "kind-triggers", "observability": "kind-telemetry", "secrets": "kind-secrets",
-    "policy": "kind-policy", "reference-hooks": "plugin-api", "reference-plugins": "plugins-choose" });
-  function pageFor(hash) {
-    if (MOVED[hash]) hash = MOVED[hash];
-    if (pages[hash]) return { page: hash };
-    var el = hash && document.getElementById(hash);
-    if (el) { var s = el.closest("section.page"); if (s) return { page: s.id, anchor: el }; }
-    return { page: "introduction" };
-  }
-  function show(hash, fromPop) {
-    var t = pageFor(hash), id = t.page;
-    if (current !== id) {
-      order.forEach(function (p) { pages[p].hidden = p !== id; });
-      current = id;
-      document.querySelectorAll(".side a.item").forEach(function (a) {
-        var on = a.getAttribute("href") === "#" + id;
-        if (on) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
-        if (on) { var g = a.closest(".group"); if (g) { g.dataset.open = "true"; g.querySelector("button").setAttribute("aria-expanded", "true"); } }
-      });
-      var grp = groupOf[id];
-      crumbs.innerHTML = grp ? "<span>" + grp + "</span>" + ICON.chev + "<span>" + title(id) + "</span>" : "<span>Docs</span>";
-      var i = order.indexOf(id), prev = order[i - 1], next = order[i + 1];
-      pager.innerHTML = (prev ? '<a href="#' + prev + '"><small>Previous</small><b>' + title(prev) + "</b></a>" : "<span></span>") +
-                        (next ? '<a class="next" href="#' + next + '"><small>Next</small><b>' + title(next) + "</b></a>" : "");
-      var hs = pages[id].querySelectorAll("h2, h3");
-      toc.innerHTML = "";
-      hs.forEach(function (h, k) {
-        if (!h.id) h.id = id + "-" + (k + 1);
-        var a = document.createElement("a"); a.href = "#" + h.id; a.textContent = h.textContent; toc.appendChild(a);
-      });
-      if (!hs.length) toc.innerHTML = '<a href="#' + id + '" class="on">' + title(id) + "</a>";
-      var top = id.indexOf("reference") === 0 || id === "cli" ? "reference" : id === "providers" ? "providers" : id === "fullstack" ? "demo" : "docs";
-      document.querySelectorAll(".toplinks a").forEach(function (a) { if (a.dataset.top === top) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current"); });
-      try { document.title = title(id) + " · eipagent Docs"; } catch (e) {}
-      document.body.classList.remove("nav-open");
-      document.getElementById("menubtn").setAttribute("aria-expanded", "false");
-    }
-    if (t.anchor) t.anchor.scrollIntoView(); else window.scrollTo(0, 0);
-    spy();
-  }
-  document.addEventListener("click", function (e) {
-    var a = e.target.closest && e.target.closest('a[href^="#"]');
-    if (!a) return;
-    var h = a.getAttribute("href").slice(1);
-    if (!h) return;
-    e.preventDefault();
-    try { history.pushState(null, "", "#" + h); } catch (err) {}
-    show(h);
-    closePalette();
-  });
-  window.addEventListener("hashchange", function () { show(location.hash.slice(1), true); });
-  window.addEventListener("popstate", function () { show(location.hash.slice(1), true); });
-
-  // ---- on this page: scrollspy ----
-  function spy() {
-    var links = toc.querySelectorAll("a"), on = null;
-    links.forEach(function (a) {
-      var el = document.getElementById(a.getAttribute("href").slice(1));
-      if (el && el.getBoundingClientRect().top < 140) on = a;
-    });
-    links.forEach(function (a) { a.classList.toggle("on", a === on || (!on && a === links[0] && links.length === 1)); });
-  }
-  window.addEventListener("scroll", spy, { passive: true });
-  document.getElementById("totop").addEventListener("click", function () { window.scrollTo({ top: 0, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" }); });
-
-  // ---- mobile nav: a drawer that closes on a tap outside it, a link, or Escape ----
-  var mb = document.getElementById("menubtn"), side = document.getElementById("side");
-  function setNav(open) {
-    document.body.classList.toggle("nav-open", open);
-    mb.setAttribute("aria-expanded", String(open));
-    mb.setAttribute("aria-label", open ? "Close navigation" : "Open navigation");
-  }
-  mb.addEventListener("click", function (e) { e.stopPropagation(); setNav(!document.body.classList.contains("nav-open")); });
-  document.getElementById("scrim").addEventListener("click", function () { setNav(false); });
-  document.addEventListener("click", function (e) {
-    if (!document.body.classList.contains("nav-open")) return;
-    if (!side.contains(e.target) || (e.target.closest && e.target.closest("a.item"))) setNav(false);
-  });
-  document.addEventListener("keydown", function (e) { if (e.key === "Escape" && document.body.classList.contains("nav-open")) { setNav(false); mb.focus(); } });
-  window.addEventListener("resize", function () { if (window.innerWidth > 900 && document.body.classList.contains("nav-open")) setNav(false); });
-
-  // ---- tables: label each cell with its column, for the stacked layout on phones ----
-  document.querySelectorAll(".table table").forEach(function (t) {
-    var heads = Array.prototype.map.call(t.querySelectorAll("thead th"), function (th) { return th.textContent.trim(); });
-    t.querySelectorAll("tbody tr").forEach(function (tr) {
-      Array.prototype.forEach.call(tr.children, function (td, i) { if (heads[i]) td.setAttribute("data-label", heads[i]); });
-    });
-  });
-
-  // ---- theme toggle ----
-  var root = document.documentElement;
-  try { var saved = localStorage.getItem("eip-theme"); if (saved) root.dataset.theme = saved; } catch (e) {}
-  document.getElementById("themebtn").addEventListener("click", function () {
-    var dark = root.dataset.theme ? root.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
-    root.dataset.theme = dark ? "light" : "dark";
-    try { localStorage.setItem("eip-theme", root.dataset.theme); } catch (e) {}
-  });
-
-  // ---- command palette ----
-  var pal = document.getElementById("palette"), pq = document.getElementById("pq"), plist = document.getElementById("plist"), sel = 0, results = [];
-  var index = [];
-  order.forEach(function (id) {
-    index.push({ href: id, label: title(id), where: groupOf[id] || "Docs", text: pages[id].textContent.toLowerCase() });
-    pages[id].querySelectorAll("h2, h3").forEach(function (h, k) {
-      if (!h.id) h.id = id + "-" + (k + 1);
-      index.push({ href: h.id, label: h.textContent, where: title(id), text: h.textContent.toLowerCase() });
-    });
-  });
-  function render() {
-    var q = pq.value.trim().toLowerCase();
-    results = index.filter(function (r) { return !q || r.label.toLowerCase().indexOf(q) >= 0 || r.text.indexOf(q) >= 0; })
-      .sort(function (a, b) { return (b.label.toLowerCase().indexOf(q) >= 0) - (a.label.toLowerCase().indexOf(q) >= 0); }).slice(0, 40);
-    sel = Math.min(sel, Math.max(results.length - 1, 0));
-    plist.innerHTML = results.length ? results.map(function (r, i) {
-      return '<li><a href="#' + r.href + '" role="option" aria-selected="' + (i === sel) + '"><span>' + r.label + "</span><small>" + r.where + "</small></a></li>";
-    }).join("") : '<li class="none">No results. Try another word.</li>';
-  }
-  function openPalette() { pal.hidden = false; pq.value = ""; sel = 0; render(); setTimeout(function () { pq.focus(); }, 0); }
-  function closePalette() { pal.hidden = true; }
-  document.getElementById("searchbtn").addEventListener("click", openPalette);
-  pq.addEventListener("input", function () { sel = 0; render(); });
-  pal.addEventListener("click", function (e) { if (e.target === pal) closePalette(); });
-  document.addEventListener("keydown", function (e) {
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); pal.hidden ? openPalette() : closePalette(); return; }
-    if (e.key === "/" && pal.hidden && !/input|textarea/i.test(document.activeElement.tagName)) { e.preventDefault(); openPalette(); return; }
-    if (pal.hidden) return;
-    if (e.key === "Escape") closePalette();
-    else if (e.key === "ArrowDown") { e.preventDefault(); sel = Math.min(sel + 1, results.length - 1); render(); }
-    else if (e.key === "ArrowUp") { e.preventDefault(); sel = Math.max(sel - 1, 0); render(); }
-    else if (e.key === "Enter" && results[sel]) { e.preventDefault(); try { history.pushState(null, "", "#" + results[sel].href); } catch (err) {} show(results[sel].href); closePalette(); }
-  });
-
-  // Own the scroll position: the browser's native jump to #page would
-  // land under the sticky header.
-  try { history.scrollRestoration = "manual"; } catch (e) {}
-  current = null;
-  // Embed the live demo where it's served next to the docs (Vercel, local).
-  (function () {
-    var box = document.getElementById("demo-embed");
-    if (!box) return;
-    var here = /vercel\.app$|^localhost$|^127\.0\.0\.1$/.test(location.hostname);
-    var url = here ? "demo/" : "https://eipagent-docs.vercel.app/demo/";
-    box.innerHTML = (here ? '<div class="demo-frame"><iframe src="' + url + '" title="Acme Support Desk demo" loading="lazy"></iframe></div>' : "") +
-      '<p class="demo-cap">' + (here ? "The live demo, served by the Go backend (on a free instance, so the first visit can take a minute to wake it; until then you can use a replay of recorded runs). Chat as Sam, then switch to Ada to decide. " : "") +
-      '<a href="' + url + '">Open the demo in a new tab</a>.</p>';
-    // Show the desktop layout scaled to the column, except on phones.
-    var frame = box.querySelector(".demo-frame");
-    function fit() {
-      if (!frame) return;
-      var w = frame.clientWidth, scaled = window.innerWidth >= 640;
-      frame.classList.toggle("scaled", scaled);
-      var ifr = frame.querySelector("iframe");
-      ifr.style.transform = scaled ? "scale(" + (w / 1280) + ")" : "";
-      frame.style.height = scaled ? Math.round(820 * w / 1280) + "px" : "640px";
-    }
-    window.addEventListener("resize", fit);
-    window.addEventListener("hashchange", function () { setTimeout(fit, 0); });
-    document.addEventListener("click", function () { setTimeout(fit, 0); });
-    setTimeout(fit, 0);
-  })();
-  show(location.hash.slice(1));
-  var settle = function () { var t = pageFor(location.hash.slice(1)); if (t.anchor) t.anchor.scrollIntoView(); else window.scrollTo(0, 0); };
-  var userScrolled = false;
-  ["wheel", "touchstart", "keydown"].forEach(function (ev) { window.addEventListener(ev, function () { userScrolled = true; }, { once: true, passive: true }); });
-  [0, 120, 400].forEach(function (ms) { setTimeout(function () { if (!userScrolled) settle(); }, ms); });
-  window.addEventListener("load", function () { if (!userScrolled) settle(); setTimeout(function () { if (!userScrolled) settle(); }, 60); });
-})();
-</script>
+<script src="assets/vendor/highlight/highlight.min.js"></script>
+<script src="assets/vendor/highlight/go.min.js"></script>
+<script src="assets/site.js"></script>
+</body>
+</html>

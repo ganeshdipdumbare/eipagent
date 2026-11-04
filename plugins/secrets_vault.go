@@ -23,7 +23,7 @@ import (
 // If Vault can't be reached once the cache expires, lookups fail (closed).
 //
 // NAME maps to <mount>/data/<prefix>/<NAME>, field <field>, unless paths
-// maps it explicitly: {"OPENAI_API_KEY": "llm/openai#api_key"}.
+// maps it explicitly: {"OPENAI_API_KEY": "model/openai#api_key"}.
 //
 // Config:
 //
