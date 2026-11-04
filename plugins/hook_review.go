@@ -70,7 +70,7 @@ func Apply(p *sdk.Plugin) error {
 			}
 			for _, m := range msgs {
 				if m.Content != "" {
-					fmt.Fprintf(&recent, "%s: %s\n", m.Role, m.Content)
+					fmt.Fprintf(&recent, "%s: %s\n", m.Role, sdk.Redact(m.Content))
 				}
 			}
 		}
@@ -80,9 +80,14 @@ func Apply(p *sdk.Plugin) error {
 		}
 		sys := "You review an AI agent's tool calls for safety. " + guidance +
 			"\nReply with only JSON: {\"decision\": \"approve\"|\"deny\"|\"escalate\", \"reason\": \"...\"}"
-		user := fmt.Sprintf("User: %s\nRecent conversation:\n%s\nTool: %s (%s)\nArguments: %s", req.User, recent.String(), req.Call.Name, desc, sdk.ToJSON(req.Call.Args))
-		resp, err := mp.Generate(c, &sdk.ModelRequest{Model: model, Provider: prov, ModelID: id, System: sys,
+		user := fmt.Sprintf("User: %s\nRecent conversation:\n%s\nTool: %s (%s)\nArguments: %s",
+			sdk.Redact(req.User), sdk.Redact(recent.String()), req.Call.Name, desc, sdk.Redact(sdk.ToJSON(req.Call.Args)))
+		base := func(c context.Context, r *sdk.ModelRequest) (*sdk.ModelResponse, error) {
+			return mp.Generate(c, r)
+		}
+		resp, err := p.Snapshot().ModelChain(base)(c, &sdk.ModelRequest{Model: model, Provider: prov, ModelID: id, System: sys,
 			Messages: []sdk.Message{{Role: sdk.RoleUser, Content: user}}, ResponseName: "review",
+			Run: req.Run, Thread: req.Thread, User: req.User, Step: req.Step,
 			ResponseSchema: sdk.Object(map[string]any{"decision": sdk.Enum("", "approve", "deny", "escalate"), "reason": sdk.Str("")}, "decision", "reason")})
 		if err != nil {
 			return "", "", err

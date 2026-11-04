@@ -27,7 +27,7 @@ var Permissions = []string{"db"}
 
 func Apply(p *sdk.Plugin) error {
 	driver := p.ConfigString("driver", "pgx")
-	dsn, err := p.Secret(p.ConfigString("dsn", "secret://EIP_DATABASE_URL"))
+	dsn, err := p.SecretValue(p.ConfigString("dsn", "secret://EIP_DATABASE_URL"))
 	if err != nil {
 		return err
 	}

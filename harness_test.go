@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ganeshdipdumbare/eipagent"
@@ -426,5 +427,39 @@ func TestEvals(t *testing.T) {
 	}
 	if !strings.Contains(rep.Summary(), "judge: no apology") {
 		t.Fatalf("summary:\n%s", rep.Summary())
+	}
+}
+
+// A failed per-step checkpoint must stop before the tool runs, so a retry
+// cannot duplicate an external side effect.
+func TestSaveEachStepFailureStopsBeforeTool(t *testing.T) {
+	var calls int32
+	tool := eipagent.Tool("charge", "charge a card", func(ctx context.Context, in struct{}) (string, error) {
+		atomic.AddInt32(&calls, 1)
+		return "charged", nil
+	})
+	var saves int32
+	cp := eipagent.Plugin{Name: "flaky_threads", Apply: func(p *sdk.Plugin) error {
+		return p.Provide("threads", &sdk.Checkpointer{
+			Load: func(ctx context.Context, id string) (*sdk.ThreadState, error) { return nil, nil },
+			Save: func(ctx context.Context, st *sdk.ThreadState, expected int64) error {
+				if atomic.AddInt32(&saves, 1) >= 2 {
+					return sdk.ErrVersionConflict
+				}
+				return nil
+			},
+			Delete: func(ctx context.Context, id string) error { return nil },
+			List:   func(ctx context.Context, p string) ([]string, error) { return nil, nil },
+		})
+	}}
+	a := mockAgent(t, []any{
+		map[string]any{"tool": "charge"},
+		map[string]any{"text": "done"},
+	}, eipagent.WithTools(tool), eipagent.WithCompiledPlugin(cp), eipagent.WithSaveEachStep(), eipagent.WithoutDefaults(), eipagent.WithPlugins("loop"))
+	if _, err := a.Thread("t").Generate(bg, "charge it"); !errors.Is(err, eipagent.ErrThreadBusy) {
+		t.Fatalf("want ErrThreadBusy, got %v", err)
+	}
+	if n := atomic.LoadInt32(&calls); n != 0 {
+		t.Fatalf("tool ran %d time(s) after a failed checkpoint", n)
 	}
 }

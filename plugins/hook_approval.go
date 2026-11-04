@@ -95,7 +95,7 @@ func Apply(p *sdk.Plugin) error {
 			}
 		}
 		if desc == "" {
-			desc = fmt.Sprintf("Approve call to %s with %s?", req.Call.Name, sdk.ToJSON(req.Call.Args))
+			desc = fmt.Sprintf("Approve call to %s with %s?", req.Call.Name, sdk.Redact(sdk.ToJSON(req.Call.Args)))
 		}
 		call := req.Call
 		return &sdk.ToolResult{Interrupt: &sdk.Interrupt{ID: call.ID, Kind: "approval", ToolCall: &call, Message: desc, Allowed: allowed}}, nil

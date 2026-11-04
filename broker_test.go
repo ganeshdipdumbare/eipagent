@@ -1,7 +1,9 @@
 package eipagent
 
 import (
+	"context"
 	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -40,5 +42,23 @@ func TestRequestPathNormalizesDotSegments(t *testing.T) {
 	u, _ = url.Parse("https://api.example.com/orders/1")
 	if ambiguousPath(u) {
 		t.Fatal("plain path reported as ambiguous")
+	}
+}
+
+func TestBrokerBlocksPrivateAddressesByDefault(t *testing.T) {
+	b, err := newBroker(nil, &RunIn{Egress: []string{"127.0.0.1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.fetch(context.Background(), wireHTTPReq{Method: "GET", URL: "http://127.0.0.1:9/"}); err == nil || !strings.Contains(err.Error(), "private address") {
+		t.Fatalf("loopback egress must be blocked by default: %v", err)
+	}
+	ok, err := newBroker(nil, &RunIn{Egress: []string{"127.0.0.1"}, AllowPrivateEgress: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// It may fail to connect, but it must get past the SSRF check.
+	if _, err := ok.fetch(context.Background(), wireHTTPReq{Method: "GET", URL: "http://127.0.0.1:9/"}); err != nil && strings.Contains(err.Error(), "private address") {
+		t.Fatalf("AllowPrivateEgress must permit the dial: %v", err)
 	}
 }

@@ -4,6 +4,30 @@ All notable changes to eipagent. Versions follow [semantic versioning](https://s
 
 ## Unreleased
 
+### Security
+
+- File plugins can now resolve only the secrets they declare with `var Secrets = []string{...}` or reference with a `secret://NAME` literal; a denied lookup is audited as `secret.access`. This narrows the default `secrets_env`/`secrets_vault` access for interpreted third-party plugins.
+- Credential-bearing HTTP clients (model providers, web search, Vault, MCP) refuse redirects. Non-loopback plaintext endpoints are refused when a credential is configured unless the plugin sets `allow_insecure: true`.
+- Literal credentials in config (model `api_key`, HMAC/webhook keys, Vault tokens, MCP headers) are registered for redaction, not only `secret://` values. `model_openai` `headers` values now resolve `secret://NAME`.
+- Auxiliary model calls (`hook_summarize`, `hook_compact`, `hook_review`) now run through the model middleware chain, so policy allowlists, token budgets, audit/trace and PII/secret redaction apply; their inputs are redacted.
+- `threads_file`, `threads_sql`, `memory_file` and `memory_sql` redact registered secrets from persisted messages, tool arguments, pending interrupts and values.
+- `WithRunIn`: host `host.llm`/`host.tool` calls are tied to a host-recorded run identity and cannot use the box-supplied user/roles; host tool calls run through host policy/limits/audit; `RunIn.BridgedTools` restricts the bridge. Host per-run state is now cleaned up.
+- `WithRunIn`: the host broker blocks loopback/RFC1918/link-local/metadata egress by default (`RunIn.AllowPrivateEgress` opts in). `RunIn.Provider == "local"` is refused unless `RunIn.AllowUnsafeLocal` is set.
+- `tool_skills` refuses symlinks that leave the skill folder. `tool_fs` `find_files`/`grep` walk the sandbox file API instead of running a shell, so `sandbox_local` confinement applies.
+- `hook_guardrails` checks output even when tool calls are present; `hook_guard` checks nested arguments; `hook_approval` redacts interrupt messages.
+- `policy` `require_sandbox` now also denies write/execute tools that do not declare an isolated `sandbox`; subagents inherit the parent budget and limits.
+- `trigger_webhook` validates the resulting thread id and rejects route paths that could panic.
+- Interpreted `exec` plugins now get a safe `*sdk.Command` instead of `*exec.Cmd`: the child environment is filtered and the `Env` field cannot be reset to nil to inherit agent credentials.
+- `fs:read` refuses `/proc`, `/sys` and `/dev` through `os.Open`/`ReadFile`/`ReadDir`/`Stat`/`DirFS` and the `io/ioutil` read helpers; `filepath.Walk` and `net/http` file-serving helpers are not exposed to interpreted plugins.
+- Interpreted plugins can no longer reach the mutable `sdk.PluginRenames` global.
+- `writeTarget` refuses `/` as an ancestor of protected paths, closing `RemoveAll("/")`.
+- Plugin packages reject symlinked files and oversized assets; lint and runtime now share secret-reference extraction.
+- `os.DirFS` is per-Open guarded; `os.Stdout`/`os.Stderr` are not exposed and `eip serve` redirects plugin prints to stderr.
+- `plugin.json` supports `"dynamic": true` for plugins such as MCP adapters whose tool/service names are decided at runtime.
+- Audit: `VerifyKeyedWithAnchor` and `eip audit verify -anchor` verify against an off-host head, detecting a log+local-head rollback by a host-level attacker.
+- Redaction uses a trie-backed `strings.Replacer` rebuilt only when the set changes, so `Redact` is linear in the input rather than in the number of registered forms.
+- Firecracker `network: none` now fails closed if it cannot install the INPUT/FORWARD iptables rules, and removes them on teardown.
+
 ## v0.4.7 — 2026-11-03
 
 ### Added

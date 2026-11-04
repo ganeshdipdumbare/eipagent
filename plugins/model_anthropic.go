@@ -25,6 +25,7 @@ import (
 //	api_key:    literal or secret://NAME (default secret://ANTHROPIC_API_KEY)
 //	max_tokens: default 8192 (the API requires one)
 //	version:    anthropic-version header (default 2023-06-01)
+//	allow_insecure: allow a non-loopback http base_url with an api_key
 //
 // Structured output uses a tool named after the schema; when the model
 // calls it, its input becomes the reply text.
@@ -40,20 +41,26 @@ import (
 //	})
 var Permissions = []string{"net"}
 
+var Requires = []string{"?secrets"} // secret:// keys/headers are optional
+
 func Apply(p *sdk.Plugin) error {
 	name := p.ConfigString("name", "anthropic")
 	base := strings.TrimRight(p.ConfigString("base_url", "https://api.anthropic.com"), "/")
 	keyRef := p.ConfigString("api_key", "secret://ANTHROPIC_API_KEY")
 	maxTokens := p.ConfigInt("max_tokens", 8192)
 	version := p.ConfigString("version", "2023-06-01")
-	client := &http.Client{Timeout: time.Duration(p.ConfigInt("timeout_seconds", 300)) * time.Second}
+	allowInsecure := p.ConfigBool("allow_insecure", false)
+	client := &http.Client{Timeout: time.Duration(p.ConfigInt("timeout_seconds", 300)) * time.Second, CheckRedirect: sdk.RefuseRedirect}
 
 	return p.Provide("model/"+name, &sdk.Provider{
 		Name:         name,
 		Capabilities: map[string]bool{"streaming": true, "tools": true, "structured_output": true, "vision": true},
 		Generate: func(c context.Context, req *sdk.ModelRequest) (*sdk.ModelResponse, error) {
-			key, err := p.Secret(keyRef)
+			key, err := p.SecretValue(keyRef)
 			if err != nil {
+				return nil, err
+			}
+			if err := sdk.CheckCredentialURL(base+"/v1/messages", key != "", allowInsecure); err != nil {
 				return nil, err
 			}
 			body, schemaTool := buildBody(req, maxTokens)

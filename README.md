@@ -553,6 +553,8 @@ With `tool_sandbox`, the model creates and destroys boxes itself, up to `max_box
 5. Runs and threads are proxied over JSON-RPC. Model calls come back to the host, through the host's middleware and policy, so keys never enter the box. Your Go tools are bridged back too.
 6. `Close` stops the process, destroys the box and closes the host agent.
 
+`RunIn.Provider: "local"` is refused unless `RunIn.AllowUnsafeLocal` is set: it is a host process, not an isolation boundary. `RunIn.BridgedTools` limits which host Go tools the box can call, and `RunIn.AllowPrivateEgress` opts into loopback/RFC1918 egress from the host broker (off by default, like `tool_fetch`).
+
 ---
 
 ## Plugins
@@ -659,7 +661,7 @@ There are two directions:
   )
   ```
 
-Providers: `sandbox_local` (no isolation, for development), `sandbox_docker` (Docker or Podman, with no network by default) and `sandbox_microsandbox` ([microsandbox](https://microsandbox.dev) microVMs, with no network by default). The microsandbox provider also runs on **microsandbox cloud** when the host environment sets `MSB_BACKEND=cloud` and `MSB_API_KEY` (or selects a cloud profile with `MSB_PROFILE`); no code changes are needed. Any other backend, such as Firecracker, E2B or Kubernetes, only needs to provide `sdk.SandboxProvider`. See [`examples/custom-sandbox`](examples/custom-sandbox) and the complete self-hosted microVM provider in [`examples/firecracker`](examples/firecracker). The `WithRunIn` + `SecretHosts` flow is the same for a hosted provider: the host runs the broker and secrets, and the provider's machine only receives placeholders. The Firecracker example walks that flow explicitly and has a [cloud-hosted equivalent](examples/firecracker/README.md#the-same-flow-on-a-cloud-hosted-sandbox).
+Providers: `sandbox_local` (no isolation, for development; `WithRunIn` refuses it unless `AllowUnsafeLocal` is set), `sandbox_docker` (Docker or Podman, with no network by default) and `sandbox_microsandbox` ([microsandbox](https://microsandbox.dev) microVMs, with no network by default). The microsandbox provider also runs on **microsandbox cloud** when the host environment sets `MSB_BACKEND=cloud` and `MSB_API_KEY` (or selects a cloud profile with `MSB_PROFILE`); no code changes are needed. Any other backend, such as Firecracker, E2B or Kubernetes, only needs to provide `sdk.SandboxProvider`. See [`examples/custom-sandbox`](examples/custom-sandbox) and the complete self-hosted microVM provider in [`examples/firecracker`](examples/firecracker). The `WithRunIn` + `SecretHosts` flow is the same for a hosted provider: the host runs the broker and secrets, and the provider's machine only receives placeholders. The Firecracker example walks that flow explicitly and has a [cloud-hosted equivalent](examples/firecracker/README.md#the-same-flow-on-a-cloud-hosted-sandbox).
 
 ## Security
 
@@ -668,6 +670,8 @@ Providers: `sandbox_local` (no isolation, for development), `sandbox_docker` (Do
 - File plugins must be pinned in `eip.lock` (`eip plugin pin`).
 - Hot reload is off.
 - Plugins get only the permissions they declare, narrowed further by the admin policy.
+- A file plugin can read only the secrets it declares with `var Secrets = []string{...}` or references with `secret://NAME`; literal credentials in config are still redacted.
+- Credential-bearing HTTP clients refuse redirects, and non-loopback plaintext endpoints need an explicit `allow_insecure: true`.
 
 An admin `policy.json` adds:
 
@@ -675,6 +679,8 @@ An admin `policy.json` adds:
 - the approval mode: read-only, workspace-write or full-access;
 - tool and model allowlists, token budgets and per-role rules;
 - per-plugin secret grants.
+
+`WithRunIn` keeps the model and secret providers on the host, returns placeholders in the box, refuses redirects on proxied HTTP, blocks private/metadata egress by default, authenticates the box's run identity for `host.llm`/`host.tool`, and redacts persisted threads and memory. See [SECURITY.md](SECURITY.md).
 
 The threat model, and what isn't guaranteed, is in [SECURITY.md](SECURITY.md). Use `WithPreset("dev")` for local plugin development.
 

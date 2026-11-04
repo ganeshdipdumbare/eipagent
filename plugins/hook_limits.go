@@ -61,22 +61,29 @@ func Apply(p *sdk.Plugin) error {
 		return int(n)
 	}
 	over := func(limit, n int) bool { return limit > 0 && n >= limit }
+	root := func(st *sdk.RunState) *sdk.RunState {
+		for st != nil && st.Parent != nil {
+			st = st.Parent
+		}
+		return st
+	}
 
 	p.WrapModel(func(c context.Context, req *sdk.ModelRequest, next sdk.ModelHandler) (*sdk.ModelResponse, error) {
 		if req.Run == nil {
 			return next(c, req)
 		}
-		cn := get(req.Run)
+		rs := root(req.Run)
+		cn := get(rs)
 		mu.Lock()
 		hit := ""
 		switch {
 		case over(lim["model_calls_run"], cn.model):
 			hit = "model calls per run"
-		case over(lim["model_calls_thread"], thread(req.Run, "model")+cn.model):
+		case over(lim["model_calls_thread"], thread(rs, "model")+cn.model):
 			hit = "model calls per thread"
 		case over(lim["tokens_run"], cn.tokens):
 			hit = "tokens per run"
-		case over(lim["tokens_thread"], thread(req.Run, "tokens")+cn.tokens):
+		case over(lim["tokens_thread"], thread(rs, "tokens")+cn.tokens):
 			hit = "tokens per thread"
 		}
 		if hit == "" {
@@ -102,7 +109,8 @@ func Apply(p *sdk.Plugin) error {
 		if req.Run == nil {
 			return next(c, req)
 		}
-		cn := get(req.Run)
+		rs := root(req.Run)
+		cn := get(rs)
 		mu.Lock()
 		hit := ""
 		max := 0
@@ -115,7 +123,7 @@ func Apply(p *sdk.Plugin) error {
 		switch {
 		case over(lim["tool_calls_run"], cn.tools):
 			hit = "tool calls per run"
-		case over(lim["tool_calls_thread"], thread(req.Run, "tools")+cn.tools):
+		case over(lim["tool_calls_thread"], thread(rs, "tools")+cn.tools):
 			hit = "tool calls per thread"
 		case over(max, cn.perTool[req.Call.Name]):
 			hit = req.Call.Name + " calls per run"
@@ -135,6 +143,9 @@ func Apply(p *sdk.Plugin) error {
 	})
 
 	p.OnRunEnd(func(c context.Context, st *sdk.RunState, res *sdk.RunResult) error {
+		if st.Parent != nil {
+			return nil // a subagent shares the parent's counters; the parent run ends them
+		}
 		mu.Lock()
 		cn := runs[st]
 		delete(runs, st)

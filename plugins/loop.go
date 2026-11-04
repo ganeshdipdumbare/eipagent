@@ -145,7 +145,7 @@ func steps(c context.Context, snap *sdk.Snapshot, st *sdk.RunState, defMax int, 
 				call.Args = dec.Args
 			}
 		}
-		tc := sdk.WithRunInfo(c, sdk.RunInfo{Thread: st.Thread, User: st.User, Roles: st.Roles, Step: step, CallID: call.ID, Model: st.Model})
+		tc := sdk.WithRunInfo(sdk.WithRunState(c, st), sdk.RunInfo{RunID: st.ID, Thread: st.Thread, User: st.User, Roles: st.Roles, Step: step, CallID: call.ID, Model: st.Model})
 		req := &sdk.ToolRequest{Call: call, Tool: findTool(call.Name), Thread: st.Thread, User: st.User, Step: step, Decision: dec, Run: st}
 		r, err := callTool(tc, req)
 		var fatal *sdk.FatalError
@@ -171,6 +171,12 @@ func steps(c context.Context, snap *sdk.Snapshot, st *sdk.RunState, defMax int, 
 		for i := range calls { // events report the arguments that actually run
 			if d := decisions[calls[i].ID]; d != nil && d.Type == "edit" && d.Args != nil {
 				calls[i].Args = d.Args
+			}
+		}
+		if st.Checkpoint != nil {
+			if err := st.Checkpoint(); err != nil {
+				fatalErr = err
+				return nil
 			}
 		}
 		out := make([]sdk.Message, len(calls))

@@ -112,8 +112,10 @@ func main() {
 		err = configCmd(args)
 	case "trace":
 		err = traceCmd(args)
+	case "audit":
+		err = auditCmd(args)
 	case "help", "-h", "--help":
-		fmt.Println("usage: eip [repl|run|eval|serve|plugin|config|trace] [flags]")
+		fmt.Println("usage: eip [repl|run|eval|serve|plugin|config|trace|audit] [flags]")
 	default:
 		err = fmt.Errorf("unknown command %q", cmd)
 	}

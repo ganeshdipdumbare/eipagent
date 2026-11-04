@@ -56,7 +56,7 @@ func Apply(p *sdk.Plugin) error {
 	var hashKey []byte
 	if strategy == "hash" {
 		if ref := p.ConfigString("hash_key", ""); ref != "" {
-			k, err := p.Secret(ref)
+			k, err := p.SecretValue(ref)
 			if err != nil {
 				return fmt.Errorf("hook_pii: hash_key: %v", err)
 			}

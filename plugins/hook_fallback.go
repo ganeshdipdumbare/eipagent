@@ -39,6 +39,12 @@ func Apply(p *sdk.Plugin) error {
 			if m == req.Model {
 				continue
 			}
+			if pc, ok := p.Service("policy").(*sdk.PolicyCheck); ok && pc.Model != nil {
+				if perr := pc.Model(c, m); perr != nil {
+					p.Logf("%s", perr.Error())
+					continue
+				}
+			}
 			if err != nil {
 				p.Logf("model %s failed (%v); falling back to %s", req.Model, err, m)
 			} else {

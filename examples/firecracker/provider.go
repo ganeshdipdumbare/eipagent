@@ -103,7 +103,13 @@ func defaultWorkdir(remoteHost string) string {
 	if remoteHost != "" {
 		return "/tmp/eip-firecracker"
 	}
-	return filepath.Join(os.TempDir(), "eip-firecracker")
+	if d := os.Getenv("XDG_RUNTIME_DIR"); d != "" {
+		return filepath.Join(d, "eip-firecracker")
+	}
+	if d, err := os.UserCacheDir(); err == nil {
+		return filepath.Join(d, "eip-firecracker")
+	}
+	return filepath.Join(os.TempDir(), fmt.Sprintf("eip-firecracker-%d", os.Getuid()))
 }
 
 func defaultSSHConfig() string {
@@ -155,8 +161,11 @@ func createVM(ctx context.Context, p *sdk.Plugin, cfg fcConfig, spec sdk.Sandbox
 	if len(spec.Env) > 0 {
 		return nil, errors.New("firecracker: sandbox env is not supported; put config in the rootfs or upload files")
 	}
+	if spec.Network.Mode != "" && spec.Network.Mode != "none" {
+		return nil, fmt.Errorf("firecracker: network mode %q is not implemented (only none; the TAP is host-local)", spec.Network.Mode)
+	}
 	if cfg.remoteHost == "" {
-		if err := os.MkdirAll(cfg.workdir, 0o755); err != nil {
+		if err := os.MkdirAll(cfg.workdir, 0o700); err != nil {
 			return nil, err
 		}
 	} else if err := cfg.runRemote(ctx, "mkdir", "-p", cfg.workdir); err != nil {
@@ -164,19 +173,26 @@ func createVM(ctx context.Context, p *sdk.Plugin, cfg fcConfig, spec sdk.Sandbox
 	}
 	id := "fc-" + randomHex(6)
 	idx := randomIndex()
+	tap := fmt.Sprintf("%s%d", cfg.tapPrefix, idx)
+	for i := 0; i < 20; i++ {
+		if err := cfg.runPriv(ctx, "ip", "link", "show", tap); err != nil {
+			break
+		}
+		idx = randomIndex()
+		tap = fmt.Sprintf("%s%d", cfg.tapPrefix, idx)
+	}
 	dir := filepath.Join(cfg.workdir, id)
 	if cfg.remoteHost == "" {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return nil, err
 		}
 	} else if err := cfg.runRemote(ctx, "mkdir", "-p", dir); err != nil {
 		return nil, err
 	}
-	tap := fmt.Sprintf("%s%d", cfg.tapPrefix, idx)
 	hostIP := fmt.Sprintf("172.16.%d.1", idx)
 	guestIP := fmt.Sprintf("172.16.%d.2", idx)
 	mac := fmt.Sprintf("06:00:AC:10:%02x:02", idx)
-	m := &meta{ID: id, Dir: dir, Tap: tap, HostIP: hostIP, GuestIP: guestIP, MAC: mac, PidFile: filepath.Join(dir, "firecracker.pid"), Socket: filepath.Join(dir, "firecracker.sock")}
+	m := &meta{ID: id, Dir: dir, Tap: tap, HostIP: hostIP, GuestIP: guestIP, MAC: mac, PidFile: filepath.Join(dir, "firecracker.pid"), Socket: filepath.Join(dir, "firecracker.sock"), Network: spec.Network.Mode}
 	ok := false
 	defer func() {
 		if !ok {
@@ -192,6 +208,23 @@ func createVM(ctx context.Context, p *sdk.Plugin, cfg fcConfig, spec sdk.Sandbox
 	}
 	if err := cfg.runPriv(ctx, "ip", "link", "set", "dev", tap, "up"); err != nil {
 		return nil, fmt.Errorf("firecracker: bring up tap %s: %w", tap, err)
+	}
+	if spec.Network.Mode == "" || spec.Network.Mode == "none" {
+		// The TAP is needed for SSH/control, but the guest must not reach
+		// host services. Allow only replies to host-initiated connections
+		// and refuse to continue if the firewall cannot be installed.
+		if err := cfg.runPriv(ctx, "iptables", "-w", "5", "-I", "INPUT", "1", "-i", tap, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"); err != nil {
+			return nil, fmt.Errorf("firecracker: network none needs iptables: %w", err)
+		}
+		if err := cfg.runPriv(ctx, "iptables", "-w", "5", "-I", "INPUT", "2", "-i", tap, "-j", "DROP"); err != nil {
+			return nil, fmt.Errorf("firecracker: network none needs iptables: %w", err)
+		}
+		if err := cfg.runPriv(ctx, "iptables", "-w", "5", "-I", "FORWARD", "1", "-i", tap, "-j", "DROP"); err != nil {
+			return nil, fmt.Errorf("firecracker: network none needs iptables: %w", err)
+		}
+		if err := cfg.runPriv(ctx, "iptables", "-w", "5", "-I", "FORWARD", "2", "-o", tap, "-j", "DROP"); err != nil {
+			return nil, fmt.Errorf("firecracker: network none needs iptables: %w", err)
+		}
 	}
 	rootfs := filepath.Join(dir, "rootfs.ext4")
 	if cfg.remoteHost == "" {
@@ -258,6 +291,7 @@ type meta struct {
 	Socket   string `json:"socket"`
 	VCPUs    int    `json:"vcpus"`
 	MemoryMB int    `json:"memory_mb"`
+	Network  string `json:"network"`
 }
 
 func writeMeta(ctx context.Context, cfg fcConfig, m *meta) error {
@@ -286,6 +320,13 @@ func attachVM(ctx context.Context, p *sdk.Plugin, cfg fcConfig, id string) (*sdk
 	var m meta
 	if err := json.Unmarshal(b, &m); err != nil {
 		return nil, err
+	}
+	wantDir := filepath.Join(cfg.workdir, id)
+	if m.ID != id || filepath.Clean(m.Dir) != filepath.Clean(wantDir) ||
+		!strings.HasPrefix(filepath.Clean(m.PidFile), filepath.Clean(wantDir)+string(filepath.Separator)) ||
+		!strings.HasPrefix(filepath.Clean(m.Socket), filepath.Clean(wantDir)+string(filepath.Separator)) ||
+		!strings.HasPrefix(m.Tap, cfg.tapPrefix) {
+		return nil, fmt.Errorf("firecracker: attach %s: meta does not belong to this sandbox", id)
 	}
 	if err := waitSSH(ctx, cfg, m.GuestIP, 10*time.Second); err != nil {
 		return nil, fmt.Errorf("firecracker: attach %s: %w", id, err)
@@ -322,7 +363,8 @@ func startFirecracker(cfg fcConfig, m *meta) error {
 	if _, err := os.Stat(m.Socket); err != nil {
 		return fmt.Errorf("firecracker: API socket did not appear: %w", err)
 	}
-	_ = cfg.runPriv(context.Background(), "chmod", "666", m.Socket)
+	_ = cfg.runPriv(context.Background(), "chown", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), m.Socket)
+	_ = cfg.runPriv(context.Background(), "chmod", "600", m.Socket)
 	return nil
 }
 
@@ -447,6 +489,12 @@ func stop(m *meta, cfg fcConfig) {
 		}
 	}
 	_ = cfg.runPriv(ctx, "pkill", "-f", m.Socket)
+	if m.Network == "" || m.Network == "none" {
+		_ = cfg.runPriv(ctx, "iptables", "-w", "5", "-D", "INPUT", "-i", m.Tap, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT")
+		_ = cfg.runPriv(ctx, "iptables", "-w", "5", "-D", "INPUT", "-i", m.Tap, "-j", "DROP")
+		_ = cfg.runPriv(ctx, "iptables", "-w", "5", "-D", "FORWARD", "-i", m.Tap, "-j", "DROP")
+		_ = cfg.runPriv(ctx, "iptables", "-w", "5", "-D", "FORWARD", "-o", m.Tap, "-j", "DROP")
+	}
 	_ = cfg.runPriv(ctx, "ip", "link", "del", m.Tap)
 	if cfg.remoteHost != "" {
 		_ = cfg.runPriv(ctx, "rm", "-rf", m.Dir)
@@ -547,7 +595,7 @@ func wrapVM(cfg fcConfig, m *meta) *sdk.Sandbox {
 			return []byte(out), nil
 		},
 		WriteFile: func(c context.Context, fpath string, data []byte) error {
-			_, errs, code, err := sh(c, "mkdir -p -- $(dirname "+shellQuote(abs(fpath))+") && cat > "+shellQuote(abs(fpath)), data, 60)
+			_, errs, code, err := sh(c, "mkdir -p -- \"$(dirname -- "+shellQuote(abs(fpath))+"))\" && cat > "+shellQuote(abs(fpath)), data, 60)
 			if err != nil {
 				return err
 			}
@@ -594,7 +642,7 @@ func wrapVM(cfg fcConfig, m *meta) *sdk.Sandbox {
 				return err
 			}
 			return func() error {
-				_, errs, code, err := sh(c, "mkdir -p -- $(dirname "+shellQuote(abs(boxPath))+") && cat > "+shellQuote(abs(boxPath)), data, 300)
+				_, errs, code, err := sh(c, "mkdir -p -- \"$(dirname -- "+shellQuote(abs(boxPath))+"))\" && cat > "+shellQuote(abs(boxPath)), data, 300)
 				if err != nil {
 					return err
 				}
@@ -622,8 +670,16 @@ func wrapVM(cfg fcConfig, m *meta) *sdk.Sandbox {
 }
 
 func sshRun(ctx context.Context, cfg fcConfig, ip, line string, stdin []byte) *exec.Cmd {
+	known := os.Getenv("FC_KNOWN_HOSTS")
+	if known == "" {
+		known = filepath.Join(os.Getenv("HOME"), ".ssh", "known_hosts")
+	}
+	strict := "accept-new"
+	if os.Getenv("FC_INSECURE_SSH") != "" {
+		strict, known = "no", "/dev/null"
+	}
 	args := []string{"-i", cfg.sshKey,
-		"-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
+		"-o", "StrictHostKeyChecking=" + strict, "-o", "UserKnownHostsFile=" + known,
 		"-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "LogLevel=ERROR"}
 	if cfg.remoteHost != "" {
 		jump := "ssh"
@@ -669,7 +725,15 @@ func (c fcConfig) remoteSSHBase() []string {
 	if c.remoteConf != "" {
 		args = append(args, "-F", c.remoteConf)
 	}
-	return append(args, "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no",
+	known := os.Getenv("FC_KNOWN_HOSTS")
+	if known == "" {
+		known = filepath.Join(os.Getenv("HOME"), ".ssh", "known_hosts")
+	}
+	strict := "accept-new"
+	if os.Getenv("FC_INSECURE_SSH") != "" {
+		strict, known = "no", "/dev/null"
+	}
+	return append(args, "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking="+strict, "-o", "UserKnownHostsFile="+known,
 		"-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR", c.remoteHost)
 }
 

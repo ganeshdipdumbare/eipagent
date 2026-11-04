@@ -74,7 +74,7 @@ func Apply(p *sdk.Plugin) error {
 			if err != nil {
 				return err
 			}
-			items[key(ns, k)] = sdk.StoreItem{Namespace: ns, Key: k, Value: v, Updated: time.Now().UnixMilli()}
+			items[key(ns, k)] = sdk.StoreItem{Namespace: ns, Key: k, Value: sdk.RedactMap(v), Updated: time.Now().UnixMilli()}
 			return write(items)
 		},
 		Get: func(c context.Context, ns []string, k string) (*sdk.StoreItem, error) {

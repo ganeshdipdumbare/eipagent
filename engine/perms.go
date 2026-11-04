@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -88,7 +89,7 @@ func osAlwaysOK(name string) bool {
 	switch name {
 	// Not NewFile (it wraps any open descriptor of the agent process) and
 	// not Stdin (in `eip serve --stdio` it carries the RPC protocol).
-	case "File", "FileInfo", "FileMode", "DirEntry", "LinkError", "PathError", "SyscallError", "DevNull", "Stdout", "Stderr", "Args":
+	case "File", "FileInfo", "FileMode", "DirEntry", "LinkError", "PathError", "SyscallError", "DevNull", "Args":
 		return true
 	}
 	return false
@@ -128,7 +129,7 @@ const (
 // registered secret: any function that redacts is such an oracle, so
 // third-party plugins don't get one. Their logs are redacted for them
 // (Context.Logf), and sinks are built in or compiled.
-var builtinOnly = map[string]bool{"Redact": true, "RedactMap": true, "RedactValue": true}
+var builtinOnly = map[string]bool{"Redact": true, "RedactMap": true, "RedactValue": true, "RedactMessages": true, "RedactInterrupts": true, "RedactThreadState": true, "PluginRenames": true}
 
 // buildSymbols returns the symbol table for a plugin holding perms.
 // builtin is true for plugins embedded in the binary. writeDeny lists
@@ -172,6 +173,19 @@ func buildSymbols(perms []string, builtin bool, writeDeny []string) map[string]m
 			}
 			syms = cp
 		}
+		if !builtin {
+			switch path {
+			case "path/filepath":
+				delete(syms, "Walk")
+				delete(syms, "WalkDir")
+			case "net/http":
+				delete(syms, "Dir")
+				delete(syms, "ServeFile")
+				delete(syms, "ServeContent")
+				delete(syms, "FileServer")
+				delete(syms, "FileServerFS")
+			}
+		}
 		out[key] = syms
 	}
 	// os: filtered per symbol.
@@ -190,18 +204,45 @@ func buildSymbols(perms []string, builtin bool, writeDeny []string) map[string]m
 		}
 	}
 	guardOSSymbols(filtered, has, writeDeny)
+	if has[PermExec] && !builtin {
+		filtered["StartProcess"] = reflect.ValueOf(func(name string, argv []string, attr *os.ProcAttr) (*os.Process, error) {
+			if attr == nil {
+				attr = &os.ProcAttr{Env: childEnv(perms)}
+			} else {
+				cp := *attr
+				cp.Env = sanitizeCmdEnv(cp.Env, perms)
+				attr = &cp
+			}
+			return os.StartProcess(name, argv, attr)
+		})
+	}
 	out["os/os"] = filtered
 	guardIoutilSymbols(out, has, writeDeny)
 	if has[PermExec] {
-		out["os/exec/exec"] = map[string]reflect.Value{
-			"Command":        reflect.ValueOf(exec.Command),
-			"CommandContext": reflect.ValueOf(exec.CommandContext),
-			"ErrNotFound":    reflect.ValueOf(&exec.ErrNotFound).Elem(),
-			"LookPath":       reflect.ValueOf(exec.LookPath),
-			"Cmd":            reflect.ValueOf((*exec.Cmd)(nil)),
-			"Error":          reflect.ValueOf((*exec.Error)(nil)),
-			"ExitError":      reflect.ValueOf((*exec.ExitError)(nil)),
+		execSyms := map[string]reflect.Value{
+			"ErrNotFound": reflect.ValueOf(&exec.ErrNotFound).Elem(),
+			"LookPath":    reflect.ValueOf(exec.LookPath),
+			"Error":       reflect.ValueOf((*exec.Error)(nil)),
+			"ExitError":   reflect.ValueOf((*exec.ExitError)(nil)),
 		}
+		if builtin {
+			execSyms["Command"] = reflect.ValueOf(exec.Command)
+			execSyms["CommandContext"] = reflect.ValueOf(exec.CommandContext)
+			execSyms["Cmd"] = reflect.ValueOf((*exec.Cmd)(nil))
+		} else {
+			allowSecrets := false
+			for _, p := range perms {
+				allowSecrets = allowSecrets || p == PermEnvSecrets
+			}
+			delete(execSyms, "Cmd")
+			execSyms["Command"] = reflect.ValueOf(func(name string, args ...string) *sdk.Command {
+				return sdk.NewCommand(exec.Command(name, args...), childEnv(perms), allowSecrets)
+			})
+			execSyms["CommandContext"] = reflect.ValueOf(func(c context.Context, name string, args ...string) *sdk.Command {
+				return sdk.NewCommand(exec.CommandContext(c, name, args...), childEnv(perms), allowSecrets)
+			})
+		}
+		out["os/exec/exec"] = execSyms
 	}
 	for k, v := range symbols.Symbols {
 		if strings.HasPrefix(k, sdkModulePath+"/") {
@@ -274,6 +315,40 @@ func pluginEnv(perms []string) []string {
 // SecretLike reports whether an environment variable name looks like a
 // credential, which plugins with only the env permission don't see.
 func SecretLike(name string) bool { return sdk.SecretLike(name) }
+
+// childEnv is the environment an exec-only plugin may pass to a child.
+// A plugin without env permission still gets PATH so running a command
+// works, but never the agent's credentials.
+func childEnv(perms []string) []string {
+	env := pluginEnv(perms)
+	if len(env) == 0 {
+		if p := os.Getenv("PATH"); p != "" {
+			env = []string{"PATH=" + p}
+		}
+	}
+	return env
+}
+
+func sanitizeCmdEnv(env []string, perms []string) []string {
+	hasSecrets := false
+	for _, p := range perms {
+		if p == PermEnvSecrets {
+			hasSecrets = true
+		}
+	}
+	if env == nil {
+		return childEnv(perms)
+	}
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		name, _, _ := strings.Cut(kv, "=")
+		if name == "" || (!hasSecrets && SecretLike(name)) {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
 
 func intersect(a, b []string) []string {
 	in := map[string]bool{}

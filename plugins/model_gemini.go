@@ -24,6 +24,7 @@ import (
 //	name:     default "gemini"
 //	base_url: default https://generativelanguage.googleapis.com/v1beta
 //	api_key:  literal or secret://NAME (default secret://GEMINI_API_KEY)
+//	allow_insecure: allow a non-loopback http base_url with an api_key
 //
 // Example:
 //
@@ -31,17 +32,20 @@ import (
 //	eipagent.WithPlugin("model_gemini", map[string]any{"api_key": "secret://GEMINI_KEY_TEAM_A"})
 var Permissions = []string{"net"}
 
+var Requires = []string{"?secrets"} // secret:// keys/headers are optional
+
 func Apply(p *sdk.Plugin) error {
 	name := p.ConfigString("name", "gemini")
 	base := strings.TrimRight(p.ConfigString("base_url", "https://generativelanguage.googleapis.com/v1beta"), "/")
 	keyRef := p.ConfigString("api_key", "secret://GEMINI_API_KEY")
-	client := &http.Client{Timeout: time.Duration(p.ConfigInt("timeout_seconds", 300)) * time.Second}
+	allowInsecure := p.ConfigBool("allow_insecure", false)
+	client := &http.Client{Timeout: time.Duration(p.ConfigInt("timeout_seconds", 300)) * time.Second, CheckRedirect: sdk.RefuseRedirect}
 
 	return p.Provide("model/"+name, &sdk.Provider{
 		Name:         name,
 		Capabilities: map[string]bool{"streaming": true, "tools": true, "structured_output": true, "vision": true},
 		Generate: func(c context.Context, req *sdk.ModelRequest) (*sdk.ModelResponse, error) {
-			key, err := p.Secret(keyRef)
+			key, err := p.SecretValue(keyRef)
 			if err != nil {
 				return nil, err
 			}
@@ -49,6 +53,9 @@ func Apply(p *sdk.Plugin) error {
 			url := base + "/models/" + req.ModelID + ":generateContent"
 			if req.Stream != nil {
 				url = base + "/models/" + req.ModelID + ":streamGenerateContent?alt=sse"
+			}
+			if err := sdk.CheckCredentialURL(url, key != "", allowInsecure); err != nil {
+				return nil, err
 			}
 			hr, err := http.NewRequestWithContext(c, "POST", url, bytes.NewReader(payload))
 			if err != nil {

@@ -166,9 +166,17 @@ func subagentTool(p *sdk.Plugin, name string, a map[string]any) sdk.Tool {
 				return "", fmt.Errorf("agent %s has no model", name)
 			}
 			sub := snap.WithTools(pick(snap.Tools, allowed), nil)
+			parent := sdk.RunStateFrom(c)
+			maxForSub := maxSteps
+			if parent != nil && parent.MaxSteps > 0 {
+				remaining := parent.MaxSteps - ri.Step
+				if remaining > 0 && remaining < maxForSub {
+					maxForSub = remaining
+				}
+			}
 			st := &sdk.RunState{
 				Thread: ri.Thread + "/" + name, User: ri.User, Roles: ri.Roles, Model: m, System: instructions,
-				MaxSteps: maxSteps, Values: map[string]any{},
+				MaxSteps: maxForSub, Parent: parent, Values: map[string]any{},
 				Messages: []sdk.Message{{Role: sdk.RoleUser, Content: sdk.ArgString(args, "task")}},
 			}
 			res, err := loop.Run(c, sub, st)

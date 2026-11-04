@@ -54,7 +54,7 @@ func Apply(p *sdk.Plugin) error {
 					return nil, err
 				}
 				for _, ip := range ips {
-					if !private && (ip.IP.IsLoopback() || ip.IP.IsPrivate() || ip.IP.IsLinkLocalUnicast() || ip.IP.IsLinkLocalMulticast() || ip.IP.IsUnspecified()) {
+					if !private && sdk.IsBlockedIP(ip.IP) {
 						return nil, fmt.Errorf("blocked: %s resolves to a private address", host)
 					}
 				}

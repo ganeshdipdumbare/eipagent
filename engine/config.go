@@ -171,9 +171,10 @@ var envRef = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 // (SecretLike) expand only for plugins holding env:secrets; others get
 // their credentials through secret://NAME references and grants.
 func interpolate(v any, perms []string) (any, error) {
-	secrets := false
+	secrets, envOK := false, false
 	for _, p := range perms {
 		secrets = secrets || p == PermEnvSecrets
+		envOK = envOK || p == PermEnv || p == PermEnvSecrets
 	}
 	var bad string
 	var walk func(v any) any
@@ -182,6 +183,10 @@ func interpolate(v any, perms []string) (any, error) {
 		case string:
 			return envRef.ReplaceAllStringFunc(x, func(m string) string {
 				name := m[2 : len(m)-1]
+				if !envOK {
+					bad = name
+					return ""
+				}
 				if !secrets && SecretLike(name) {
 					bad = name
 					return ""
@@ -205,7 +210,7 @@ func interpolate(v any, perms []string) (any, error) {
 	}
 	out := walk(v)
 	if bad != "" {
-		return nil, fmt.Errorf("config ${%s}: secret-looking variables need the env:secrets permission; use secret://%s", bad, bad)
+		return nil, fmt.Errorf("config ${%s}: expanding environment variables needs the env permission", bad)
 	}
 	return out, nil
 }

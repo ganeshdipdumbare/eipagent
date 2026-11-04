@@ -144,6 +144,13 @@ type Provider struct {
 	Capabilities map[string]bool
 }
 
+// PolicyCheck is provided by the policy plugin as the "policy" service so
+// middleware that makes an extra model call (for example a fallback) can
+// apply the admin model allowlist before choosing another model.
+type PolicyCheck struct {
+	Model func(ctx context.Context, model string) error
+}
+
 // ---- Interrupts (human in the loop) ----
 
 type Interrupt struct {
@@ -193,9 +200,11 @@ type RunState struct {
 	Pending        []Interrupt // interrupts awaiting decisions
 	Decisions      []Decision  // supplied on resume
 	Values         map[string]any
-	Emit           func(Event) // never nil inside a loop
-	Streaming      bool        // caller wants text deltas (ask providers to stream)
-	Tools          []Tool      // extra per-run tools (not registered globally)
+	Parent         *RunState    // set for subagent runs: budgets and limits follow the parent
+	Checkpoint     func() error // optional durable checkpoint; called before tools
+	Emit           func(Event)  // never nil inside a loop
+	Streaming      bool         // caller wants text deltas (ask providers to stream)
+	Tools          []Tool       // extra per-run tools (not registered globally)
 }
 
 type Step struct {

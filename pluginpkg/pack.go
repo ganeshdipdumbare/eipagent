@@ -321,6 +321,11 @@ func GenerateKey() (pub, priv string, err error) {
 	return pubPrefix + base64.StdEncoding.EncodeToString(pk) + "\n", privPrefix + base64.StdEncoding.EncodeToString(sk.Seed()) + "\n", nil
 }
 
+// EncodePublicKey encodes a public key for a trusted_keys file.
+func EncodePublicKey(k ed25519.PublicKey) string {
+	return pubPrefix + base64.StdEncoding.EncodeToString(k) + "\n"
+}
+
 // ParsePublicKey reads an "eip-ed25519-pub:..." key.
 func ParsePublicKey(s string) (ed25519.PublicKey, error) {
 	b, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(strings.TrimSpace(s), pubPrefix))

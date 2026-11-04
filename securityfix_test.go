@@ -479,13 +479,19 @@ func TestWebhook429DoesNotBurnSignature(t *testing.T) {
 		eipagent.WithPlugin("trigger_webhook", map[string]any{"addr": addr, "routes": []any{map[string]any{
 			"path": "/hook", "secret": "secret://HOOK_TOKEN", "user": "bot", "thread": "t-{n}", "max_concurrent": 1,
 		}}}))
-	send := func(n string) int {
+	sendBody := func(n, ts, sig string) int {
 		body := []byte(`{"n":"` + n + `"}`)
-		ts := strconv.FormatInt(time.Now().Unix(), 10)
-		code, _ := postHook(t, addr, "/hook", ts, signHook("hook-secret-123", ts, body), body)
+		code, _ := postHook(t, addr, "/hook", ts, sig, body)
 		return code
 	}
-	if got := send("1"); got != 202 {
+	send := func(n string) int {
+		ts := strconv.FormatInt(time.Now().Unix(), 10)
+		return sendBody(n, ts, signHook("hook-secret-123", ts, []byte(`{"n":"`+n+`"}`)))
+	}
+	firstTS := strconv.FormatInt(time.Now().Unix(), 10)
+	firstBody := []byte(`{"n":"1"}`)
+	firstSig := signHook("hook-secret-123", firstTS, firstBody)
+	if got := sendBody("1", firstTS, firstSig); got != 202 {
 		t.Fatalf("first: %d", got)
 	}
 	<-started
@@ -497,10 +503,10 @@ func TestWebhook429DoesNotBurnSignature(t *testing.T) {
 		msgs, _ := a.Thread("t-1").Messages(bg)
 		return len(msgs) > 0
 	})
-	if got := send("2"); got != 202 {
-		t.Fatalf("retry after 429 was refused: %d", got)
-	}
-	if got := send("1"); got != 409 {
+	// The slot is released by the run goroutine just after the thread is
+	// saved, so the second request can briefly still see max_concurrent.
+	waitFor(t, func() bool { return send("2") == 202 })
+	if got := sendBody("1", firstTS, firstSig); got != 409 {
 		t.Fatalf("an accepted signature was replayed: %d", got)
 	}
 }

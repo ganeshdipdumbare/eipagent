@@ -102,23 +102,31 @@ func (t *Thread) ResumeStream(ctx context.Context, decisions []sdk.Decision, opt
 func (t *Thread) runAndSave(ctx context.Context, cp *sdk.Checkpointer, ts *sdk.ThreadState, st *sdk.RunState, ro *runOptions) (*Result, error) {
 	version := ts.Version
 	var stepErr error
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	checkpoint := func() error {
+		if stepErr != nil {
+			return stepErr
+		}
+		cur := &sdk.ThreadState{ID: t.id, Messages: append([]sdk.Message(nil), st.Messages...), Values: st.Values, Updated: time.Now().UnixMilli()}
+		if err := cp.Save(ctx, cur, version); err != nil {
+			stepErr = err
+			cancel() // stop before the next model or tool call
+			return err
+		}
+		version++
+		return nil
+	}
 	if t.a.saveEachStep {
 		// Before each model call the history is whole (every tool call has
-		// its result), so a run cut short can be continued from here.
-		ro.onStep = func(st *sdk.RunState) {
-			if stepErr != nil {
-				return
-			}
-			cur := &sdk.ThreadState{ID: t.id, Messages: append([]sdk.Message(nil), st.Messages...), Values: st.Values, Updated: time.Now().UnixMilli()}
-			if err := cp.Save(ctx, cur, version); err != nil {
-				stepErr = err
-				return
-			}
-			version++
-		}
+		// its result), so a run cut short can be continued from here. The
+		// loop also calls Checkpoint immediately before executing tools, so
+		// a failed save can stop before a side effect.
+		ro.onStep = func(st *sdk.RunState) { _ = checkpoint() }
+		ro.checkpoint = checkpoint
 	}
-	res, err := t.a.run(ctx, st, ro)
-	if err == nil {
+	res, err := t.a.run(runCtx, st, ro)
+	if stepErr != nil {
 		err = stepErr
 	}
 	if err != nil {

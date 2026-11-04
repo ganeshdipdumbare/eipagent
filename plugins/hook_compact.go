@@ -186,8 +186,12 @@ func Apply(p *sdk.Plugin) error {
 		if focus != "" {
 			prompt += " Focus on: " + focus
 		}
-		resp, err := mp.Generate(c, &sdk.ModelRequest{Model: model, Provider: prov, ModelID: id, System: prompt,
-			Messages: []sdk.Message{{Role: sdk.RoleUser, Content: b.String()}}})
+		base := func(c context.Context, r *sdk.ModelRequest) (*sdk.ModelResponse, error) {
+			return mp.Generate(c, r)
+		}
+		resp, err := p.Snapshot().ModelChain(base)(c, &sdk.ModelRequest{Model: model, Provider: prov, ModelID: id, System: prompt,
+			Messages: []sdk.Message{{Role: sdk.RoleUser, Content: sdk.Redact(b.String())}},
+			Run:      req.Run, Thread: req.Thread, User: req.User, Step: req.Step})
 		if err != nil {
 			return ms, fmt.Errorf("hook_compact: summarize: %w", err)
 		}

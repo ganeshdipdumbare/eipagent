@@ -90,7 +90,8 @@ func Apply(p *sdk.Plugin) error {
 				return sdk.ErrVersionConflict
 			}
 			st.Version = expected + 1
-			raw, err := json.Marshal(st)
+			out := sdk.RedactThreadState(st)
+			raw, err := json.Marshal(out)
 			if err != nil {
 				return err
 			}

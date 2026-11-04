@@ -119,3 +119,23 @@ func TestHeadMACChangesWithSeq(t *testing.T) {
 		t.Fatal("head mac does not bind seq")
 	}
 }
+
+func TestVerifyKeyedWithAnchorDetectsRollback(t *testing.T) {
+	key := []byte("chain-key-123456789012345678901234")
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	last := writeLog(t, path, []int{1, 2, 3}, key)
+	anchor := Head{Seq: 3, Hash: last, MAC: HeadMAC(key, 3, last)}
+	if _, err := VerifyKeyedWithAnchor(path, key, anchor); err != nil {
+		t.Fatalf("complete log should verify against the anchor: %v", err)
+	}
+	// An attacker rewrites both the log and its local head to an older
+	// prefix. The off-host anchor still catches it.
+	last2 := writeLog(t, path, []int{1, 2}, key)
+	writeHead(t, path, 2, last2, key)
+	if _, err := VerifyKeyed(path, key); err != nil {
+		t.Fatalf("the rolled-back log and head are internally consistent: %v", err)
+	}
+	if _, err := VerifyKeyedWithAnchor(path, key, anchor); err == nil || !strings.Contains(err.Error(), "rolled back") {
+		t.Fatalf("rollback against the external anchor was accepted: %v", err)
+	}
+}

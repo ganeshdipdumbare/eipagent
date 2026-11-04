@@ -23,6 +23,8 @@ import (
 
 var Requires = []string{"memory"}  // services needed before Apply runs ("?x" optional, "model/*" any one)
 var Permissions = []string{"net"}  // capabilities: net, exec, fs:read, fs:write, env, env:secrets, db
+// File plugins may read only these secrets (or names referenced as secret://NAME):
+var Secrets = []string{"WEATHER_API_KEY"}
 
 func Apply(p *sdk.Plugin) error {
 	mem := p.Service("memory").(*sdk.Store)
@@ -69,6 +71,8 @@ The engine parses each plugin's imports before running it. An import the plugin'
 - `env` shows the environment minus credential-looking variables (`*_API_KEY`, `*_TOKEN`, `*_SECRET`, `*PASSWORD*`, `*_DSN` ...). Only secret providers should declare `env:secrets`, which shows everything; other plugins get keys through `ctx.Secret` and per-plugin grants.
 - No interpreted plugin can call `sdk.AddRedaction`, and only built-in plugins can call `sdk.Redact` / `RedactMap` / `RedactValue`. Any redaction function also answers "is this string a secret?", so plugins from plugin directories and stores don't get one. Their `ctx.Logf` output is redacted for them. A custom audit or trace sink that needs redaction should be a compiled plugin (`eipagent.Plugin`).
 - Records a plugin submits through the `audit` service are stamped `writer: "plugin:<name>"` by the SDK. For untrusted plugin code, run the agent in a sandbox (`WithRunIn`).
+- File plugins may resolve only declared secrets: a `secret://NAME` literal in the source, or an exact name in `var Secrets = []string{...}`. Dynamic names need `var Secrets`; the admin policy's `grants` narrows them further. A denied lookup is audited as `secret.access`.
+- Literal credentials in config (an `api_key`, HMAC key, Vault token or MCP header) are registered for redaction, but `secret://NAME` is still preferred. HTTP clients that send credentials refuse redirects and reject non-loopback plaintext endpoints unless the plugin sets `allow_insecure: true`.
 
 ## Ship a plugin: manifest, lint, package, install
 

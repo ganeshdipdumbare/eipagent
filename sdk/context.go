@@ -61,15 +61,21 @@ type Plugin struct {
 	Name   string
 	Config map[string]any // per-plugin config from the profile
 
-	reg       *registry
-	id        string // immutable identity: plugin instance path, used for audit / secret ACLs
-	priority  int
-	order     int
-	trusted   bool
-	mu        sync.Mutex
-	children  []*Plugin
-	disposers []func()
-	disposed  bool // set by Dispose: later registrations are undone at once
+	reg      *registry
+	id       string // immutable identity: plugin instance path, used for audit / secret ACLs
+	priority int
+	order    int
+	trusted  bool
+	// secretGrants is the set of secret names a plugin declared (or
+	// referenced with secret://). For file plugins the core restricts
+	// lookups to this set unless the admin policy grants more.
+	secretGrants    []string
+	restrictSecrets bool
+	builtin         bool
+	mu              sync.Mutex
+	children        []*Plugin
+	disposers       []func()
+	disposed        bool // set by Dispose: later registrations are undone at once
 }
 
 // Context is the old name of Plugin.
@@ -136,6 +142,36 @@ func (c *Plugin) Trust(key *TrustKey, order int, trusted bool) {
 }
 
 func (c *Plugin) Trusted() bool { return c.trusted }
+
+// SetSecretPolicy is called by the engine before Apply. Without the
+// engine's key it does nothing, so a plugin can't widen its own grant.
+func (c *Plugin) SetSecretPolicy(key *TrustKey, grants []string, restrict bool) {
+	if key == nil || key != engineKey {
+		return
+	}
+	c.secretGrants = append([]string(nil), grants...)
+	c.restrictSecrets = restrict
+}
+
+// SetBuiltin is called by the engine. Only built-in plugins may register
+// extra values for redaction.
+func (c *Plugin) SetBuiltin(key *TrustKey, builtin bool) {
+	if key == nil || key != engineKey {
+		return
+	}
+	c.builtin = builtin
+}
+
+// RegisterSecret puts a value the plugin obtained outside the secrets
+// service (for example a Vault token read from a file) into the
+// process-wide redaction set. It is a no-op for non-built-in plugins, so
+// a third-party plugin can't blank out words in everyone's audit log.
+func (c *Plugin) RegisterSecret(v string) bool {
+	if !c.builtin || v == "" {
+		return false
+	}
+	return AddRedaction(v)
+}
 
 // ID is the scope's immutable identity ("plugin" or "plugin/child").
 func (c *Plugin) ID() string { return c.id }
@@ -283,7 +319,7 @@ func (c *Plugin) Service(name string) any {
 		return c.boundAudit(a)
 	}
 	if p, ok := v.(*SandboxProvider); ok && strings.HasPrefix(name, "sandbox/") && p != nil && c.id != "" {
-		return pluginSandboxes(p)
+		return pluginSandboxes(p, c.builtin)
 	}
 	return v
 }

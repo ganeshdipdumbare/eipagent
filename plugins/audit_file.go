@@ -61,7 +61,7 @@ func Apply(p *sdk.Plugin) error {
 	logResults := p.ConfigBool("results", false)
 	var chainKey []byte
 	if ref := p.ConfigString("key", ""); ref != "" {
-		k, err := p.Secret(ref)
+		k, err := p.SecretValue(ref)
 		if err != nil || k == "" {
 			return fmt.Errorf("audit_file: key: %v", err)
 		}

@@ -20,16 +20,11 @@ func Apply(p *sdk.Plugin) error {
 		words = []string{"password"}
 	}
 	p.On(sdk.HookToolBefore, func(e *sdk.HookEvent) {
-		for _, v := range e.Args {
-			s, ok := v.(string)
-			if !ok {
-				continue
-			}
-			for _, w := range words {
-				if strings.Contains(strings.ToLower(s), w) {
-					e.Veto = "refusing: arguments mention " + w
-					return
-				}
+		s := sdk.ToJSON(e.Args)
+		for _, w := range words {
+			if strings.Contains(strings.ToLower(s), strings.ToLower(w)) {
+				e.Veto = "refusing: arguments mention " + w
+				return
 			}
 		}
 	})

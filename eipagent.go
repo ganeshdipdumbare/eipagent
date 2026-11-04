@@ -108,6 +108,12 @@ func newLocal(cfg *config) (*Agent, error) {
 	if cfg.lockPath != "" {
 		deny = append(deny, cfg.lockPath)
 	}
+	// A lock may be discovered beside or above a plugin directory. Add
+	// both candidates even when they do not exist yet, so fs:write cannot
+	// create a lock that pins its own plugins.
+	for _, d := range cfg.dirs {
+		deny = append(deny, filepath.Join(d, "eip.lock"), filepath.Join(d, "..", "eip.lock"))
+	}
 	if cfg.store != nil {
 		deny = append(deny, cfg.store.Dir())
 	}
@@ -249,7 +255,7 @@ func (a *Agent) runOpts(opts []RunOption) *runOptions {
 
 func (a *Agent) newState(ro *runOptions) *sdk.RunState {
 	st := &sdk.RunState{
-		Model: a.model, System: a.instructions, MaxSteps: a.maxSteps, User: ro.user, Roles: ro.roles,
+		ID: ro.runID, Model: a.model, System: a.instructions, MaxSteps: a.maxSteps, User: ro.user, Roles: ro.roles,
 		StopOnTools: ro.stopOn, ToolChoice: ro.toolChoice, Temperature: ro.temperature, MaxTokens: ro.maxTokens,
 		ResponseSchema: ro.schema, ResponseName: ro.schemaName, Values: map[string]any{}, Tools: ro.tools,
 	}
@@ -275,6 +281,7 @@ func (a *Agent) run(ctx context.Context, st *sdk.RunState, ro *runOptions) (*Res
 		return nil, ErrNoLoop
 	}
 	st.Streaming = ro.onEvent != nil
+	st.Checkpoint = ro.checkpoint
 	st.Emit = func(e sdk.Event) {
 		if ro.onEvent != nil {
 			ro.onEvent(e)

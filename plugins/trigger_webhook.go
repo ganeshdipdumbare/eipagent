@@ -130,7 +130,10 @@ func route(p *sdk.Plugin, mux *http.ServeMux, agent *sdk.AgentService, r map[str
 		return def
 	}
 	path := s("path")
-	secret, err := p.Secret(s("secret"))
+	if path == "" || !strings.HasPrefix(path, "/") {
+		return fmt.Errorf("trigger_webhook: route path %q must start with /", path)
+	}
+	secret, err := p.SecretValue(s("secret"))
 	if err != nil || secret == "" {
 		return fmt.Errorf("trigger_webhook %s: a secret is required: %v", path, err)
 	}
@@ -242,6 +245,11 @@ func route(p *sdk.Plugin, mux *http.ServeMux, agent *sdk.AgentService, r map[str
 		var doc map[string]any
 		json.Unmarshal(body, &doc)
 		thread := fill(threadT, doc, string(body))
+		if !validThreadID(thread) {
+			p.Logf("webhook %s: refused thread id %q", path, thread)
+			http.Error(w, "invalid thread id", 400)
+			return
+		}
 		prompt := fill(promptT, doc, string(body))
 		w.WriteHeader(202)
 		fmt.Fprintf(w, "{\"accepted\":true,\"thread\":%q}\n", thread)
@@ -257,6 +265,21 @@ func route(p *sdk.Plugin, mux *http.ServeMux, agent *sdk.AgentService, r map[str
 		}()
 	})
 	return nil
+}
+
+// validThreadID keeps a payload field from producing a path-like or
+// control-character thread id. A route should still prefix or otherwise
+// constrain its thread template so two senders cannot select one thread.
+func validThreadID(id string) bool {
+	if len(id) > 200 {
+		return false
+	}
+	for _, r := range id {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 // fill replaces {body} and {a.b.c} placeholders in one left-to-right

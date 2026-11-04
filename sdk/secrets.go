@@ -31,8 +31,11 @@ const redacted = "[REDACTED]"
 var (
 	redactMu          sync.RWMutex
 	redactSet         = map[string]struct{}{}
-	redactOrder       []string // insertion order, oldest first
-	redactSorted      []string // length-desc, rebuilt when the set changes
+	redactOrder       []string                // form insertion order, oldest first
+	redactSorted      []string                // length-desc, rebuilt when the set changes
+	redactReplacer    *strings.Replacer       // trie-backed matcher, rebuilt with the set
+	redactValues      = map[string][]string{} // original value -> its registered forms
+	redactValueOrder  []string                // value insertion order, oldest first
 	redactEvictLogged bool
 )
 
@@ -64,33 +67,66 @@ func AddRedaction(v string) bool {
 		hex.EncodeToString([]byte(v)), strings.ToUpper(hex.EncodeToString([]byte(v))))
 	redactMu.Lock()
 	defer redactMu.Unlock()
-	changed := false
+	changed, setChanged := false, false
+	// Refresh an actively used value so it is not the first evicted.
+	if _, ok := redactValues[v]; ok {
+		for i, old := range redactValueOrder {
+			if old == v {
+				redactValueOrder = append(redactValueOrder[:i:i], redactValueOrder[i+1:]...)
+				break
+			}
+		}
+		redactValueOrder = append(redactValueOrder, v)
+	} else {
+		redactValues[v] = forms
+		redactValueOrder = append(redactValueOrder, v)
+	}
 	for _, f := range forms {
 		if _, ok := redactSet[f]; ok {
-			continue
+			for i, old := range redactOrder {
+				if old == f {
+					redactOrder = append(redactOrder[:i:i], redactOrder[i+1:]...)
+					break
+				}
+			}
+		} else {
+			setChanged = true
 		}
 		redactSet[f] = struct{}{}
 		redactOrder = append(redactOrder, f)
 		changed = true
 	}
-	if len(redactOrder) > maxRedactions {
-		// Bounded: a long-running agent whose secrets keep rotating would
-		// otherwise grow this forever. The oldest values go first.
-		over := len(redactOrder) - maxRedactions
-		if !redactEvictLogged {
-			redactEvictLogged = true
-			log.Printf("sdk: redaction registry full (%d forms); dropping the oldest secrets", maxRedactions)
-		}
-		for _, f := range redactOrder[:over] {
+	for len(redactOrder) > maxRedactions && len(redactValueOrder) > 1 {
+		// Evict whole values, never half of a secret's encodings.
+		oldest := redactValueOrder[0]
+		redactValueOrder = redactValueOrder[1:]
+		for _, f := range redactValues[oldest] {
 			delete(redactSet, f)
+			for i, old := range redactOrder {
+				if old == f {
+					redactOrder = append(redactOrder[:i:i], redactOrder[i+1:]...)
+					break
+				}
+			}
 		}
-		redactOrder = append([]string(nil), redactOrder[over:]...)
-		changed = true
+		delete(redactValues, oldest)
+		changed, setChanged = true, true
 	}
-	if changed {
+	if len(redactOrder) > maxRedactions && !redactEvictLogged {
+		// One value with more encodings than the cap; keep the registry
+		// bounded even though it means dropping the oldest forms.
+		redactEvictLogged = true
+		log.Printf("sdk: redaction registry full (%d forms); dropping the oldest encodings", maxRedactions)
+	}
+	if changed && setChanged {
 		redactSorted = make([]string, len(redactOrder))
 		copy(redactSorted, redactOrder)
 		sort.SliceStable(redactSorted, func(i, j int) bool { return len(redactSorted[i]) > len(redactSorted[j]) })
+		pairs := make([]string, 0, len(redactSorted)*2)
+		for _, f := range redactSorted {
+			pairs = append(pairs, f, redacted)
+		}
+		redactReplacer = strings.NewReplacer(pairs...)
 	}
 	return true
 }
@@ -98,13 +134,12 @@ func AddRedaction(v string) bool {
 // Redact replaces every registered secret value in s.
 func Redact(s string) string {
 	redactMu.RLock()
-	defer redactMu.RUnlock()
-	for _, v := range redactSorted {
-		if strings.Contains(s, v) {
-			s = strings.ReplaceAll(s, v, redacted)
-		}
+	r := redactReplacer
+	redactMu.RUnlock()
+	if r == nil {
+		return s
 	}
-	return s
+	return r.Replace(s)
 }
 
 // RedactMap returns a deep copy of m with every string redacted,
@@ -118,6 +153,72 @@ func RedactMap(m map[string]any) map[string]any {
 		out[Redact(k)] = RedactValue(v)
 	}
 	return out
+}
+
+// RedactMessages returns a redacted copy of a conversation. Persistence
+// sinks use it so a secret that passed through a tool result or model
+// reply is not written to disk.
+func RedactMessages(ms []Message) []Message {
+	out := make([]Message, len(ms))
+	for i, m := range ms {
+		m.Content = Redact(m.Content)
+		m.Reasoning = Redact(m.Reasoning)
+		m.ToolName = Redact(m.ToolName)
+		if len(m.ToolCalls) > 0 {
+			calls := make([]ToolCall, len(m.ToolCalls))
+			for j, tc := range m.ToolCalls {
+				tc.Name = Redact(tc.Name)
+				if args, ok := RedactValue(tc.Args).(map[string]any); ok {
+					tc.Args = args
+				}
+				calls[j] = tc
+			}
+			m.ToolCalls = calls
+		}
+		if len(m.Images) > 0 {
+			imgs := make([]Image, len(m.Images))
+			for j, img := range m.Images {
+				img.URL = Redact(img.URL)
+				imgs[j] = img
+			}
+			m.Images = imgs
+		}
+		out[i] = m
+	}
+	return out
+}
+
+// RedactInterrupts returns a redacted copy of pending human-in-the-loop
+// interrupts, including the tool-call arguments they carry.
+func RedactInterrupts(in []Interrupt) []Interrupt {
+	out := make([]Interrupt, len(in))
+	for i, x := range in {
+		x.Message = Redact(x.Message)
+		if x.ToolCall != nil {
+			tc := *x.ToolCall
+			tc.Name = Redact(tc.Name)
+			if args, ok := RedactValue(tc.Args).(map[string]any); ok {
+				tc.Args = args
+			}
+			x.ToolCall = &tc
+		}
+		x.Payload = RedactMap(x.Payload)
+		out[i] = x
+	}
+	return out
+}
+
+// RedactThreadState returns a redacted copy of a thread's messages, values
+// and pending interrupts for persistence.
+func RedactThreadState(st *ThreadState) *ThreadState {
+	if st == nil {
+		return nil
+	}
+	cp := *st
+	cp.Messages = RedactMessages(st.Messages)
+	cp.Values = RedactMap(st.Values)
+	cp.Pending = RedactInterrupts(st.Pending)
+	return &cp
 }
 
 // RedactValue returns a redacted deep copy of v. Strings, errors and
@@ -256,26 +357,49 @@ func (c *Plugin) boundAudit(a *Audit) *Audit {
 func (c *Plugin) boundSecrets(s *Secrets) *Secrets {
 	caller := c.PluginName()
 	return &Secrets{Get: func(ctx context.Context, _ string, name string) (string, error) {
-		v, err := s.Get(ctx, caller, name)
-		redactable := true
-		if err == nil {
-			redactable = AddRedaction(v)
-		}
-		if err == nil && !c.auditGrant(caller, name, v) {
-			return v, nil // already audited recently
+		var err error
+		if c.restrictSecrets && !secretAllowed(c.secretGrants, name) {
+			err = fmt.Errorf("secret %q is not declared by plugin %s", name, caller)
+		} else {
+			var v string
+			v, err = s.Get(ctx, caller, name)
+			redactable := true
+			if err == nil {
+				redactable = AddRedaction(v)
+			}
+			if err == nil && !c.auditGrant(caller, name, v) {
+				return v, nil // already audited recently
+			}
+			if a, ok := c.rawService("audit").(*Audit); ok && a.Record != nil {
+				d := map[string]any{"plugin": caller, "secret": name, "outcome": "granted", "writer": "core"}
+				if !redactable {
+					d["redaction"] = "not possible: value shorter than 4 bytes"
+				}
+				if err != nil {
+					d["outcome"], d["error"] = "denied", Redact(err.Error())
+				}
+				a.Record("secret.access", d)
+			}
+			return v, err
 		}
 		if a, ok := c.rawService("audit").(*Audit); ok && a.Record != nil {
-			d := map[string]any{"plugin": caller, "secret": name, "outcome": "granted", "writer": "core"}
-			if !redactable {
-				d["redaction"] = "not possible: value shorter than 4 bytes"
-			}
-			if err != nil {
-				d["outcome"], d["error"] = "denied", Redact(err.Error())
-			}
-			a.Record("secret.access", d)
+			a.Record("secret.access", map[string]any{"plugin": caller, "secret": name, "outcome": "denied",
+				"error": Redact(err.Error()), "writer": "core"})
 		}
-		return v, err
+		return "", err
 	}}
+}
+
+// secretAllowed matches a declared secret name against the plugin's
+// grants. Grants are exact names: a plugin must not be able to declare
+// "*" and read every secret the host allows.
+func secretAllowed(grants []string, name string) bool {
+	for _, g := range grants {
+		if g == name {
+			return true
+		}
+	}
+	return false
 }
 
 // NewRunID returns a random run id (16 hex chars).
