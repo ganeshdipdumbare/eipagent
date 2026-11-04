@@ -4,6 +4,8 @@ All notable changes to eipagent. Versions follow [semantic versioning](https://s
 
 ## Unreleased
 
+## v0.4.8 — 2026-11-04
+
 ### Security
 
 - File plugins can now resolve only the secrets they declare with `var Secrets = []string{...}` or reference with a `secret://NAME` literal; a denied lookup is audited as `secret.access`. This narrows the default `secrets_env`/`secrets_vault` access for interpreted third-party plugins.
