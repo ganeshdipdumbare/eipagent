@@ -62,7 +62,7 @@ func main() {
 
 **Demo:** [`examples/fullstack`](examples/fullstack) is a support desk with a Go backend and web UI: streaming, refunds that wait for a supervisor, redaction and an audit trail. Run it with `go run ./examples/fullstack`, or try it live at https://eipagent-docs.vercel.app/demo/ (the backend runs on a free instance, so the first visit can take a minute to wake it).
 
-**Docs:** https://eipagent-docs.vercel.app has the full guide, with examples, lifecycles and reference. The source is `docs/site.html` (after changing a plugin, run `go run ./docs/gen`; CI fails if you forget). Every push to `main` that touches the docs, plugins or demo rebuilds the site and deploys it ([`docs.yml`](.github/workflows/docs.yml)); to build it locally, run `docs/build.sh`.
+**Docs:** https://eipagent-docs.vercel.app has the full guide, with examples, lifecycles and reference. The content is `docs/site.html`; the design system, self-hosted fonts and interactions live in `docs/assets/` (after changing a plugin, run `go run ./docs/gen`; CI fails if you forget). Every push to `main` that touches the docs, plugins or demo rebuilds the site and deploys it ([`docs.yml`](.github/workflows/docs.yml)); to build it locally, run `docs/build.sh` (add `SKIP_RECORD=1` to skip re-recording the demo).
 
 Releases and breaking changes are listed in [CHANGELOG.md](CHANGELOG.md); see [Versioning](#versioning).
 
