@@ -101,7 +101,7 @@ type ExecWorld struct {
 // so a plugin without fs permissions could use them to read or write
 // anywhere on the host. Only the host application (WithRunIn) moves files
 // across that boundary; plugins use ReadFile / WriteFile inside the box.
-func pluginSandboxes(p *SandboxProvider) *SandboxProvider {
+func pluginSandboxes(p *SandboxProvider, allowAttach bool) *SandboxProvider {
 	strip := func(b *Sandbox, err error) (*Sandbox, error) {
 		if b == nil {
 			return nil, err
@@ -122,8 +122,10 @@ func pluginSandboxes(p *SandboxProvider) *SandboxProvider {
 			return strip(p.Create(ctx, spec))
 		}
 	}
-	if p.Attach != nil {
+	if p.Attach != nil && allowAttach {
 		cp.Attach = func(ctx context.Context, id string) (*Sandbox, error) { return strip(p.Attach(ctx, id)) }
+	} else {
+		cp.Attach = nil
 	}
 	return &cp
 }
@@ -199,11 +201,24 @@ func CheckSandboxSpec(spec SandboxSpec) error {
 		return fmt.Errorf("sandbox image %q is not a valid image name", spec.Image)
 	}
 	for _, m := range spec.Mounts {
-		h := filepath.Clean(m.Host)
-		if r, err := filepath.EvalSymlinks(h); err == nil {
-			h = r
+		if !filepath.IsAbs(m.Host) {
+			return fmt.Errorf("sandbox mount %s must be an absolute host path", m.Host)
 		}
-		if h == "/" || runtimeSocket(h) {
+		if m.Box == "" || !filepath.IsAbs(m.Box) || strings.ContainsAny(m.Box, ":,\t\r\n ") {
+			return fmt.Errorf("sandbox mount destination %q must be an absolute path without :, , or whitespace", m.Box)
+		}
+		for _, part := range strings.Split(filepath.ToSlash(m.Box), "/") {
+			if part == ".." {
+				return fmt.Errorf("sandbox mount destination %q must not contain ..", m.Box)
+			}
+		}
+		h := filepath.Clean(m.Host)
+		real, err := filepath.EvalSymlinks(h)
+		if err != nil {
+			return fmt.Errorf("sandbox mount %s: %v", m.Host, err)
+		}
+		h = real
+		if h == "/" || runtimeSocket(h) || runtimeMountPath(h) {
 			return fmt.Errorf("sandbox mount %s is not allowed (host root or container runtime socket)", m.Host)
 		}
 		if entries, err := os.ReadDir(h); err == nil {
@@ -215,6 +230,23 @@ func CheckSandboxSpec(spec SandboxSpec) error {
 		}
 	}
 	return nil
+}
+
+// runtimeMountPath reports a path that could expose a container runtime
+// socket directly or as an ancestor of its directory.
+func runtimeMountPath(p string) bool {
+	home := os.Getenv("HOME")
+	dirs := []string{"/var/run", "/run", "/var/lib/docker", "/var/lib/containerd",
+		"/var/lib/containers", filepath.Join(home, ".docker"), filepath.Join(home, ".podman")}
+	for _, d := range dirs {
+		if d == "" || d == "/" {
+			continue
+		}
+		if p == d || strings.HasPrefix(p, d+string(filepath.Separator)) || strings.HasPrefix(d, p+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
 }
 
 // runtimeSocket reports whether path names a docker/podman/containerd

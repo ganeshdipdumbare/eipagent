@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"path"
@@ -30,8 +31,10 @@ type broker struct {
 	// ones the host put in its profile, plus the plugins it loads on its
 	// own. The box names the caller itself, so this keeps a box from
 	// claiming another plugin's grants. nil: any (not yet set).
-	callers map[string]bool
-	client  *http.Client
+	callers      map[string]bool
+	secretGrants map[string]map[string]bool
+	allowPrivate bool
+	client       *http.Client
 
 	mu    sync.Mutex
 	byKey map[string]string       // caller \x00 name -> placeholder
@@ -168,9 +171,41 @@ func ambiguousPath(u *url.URL) bool {
 
 func newBroker(host *Agent, ri *RunIn) (*broker, error) {
 	b := &broker{host: host, hosts: map[string][]egressRule{}, byKey: map[string]string{}, byPh: map[string]brokerSecret{},
+		allowPrivate: ri != nil && ri.AllowPrivateEgress}
+	// The broker makes the box's HTTP requests, so it must apply the same
+	// SSRF protection as tool_fetch: by default it never dials loopback,
+	// RFC1918, link-local or unspecified addresses, even when an egress
+	// rule allows the host name.
+	dialer := &net.Dialer{Timeout: 10 * time.Second}
+	dial := func(c context.Context, network, addr string) (net.Conn, error) {
+		if b.allowPrivate {
+			return dialer.DialContext(c, network, addr)
+		}
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, err
+		}
+		ips, err := net.DefaultResolver.LookupIPAddr(c, host)
+		if err != nil {
+			return nil, err
+		}
+		for _, ip := range ips {
+			if sdk.IsBlockedIP(ip.IP) {
+				return nil, fmt.Errorf("blocked: %s resolves to a private address", host)
+			}
+		}
+		if len(ips) == 0 {
+			return nil, fmt.Errorf("blocked: %s has no address", host)
+		}
+		return dialer.DialContext(c, network, net.JoinHostPort(ips[0].IP.String(), port))
+	}
+	b.client = &http.Client{
+		Timeout:   5 * time.Minute,
+		Transport: &http.Transport{DialContext: dial},
 		// Redirects go back to the box, whose client asks again, so every
 		// hop is checked against the rules.
-		client: &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
 	var err error
 	if b.egress, err = parseRules(ri.Egress); err != nil {
 		return nil, fmt.Errorf("RunIn.Egress: %w", err)
@@ -184,6 +219,22 @@ func newBroker(host *Agent, ri *RunIn) (*broker, error) {
 }
 
 // setCallers records the plugins the box was started with (see callers).
+func (b *broker) setSecretGrants(grants map[string][]string) {
+	b.secretGrants = map[string]map[string]bool{}
+	for name, list := range grants {
+		set := map[string]bool{}
+		for _, n := range list {
+			set[n] = true
+		}
+		b.secretGrants[sdk.CanonicalPlugin(name)] = set
+	}
+}
+
+func (b *broker) secretAllowed(caller, name string) bool {
+	set, ok := b.secretGrants[sdk.CanonicalPlugin(caller)]
+	return ok && set[name]
+}
+
 func (b *broker) setCallers(specs []engine.PluginSpec) {
 	b.callers = map[string]bool{}
 	for _, s := range specs {
@@ -199,6 +250,9 @@ func (b *broker) knownCaller(name string) bool {
 }
 
 func (b *broker) services() (*sdk.Secrets, *sdk.Audit) {
+	if b.host == nil {
+		return nil, nil
+	}
 	snap := b.host.eng.Root().Snapshot()
 	s, _ := snap.Services["secrets"].(*sdk.Secrets)
 	a, _ := snap.Services["audit"].(*sdk.Audit)
@@ -231,7 +285,11 @@ func (b *broker) resolve(ctx context.Context, caller, name string) (string, erro
 func (b *broker) placeholder(ctx context.Context, caller, name string) (string, error) {
 	var err error
 	if b.knownCaller(caller) {
-		_, err = b.resolve(ctx, caller, name)
+		if !b.secretAllowed(caller, name) {
+			err = fmt.Errorf("sandbox: secret %s is not declared by %s", name, caller)
+		} else {
+			_, err = b.resolve(ctx, caller, name)
+		}
 	} else {
 		err = fmt.Errorf("sandbox: secret %s asked for as %q, which is not a plugin in the box", name, caller)
 	}
@@ -249,9 +307,7 @@ func (b *broker) placeholder(ctx context.Context, caller, name string) (string, 
 		b.byKey[k], b.byPh[ph] = ph, brokerSecret{caller, name}
 	}
 	b.mu.Unlock()
-	if !ok {
-		b.audit("secret.access", d)
-	}
+	b.audit("secret.access", d)
 	return ph, nil
 }
 
@@ -266,6 +322,9 @@ func (b *broker) fetch(ctx context.Context, req wireHTTPReq) (resp *wireHTTPResp
 	}
 	u, perr := url.Parse(req.URL)
 	rec := map[string]any{"method": method, "url": sdk.Redact(req.URL)}
+	if req.RunID != "" {
+		rec["run"] = req.RunID
+	}
 	var names []string
 	defer func() {
 		rec["ms"] = time.Since(t).Milliseconds()
@@ -299,8 +358,8 @@ func (b *broker) fetch(ctx context.Context, req wireHTTPReq) (resp *wireHTTPResp
 	}
 	all.Write(req.Body)
 	phs := sdk.FindPlaceholders(all.String())
-	if len(phs) > 0 && ambiguousPath(u) {
-		return deny(fmt.Errorf("sandbox egress: ambiguous path %q (encoded separators or dot segments) with a secret", u.EscapedPath()))
+	if ambiguousPath(u) || strings.ContainsAny(u.Path, ";\\") || strings.Contains(strings.ToLower(u.EscapedPath()), "%25") {
+		return deny(fmt.Errorf("sandbox egress: ambiguous path %q (encoded separators, dot segments or path parameters)", u.EscapedPath()))
 	}
 	values := map[string]string{}
 	for _, ph := range phs {
@@ -334,15 +393,25 @@ func (b *broker) fetch(ctx context.Context, req wireHTTPReq) (resp *wireHTTPResp
 	for ph, v := range values {
 		body = bytes.ReplaceAll(body, []byte(ph), []byte(v))
 	}
-	hr, err := http.NewRequestWithContext(ctx, method, swap(req.URL), bytes.NewReader(body))
+	norm := *u
+	norm.Path = requestPath(u)
+	norm.RawPath = ""
+	hr, err := http.NewRequestWithContext(ctx, method, swap(norm.String()), bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
 	for k, vs := range req.Header {
 		for _, v := range vs {
+			if strings.EqualFold(k, "Host") {
+				if len(vs) > 0 && !strings.EqualFold(v, u.Host) {
+					return deny(fmt.Errorf("sandbox egress: Host header %q does not match URL host %q", v, u.Host))
+				}
+				continue
+			}
 			hr.Header.Add(k, swap(v))
 		}
 	}
+	hr.Host = u.Host
 	hresp, err := b.client.Do(hr)
 	if err != nil {
 		return nil, errors.New(sdk.Redact(err.Error()))
@@ -376,6 +445,8 @@ func (b *broker) record(d map[string]any) {
 	if e, ok := d["error"]; ok {
 		line += fmt.Sprintf(" (%v)", e)
 	}
-	b.host.eng.Root().Logf("%s", line)
+	if b.host != nil {
+		b.host.eng.Root().Logf("%s", line)
+	}
 	b.audit("sandbox.egress", d)
 }

@@ -29,6 +29,7 @@ import (
 //	base_url:        override the backend URL (required for searxng)
 //	max_results:     default 5 (the model may ask for up to 20)
 //	timeout_seconds: default 20
+//	allow_insecure:  allow http base_url with an api_key
 //
 // Example:
 //
@@ -37,12 +38,15 @@ import (
 //	// Shortcut: eipagent.WithWebSearch("duckduckgo")
 var Permissions = []string{"net"}
 
+var Requires = []string{"?secrets"} // secret:// keys/headers are optional
+
 type hit struct{ Title, URL, Snippet string }
 
 func Apply(p *sdk.Plugin) error {
 	backend := strings.ToLower(p.ConfigString("backend", "duckduckgo"))
 	maxResults := p.ConfigInt("max_results", 5)
-	client := &http.Client{Timeout: time.Duration(p.ConfigInt("timeout_seconds", 20)) * time.Second}
+	allowInsecure := p.ConfigBool("allow_insecure", false)
+	client := &http.Client{Timeout: time.Duration(p.ConfigInt("timeout_seconds", 20)) * time.Second, CheckRedirect: sdk.RefuseRedirect}
 	var keyRef, base string
 	switch backend {
 	case "duckduckgo":
@@ -81,11 +85,14 @@ func Apply(p *sdk.Plugin) error {
 	search := func(c context.Context, q string, n int) ([]hit, error) {
 		key := ""
 		if keyRef != "" {
-			k, err := p.Secret(keyRef)
+			k, err := p.SecretValue(keyRef)
 			if err != nil {
 				return nil, err
 			}
 			key = k
+		}
+		if err := sdk.CheckCredentialURL(base, key != "", allowInsecure); err != nil {
+			return nil, err
 		}
 		var hits []hit
 		switch backend {

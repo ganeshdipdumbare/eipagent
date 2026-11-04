@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,6 +19,9 @@ func resetRedactions(t *testing.T) {
 	redactSet = map[string]struct{}{}
 	redactOrder = nil
 	redactSorted = nil
+	redactReplacer = nil
+	redactValues = map[string][]string{}
+	redactValueOrder = nil
 	redactEvictLogged = false
 	redactMu.Unlock()
 }
@@ -42,8 +46,14 @@ func TestRedactionEvictionKeepsNewSecrets(t *testing.T) {
 			t.Fatal("newest not registered")
 		}
 	}
-	if out := Redact(long); !strings.Contains(out, "[REDACTED]") {
-		t.Fatalf("long secret was evicted: %s", out)
+	for _, form := range []string{long, base64.StdEncoding.EncodeToString([]byte(long)), fmt.Sprintf("%x", []byte(long))} {
+		if out := Redact(form); !strings.Contains(out, "[REDACTED]") {
+			t.Fatalf("long secret form was evicted: %s", out)
+		}
+	}
+	// Re-registering a value refreshes it, so a busy secret is not evicted.
+	if !AddRedaction(long) {
+		t.Fatal("long secret re-register failed")
 	}
 	if Redact(oldest) != oldest {
 		t.Fatal("the oldest value was not evicted")
@@ -80,12 +90,16 @@ func TestRedactCoversEncodingsAndTypedValues(t *testing.T) {
 		t.Fatal("a 3-byte value can't be redacted and must say so")
 	}
 	quoted, _ := json.Marshal("token " + secret)
-	for name, in := range map[string]string{
+	forms := map[string]string{
 		"raw":    "key " + secret,
 		"json":   string(quoted),
 		"base64": base64.StdEncoding.EncodeToString([]byte(secret)),
-	} {
-		if out := Redact(in); strings.Contains(out, "pa") && strings.Contains(out, "word") {
+		"hex":    fmt.Sprintf("%x", []byte(secret)),
+		"hexup":  fmt.Sprintf("%X", []byte(secret)),
+		"url":    "key=" + url.QueryEscape(secret),
+	}
+	for name, in := range forms {
+		if out := Redact(in); !strings.Contains(out, "[REDACTED]") || strings.Contains(out, secret) {
 			t.Errorf("%s form not redacted: %s", name, out)
 		}
 	}

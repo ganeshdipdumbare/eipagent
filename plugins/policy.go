@@ -81,27 +81,44 @@ func Apply(p *sdk.Plugin) error {
 	}
 	requireSandbox, _ := rules["require_sandbox"].(bool)
 
+	check := &sdk.PolicyCheck{Model: func(c context.Context, model string) error {
+		if len(allowModels) > 0 && !match(allowModels, model) {
+			return fmt.Errorf("policy: model %s is not allowed", model)
+		}
+		return nil
+	}}
+	if err := p.Provide("policy", check); err != nil {
+		return err
+	}
+
 	var mu sync.Mutex
 	used := map[*sdk.RunState]int{}
 	p.WrapModel(func(c context.Context, req *sdk.ModelRequest, next sdk.ModelHandler) (*sdk.ModelResponse, error) {
 		if len(allowModels) > 0 && !match(allowModels, req.Model) {
 			return nil, fmt.Errorf("policy: model %s is not allowed", req.Model)
 		}
+		rs := req.Run
+		for rs != nil && rs.Parent != nil {
+			rs = rs.Parent
+		}
 		mu.Lock()
-		spent := used[req.Run]
+		spent := used[rs]
 		mu.Unlock()
-		if maxTokens > 0 && req.Run != nil && spent >= maxTokens {
+		if maxTokens > 0 && rs != nil && spent >= maxTokens {
 			return nil, fmt.Errorf("policy: token budget of %d per run exhausted", maxTokens)
 		}
 		resp, err := next(c, req)
-		if err == nil && req.Run != nil {
+		if err == nil && rs != nil {
 			mu.Lock()
-			used[req.Run] += resp.Usage.TotalTokens
+			used[rs] += resp.Usage.TotalTokens
 			mu.Unlock()
 		}
 		return resp, err
 	})
 	p.OnRunEnd(func(c context.Context, st *sdk.RunState, res *sdk.RunResult) error {
+		if st.Parent != nil {
+			return nil
+		}
 		mu.Lock()
 		delete(used, st)
 		mu.Unlock()
@@ -145,8 +162,13 @@ func Apply(p *sdk.Plugin) error {
 				return deny("high-risk tool needs full-access mode")
 			}
 		}
-		if requireSandbox && sandbox != "" && !strings.HasPrefix(sandbox, "sandbox:") {
-			return deny("shell and file tools must run in a sandbox (load workspace_sandbox)")
+		if requireSandbox && req.Tool != nil && !readonly {
+			if sandbox != "" && !strings.HasPrefix(sandbox, "sandbox:") {
+				return deny("shell and file tools must run in an isolated sandbox (load workspace_sandbox)")
+			}
+			if sandbox == "" && req.Tool.Meta["risk"] == "high" {
+				return deny("a high-risk tool without Meta.sandbox must run in an isolated sandbox")
+			}
 		}
 		return next(c, req)
 	})

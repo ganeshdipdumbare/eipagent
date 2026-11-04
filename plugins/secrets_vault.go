@@ -35,6 +35,7 @@ import (
 //	mount:       KV v2 mount ("secret"), prefix ("eipagent"), field ("value")
 //	paths:       explicit NAME -> "path#field" map
 //	ttl_seconds: cache lifetime (300)
+//	allow_insecure: allow a non-loopback http address (the Vault token is otherwise TLS-only)
 //	allow:       glob patterns of names that may be read
 //	             (grants or allow is required; there is no read-all default)
 //	grants:      {plugin instance: [names]}: when set, a plugin may read only
@@ -80,6 +81,10 @@ func Apply(p *sdk.Plugin) error {
 	ttl := time.Duration(p.ConfigInt("ttl_seconds", 300)) * time.Second
 	allow := p.ConfigStrings("allow")
 	grants := p.ConfigMap("grants")
+	allowInsecure := p.ConfigBool("allow_insecure", false)
+	if err := sdk.CheckCredentialURL(addr, true, allowInsecure); err != nil {
+		return fmt.Errorf("secrets_vault: %w", err)
+	}
 	if len(allow) == 0 && grants == nil {
 		// Never default to "every plugin may read everything in the mount".
 		return fmt.Errorf("secrets_vault: set grants (per plugin) or allow (name patterns)")
@@ -87,7 +92,7 @@ func Apply(p *sdk.Plugin) error {
 	if len(allow) == 0 {
 		allow = []string{"*"} // grants decide
 	}
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{Timeout: 10 * time.Second, CheckRedirect: sdk.RefuseRedirect}
 
 	token := func() (string, error) {
 		if tokenFile != "" {
@@ -95,12 +100,15 @@ func Apply(p *sdk.Plugin) error {
 			if err != nil {
 				return "", fmt.Errorf("vault token file: %v", err)
 			}
-			return strings.TrimSpace(string(b)), nil
+			t := strings.TrimSpace(string(b))
+			p.RegisterSecret(t)
+			return t, nil
 		}
 		t := os.Getenv(tokenEnv)
 		if t == "" {
 			return "", fmt.Errorf("vault token: %s is not set", tokenEnv)
 		}
+		p.RegisterSecret(t)
 		return t, nil
 	}
 	fetch := func(c context.Context, name string) (string, error) {

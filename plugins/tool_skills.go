@@ -45,7 +45,12 @@ func Apply(p *sdk.Plugin) error {
 				continue
 			}
 			dir := filepath.Join(d, e.Name())
-			raw, err := os.ReadFile(filepath.Join(dir, "SKILL.md"))
+			md, err := resolveSkillPath(dir, "SKILL.md")
+			if err != nil {
+				p.Logf("tool_skills: skipping %s: %v", dir, err)
+				continue
+			}
+			raw, err := os.ReadFile(md)
 			if err != nil {
 				continue
 			}
@@ -94,11 +99,9 @@ func Apply(p *sdk.Plugin) error {
 			if s == nil {
 				return "", fmt.Errorf("no skill %q", sdk.ArgString(args, "name"))
 			}
-			fpath := filepath.Clean(filepath.Join(s.dir, sdk.ArgString(args, "path")))
-			root, _ := filepath.Abs(s.dir)
-			abs, _ := filepath.Abs(fpath)
-			if !strings.HasPrefix(abs, root+string(filepath.Separator)) {
-				return "", fmt.Errorf("path escapes the skill folder")
+			abs, err := resolveSkillPath(s.dir, sdk.ArgString(args, "path"))
+			if err != nil {
+				return "", err
 			}
 			b, err := os.ReadFile(abs)
 			if err != nil {
@@ -111,6 +114,37 @@ func Apply(p *sdk.Plugin) error {
 		},
 	})
 	return nil
+}
+
+// resolveSkillPath returns the real path of a file under a skill folder,
+// refusing symlinks that point outside it. The lexical check alone is not
+// enough: a skill directory (often a cloned repo) can contain a symlink to
+// a host secret, and os.ReadFile follows it.
+func resolveSkillPath(dir, rel string) (string, error) {
+	rootAbs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", err
+	}
+	rootReal, err := filepath.EvalSymlinks(rootAbs)
+	if err != nil {
+		return "", fmt.Errorf("skill folder %s: %v", dir, err)
+	}
+	fpath := rel
+	if !filepath.IsAbs(fpath) {
+		fpath = filepath.Join(rootAbs, fpath)
+	}
+	fpath = filepath.Clean(fpath)
+	if fpath != rootAbs && !strings.HasPrefix(fpath, rootAbs+string(filepath.Separator)) {
+		return "", fmt.Errorf("path escapes the skill folder")
+	}
+	real, err := filepath.EvalSymlinks(fpath)
+	if err != nil {
+		return "", err
+	}
+	if real != rootReal && !strings.HasPrefix(real, rootReal+string(filepath.Separator)) {
+		return "", fmt.Errorf("path escapes the skill folder via a symlink")
+	}
+	return real, nil
 }
 
 func parse(raw, dir string) *skill {

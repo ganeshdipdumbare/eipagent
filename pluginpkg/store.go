@@ -86,6 +86,7 @@ func (p *Plugin) clone() *Plugin {
 		if v.Manifest != nil {
 			m := *v.Manifest
 			m.Permissions = append([]string(nil), v.Manifest.Permissions...)
+			m.Requires = append([]string(nil), v.Manifest.Requires...)
 			m.Inject = append([]string(nil), v.Manifest.Inject...)
 			m.Provides = append([]string(nil), v.Manifest.Provides...)
 			m.Secrets = append([]string(nil), v.Manifest.Secrets...)
@@ -371,6 +372,10 @@ func (s *Store) Enable(name, version string) error {
 		}
 	}
 	if err != nil {
+		var pe *os.PathError
+		if errors.As(err, &pe) {
+			return err // transient I/O, not an integrity failure
+		}
 		v.State, v.Reason = StateQuarantined, err.Error()
 		s.saveLocked()
 		s.audit("plugin.quarantine", map[string]any{"plugin": name, "version": version, "reason": v.Reason, "by": "store"})

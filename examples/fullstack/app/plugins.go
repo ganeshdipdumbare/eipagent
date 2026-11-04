@@ -103,13 +103,17 @@ func Apply(p *sdk.Plugin) error {
 // signingKey loads (or creates) the key this server signs UI plugins with.
 func signingKey(dir string) (ed25519.PrivateKey, string, error) {
 	path := filepath.Join(dir, "plugin-signing.key")
-	if b, err := os.ReadFile(path); err == nil {
+	b, err := os.ReadFile(path)
+	if err == nil {
 		sk, err := pluginpkg.ParsePrivateKey(string(b))
 		if err != nil {
 			return nil, "", err
 		}
-		pub, _ := os.ReadFile(path + ".pub")
-		return sk, string(pub), nil
+		pub := sk.Public().(ed25519.PublicKey)
+		return sk, pluginpkg.EncodePublicKey(pub), nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil, "", err
 	}
 	pub, priv, err := pluginpkg.GenerateKey()
 	if err != nil {
@@ -118,11 +122,24 @@ func signingKey(dir string) (ed25519.PrivateKey, string, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, "", err
 	}
-	if err := os.WriteFile(path, []byte(priv), 0o600); err != nil {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
 		return nil, "", err
 	}
-	os.WriteFile(path+".pub", []byte(pub), 0o644)
-	sk, _ := pluginpkg.ParsePrivateKey(priv)
+	if _, err := f.WriteString(priv); err != nil {
+		f.Close()
+		return nil, "", err
+	}
+	if err := f.Close(); err != nil {
+		return nil, "", err
+	}
+	if err := os.WriteFile(path+".pub", []byte(pub), 0o644); err != nil {
+		return nil, "", err
+	}
+	sk, err := pluginpkg.ParsePrivateKey(priv)
+	if err != nil {
+		return nil, "", err
+	}
 	return sk, pub, nil
 }
 

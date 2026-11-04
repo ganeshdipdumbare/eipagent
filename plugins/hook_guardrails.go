@@ -157,7 +157,7 @@ func Apply(p *sdk.Plugin) error {
 	})
 
 	p.AfterModel(func(c context.Context, sc *sdk.StepContext, resp *sdk.ModelResponse) error {
-		if len(resp.Message.ToolCalls) > 0 || resp.Message.Content == "" {
+		if resp.Message.Content == "" {
 			return nil
 		}
 		text, hit := check("output", resp.Message.Content)
@@ -165,7 +165,7 @@ func Apply(p *sdk.Plugin) error {
 		if hit == nil {
 			return nil
 		}
-		if hit.action == "retry" {
+		if hit.action == "retry" && len(resp.Message.ToolCalls) == 0 {
 			mu.Lock()
 			n := tries[sc.Run.ID]
 			if n < maxRetries {

@@ -168,7 +168,7 @@ func Apply(p *sdk.Plugin) error {
 			if x, ok := v.(string); ok {
 				s = x
 			}
-			val, err := p.Secret(s)
+			val, err := p.SecretValue(s)
 			if err != nil {
 				requeue(batch, fmt.Errorf("header %s: %v", k, err))
 				return

@@ -42,6 +42,7 @@ type wireRun struct {
 }
 
 type wireModelReq struct {
+	RunID          string         `json:"run_id,omitempty"`
 	CallID         string         `json:"call_id"`
 	Model          string         `json:"model"`
 	System         string         `json:"system,omitempty"`
@@ -70,9 +71,10 @@ type wireChunk struct {
 }
 
 type wireToolCall struct {
-	Name string         `json:"name"`
-	Args map[string]any `json:"args"`
-	Info sdk.RunInfo    `json:"info"`
+	RunID string         `json:"run_id,omitempty"`
+	Name  string         `json:"name"`
+	Args  map[string]any `json:"args"`
+	Info  sdk.RunInfo    `json:"info"`
 }
 
 type wireHello struct {
@@ -93,6 +95,7 @@ type wireSecretReq struct {
 }
 
 type wireHTTPReq struct {
+	RunID  string              `json:"run_id,omitempty"`
 	Method string              `json:"method"`
 	URL    string              `json:"url"`
 	Header map[string][]string `json:"header,omitempty"`

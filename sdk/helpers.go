@@ -12,8 +12,10 @@ import (
 // ---- Run info carried on context.Context (tools read who/what is running) ----
 
 type runInfoKey struct{}
+type runStateKey struct{}
 
 type RunInfo struct {
+	RunID  string
 	Thread string
 	User   string
 	Roles  []string
@@ -29,6 +31,17 @@ func WithRunInfo(ctx context.Context, ri RunInfo) context.Context {
 func RunInfoFrom(ctx context.Context) RunInfo {
 	ri, _ := ctx.Value(runInfoKey{}).(RunInfo)
 	return ri
+}
+
+// WithRunState carries the active RunState on a tool context (the loop
+// sets it). Subagents use it to share the parent's budgets and limits.
+func WithRunState(ctx context.Context, st *RunState) context.Context {
+	return context.WithValue(ctx, runStateKey{}, st)
+}
+
+func RunStateFrom(ctx context.Context) *RunState {
+	st, _ := ctx.Value(runStateKey{}).(*RunState)
+	return st
 }
 
 func UserFrom(ctx context.Context) string   { return RunInfoFrom(ctx).User }
@@ -125,6 +138,18 @@ func (c *Plugin) Secret(ref string) (string, error) {
 		return "", fmt.Errorf("%s: no \"secrets\" service to resolve %s (load secrets_env)", c.Name, ref)
 	}
 	return s.Get(context.Background(), c.PluginName(), strings.TrimPrefix(ref, "secret://"))
+}
+
+// SecretValue is Secret for a value that is known to be a credential.
+// Unlike Secret it also registers a literal (non-secret://) value for
+// redaction, so a key written directly in config can't appear in logs,
+// traces or audit records.
+func (c *Plugin) SecretValue(ref string) (string, error) {
+	v, err := c.Secret(ref)
+	if err == nil && v != "" {
+		AddRedaction(v)
+	}
+	return v, err
 }
 
 // ReadSSE parses a server-sent-events stream, calling fn per event.

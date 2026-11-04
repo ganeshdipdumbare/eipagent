@@ -55,6 +55,7 @@ type record struct {
 	mod     time.Time
 	inject  []string
 	perms   []string
+	secrets []string
 	config  map[string]any
 	apply   func(*sdk.Plugin) error
 	ctx     *sdk.Plugin
@@ -184,6 +185,7 @@ type meta struct {
 	imports     []string
 	inject      []string
 	permissions []string
+	secrets     []string
 }
 
 func parseMeta(name string, src []byte) (*meta, error) {
@@ -199,6 +201,26 @@ func parseMeta(name string, src []byte) (*meta, error) {
 		p, _ := strconv.Unquote(imp.Path.Value)
 		m.imports = append(m.imports, p)
 	}
+	// Secret names the source declares or references with secret://. File
+	// plugins may only resolve these (the core enforces it in boundSecrets).
+	seen := map[string]bool{}
+	addSecret := func(name string) {
+		name = strings.TrimSpace(name)
+		if name == "" || seen[name] {
+			return
+		}
+		seen[name] = true
+		m.secrets = append(m.secrets, name)
+	}
+	ast.Inspect(f, func(n ast.Node) bool {
+		if bl, ok := n.(*ast.BasicLit); ok && bl.Kind == token.STRING {
+			v, _ := strconv.Unquote(bl.Value)
+			for _, name := range secretRefs(v) {
+				addSecret(name)
+			}
+		}
+		return true
+	})
 	for _, d := range f.Decls {
 		gd, ok := d.(*ast.GenDecl)
 		if !ok || gd.Tok != token.VAR {
@@ -207,7 +229,7 @@ func parseMeta(name string, src []byte) (*meta, error) {
 		for _, sp := range gd.Specs {
 			vs := sp.(*ast.ValueSpec)
 			for i, id := range vs.Names {
-				if i >= len(vs.Values) || (id.Name != "Requires" && id.Name != "Inject" && id.Name != "Permissions") {
+				if i >= len(vs.Values) || (id.Name != "Requires" && id.Name != "Inject" && id.Name != "Permissions" && id.Name != "Secrets") {
 					continue
 				}
 				lit, ok := vs.Values[i].(*ast.CompositeLit)
@@ -223,15 +245,47 @@ func parseMeta(name string, src []byte) (*meta, error) {
 					s, _ := strconv.Unquote(bl.Value)
 					vals = append(vals, s)
 				}
-				if id.Name == "Requires" || id.Name == "Inject" { // Inject: the pre-v0.4 name
+				switch id.Name {
+				case "Requires", "Inject": // Inject: the pre-v0.4 name
 					m.inject = append(m.inject, vals...)
-				} else {
+				case "Secrets":
+					for _, v := range vals {
+						addSecret(v)
+					}
+				default:
 					m.permissions = vals
 				}
 			}
 		}
 	}
 	return m, nil
+}
+
+// SecretRefs extracts NAME from every "secret://NAME" in s. Lint and
+// the runtime grant scanner share it so they cannot disagree.
+func SecretRefs(s string) []string { return secretRefs(s) }
+
+func secretRefs(s string) []string {
+	var out []string
+	for {
+		i := strings.Index(s, "secret://")
+		if i < 0 {
+			return out
+		}
+		s = s[i+len("secret://"):]
+		j := 0
+		for j < len(s) {
+			c := s[j]
+			if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-' || c == '.') {
+				break
+			}
+			j++
+		}
+		if j > 0 {
+			out = append(out, s[:j])
+		}
+		s = s[j:]
+	}
 }
 
 func (e *Engine) compile(spec PluginSpec) (*record, error) {
@@ -289,6 +343,7 @@ func (e *Engine) compile(spec PluginSpec) (*record, error) {
 		return nil, err
 	}
 	rec.inject = m.inject
+	rec.secrets = m.secrets
 	rec.perms = e.pol.grant(name, m.permissions)
 	if err := checkImports(use, m.imports, rec.perms); err != nil {
 		if len(rec.perms) < len(m.permissions) {
@@ -340,6 +395,7 @@ func (e *Engine) loadLocked(spec PluginSpec, admin bool) error {
 	name := spec.Name()
 	old := e.recs[name]
 	if old != nil && old.locked && !admin {
+		e.audit("plugin.refused", &record{name: name, spec: spec}, ErrLocked)
 		return fmt.Errorf("%s: %w", name, ErrLocked)
 	}
 	rec, err := e.compile(spec)
@@ -371,6 +427,7 @@ func (e *Engine) loadLocked(spec PluginSpec, admin bool) error {
 			failed = fmt.Errorf("left %s: missing %v", rec.state, e.missing(rec))
 		}
 		e.disposeLocked(rec)
+		old.mod = rec.mod
 		old.state, old.err = Pending, nil
 		e.recs[name] = old
 		e.reconcileLocked()
@@ -399,6 +456,7 @@ func (e *Engine) Unload(name string) error {
 		return fmt.Errorf("plugin %q not loaded", name)
 	}
 	if old.locked {
+		e.audit("plugin.refused", old, ErrLocked)
 		return fmt.Errorf("%s: %w", name, ErrLocked)
 	}
 	e.disposeLocked(old)
@@ -493,6 +551,8 @@ func (e *Engine) startLocked(r *record) {
 	r.optSeen = e.optional(r)
 	ctx := e.root.Fork(r.name)
 	ctx.Trust(trustKey, r.order, r.locked)
+	ctx.SetBuiltin(trustKey, r.kind == "embedded")
+	ctx.SetSecretPolicy(trustKey, r.secrets, r.kind == "file")
 	ctx.Config = r.config
 	if r.spec.Priority != nil {
 		ctx.SetPriority(*r.spec.Priority)

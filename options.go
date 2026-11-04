@@ -120,6 +120,7 @@ func WithoutDefaults() Option { return func(c *config) { c.noDefaults = true } }
 
 type runOptions struct {
 	model, system       string
+	runID               string
 	maxSteps, maxTokens int
 	temperature         *float64
 	toolChoice          string
@@ -134,11 +135,16 @@ type runOptions struct {
 	tools               []sdk.Tool
 	result              **Result
 	onStep              func(*sdk.RunState) // threads: save before each model call (WithSaveEachStep)
+	checkpoint          func() error        // threads: save before tools too
 }
 
 type RunOption func(*runOptions)
 
-func Model(m string) RunOption        { return func(r *runOptions) { r.model = m } }
+func Model(m string) RunOption { return func(r *runOptions) { r.model = m } }
+
+// withRunID carries the host-assigned run id into the box so trusted
+// host hooks can key budgets and audit records to the real run.
+func withRunID(id string) RunOption   { return func(r *runOptions) { r.runID = id } }
 func System(s string) RunOption       { return func(r *runOptions) { r.system = s } }
 func MaxSteps(n int) RunOption        { return func(r *runOptions) { r.maxSteps = n } }
 func MaxTokens(n int) RunOption       { return func(r *runOptions) { r.maxTokens = n } }

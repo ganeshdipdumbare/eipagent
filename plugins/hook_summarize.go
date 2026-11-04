@@ -87,8 +87,12 @@ func Apply(p *sdk.Plugin) error {
 		if !ok {
 			return fmt.Errorf("hook_summarize: no provider model/%s", prov)
 		}
-		resp, err := mp.Generate(c, &sdk.ModelRequest{Model: m, Provider: prov, ModelID: id, System: prompt,
-			Messages: []sdk.Message{{Role: sdk.RoleUser, Content: b.String()}}})
+		base := func(c context.Context, req *sdk.ModelRequest) (*sdk.ModelResponse, error) {
+			return mp.Generate(c, req)
+		}
+		resp, err := p.Snapshot().ModelChain(base)(c, &sdk.ModelRequest{Model: m, Provider: prov, ModelID: id, System: prompt,
+			Messages: []sdk.Message{{Role: sdk.RoleUser, Content: sdk.Redact(b.String())}},
+			Run:      sc.Run, Thread: sc.Run.Thread, User: sc.Run.User, Step: sc.Request.Step})
 		if err != nil {
 			return fmt.Errorf("hook_summarize: %w", err)
 		}

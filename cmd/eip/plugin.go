@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -357,7 +358,9 @@ func pluginPin(args []string) error {
 	lockPath := fs.String("lock", "eip.lock", "lock file to write")
 	fs.Parse(args)
 	lock := &engine.Lock{Plugins: map[string]string{}}
-	engine.ReadJSON(*lockPath, lock)
+	if err := engine.ReadJSON(*lockPath, lock); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
 	if lock.Plugins == nil {
 		lock.Plugins = map[string]string{}
 	}
@@ -442,14 +445,17 @@ func pluginLifecycle(sub string, args []string) error {
 		if err := need(1, "[-sha256 X] [-approve] PKG"); err != nil {
 			return err
 		}
-		pkg, err := pluginpkg.OpenFile(a[0])
+		data, err := os.ReadFile(a[0])
+		if err != nil {
+			return err
+		}
+		pkg, err := pluginpkg.Open(data)
 		if err != nil {
 			return err
 		}
 		if *sum != "" && !strings.EqualFold(*sum, pkg.SHA256) {
 			return fmt.Errorf("package sha256 %s does not match -sha256 %s", pkg.SHA256, *sum)
 		}
-		data, _ := os.ReadFile(a[0])
 		v, err := st.Install(data, *by)
 		if err != nil {
 			return err

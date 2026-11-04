@@ -27,7 +27,7 @@ type Facts struct {
 	Services        []string // literal names passed to Service / HasService
 	Provides        []string // literal names passed to Provide
 	Tools           []string // literal Name of tools passed to AddTool
-	SecretRefs      []string // "secret://NAME" literals
+	SecretRefs      []string // "secret://NAME" literals and var Secrets names
 	Hooks           []string // hook methods called (WrapModel, WrapTool, OnRunStart ...)
 	Background      bool     // calls Effect (timers, listeners, connections)
 	RuntimeTools    bool     // calls AddTool with names only known at runtime
@@ -82,6 +82,12 @@ func Analyze(filename string, src []byte) (*Facts, error) {
 						}
 					case "Permissions":
 						fa.Permissions = stringList(vs.Values[i])
+					case "Secrets":
+						for _, name := range stringList(vs.Values[i]) {
+							if !contains(fa.SecretRefs, name) {
+								fa.SecretRefs = append(fa.SecretRefs, name)
+							}
+						}
 					}
 				}
 			}
@@ -105,8 +111,10 @@ func Analyze(filename string, src []byte) (*Facts, error) {
 				add(&fa.OSSymbols, n.Sel.Name)
 			}
 		case *ast.BasicLit:
-			if s, ok := strLit(n); ok && strings.HasPrefix(s, "secret://") {
-				add(&fa.SecretRefs, strings.TrimPrefix(s, "secret://"))
+			if s, ok := strLit(n); ok {
+				for _, ref := range engine.SecretRefs(s) {
+					add(&fa.SecretRefs, ref)
+				}
 			}
 		case *ast.CallExpr:
 			sel, ok := n.Fun.(*ast.SelectorExpr)
@@ -300,11 +308,17 @@ func (s *Source) Code() []byte { return s.Files[s.Name+".go"] }
 
 // ReadDir reads a plugin source directory, or a single .go file.
 func ReadDir(path string) (*Source, error) {
-	st, err := os.Stat(path)
+	st, err := os.Lstat(path)
 	if err != nil {
 		return nil, err
 	}
+	if st.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("%s: refusing a symlink", path)
+	}
 	if !st.IsDir() {
+		if st.Size() > maxPackage {
+			return nil, fmt.Errorf("%s: file larger than %d bytes", path, maxPackage)
+		}
 		b, err := os.ReadFile(path)
 		if err != nil {
 			return nil, err
@@ -321,9 +335,24 @@ func ReadDir(path string) (*Source, error) {
 	if err != nil {
 		return nil, err
 	}
+	total := int64(0)
 	for _, e := range ents {
 		if e.IsDir() || strings.HasPrefix(e.Name(), ".") || strings.HasSuffix(e.Name(), "_test.go") || strings.HasSuffix(e.Name(), ".eip") || e.Name() == SignatureFile {
 			continue
+		}
+		if e.Type()&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf("%s: refusing symlink %s in a plugin package", path, e.Name())
+		}
+		info, err := e.Info()
+		if err != nil {
+			return nil, err
+		}
+		if info.Size() > maxPackage {
+			return nil, fmt.Errorf("%s: file larger than %d bytes", e.Name(), maxPackage)
+		}
+		total += info.Size()
+		if total > maxPackage {
+			return nil, fmt.Errorf("%s: package contents larger than %d bytes", path, maxPackage)
 		}
 		b, err := os.ReadFile(filepath.Join(path, e.Name()))
 		if err != nil {
@@ -507,6 +536,12 @@ func Lint(src *Source) *Report {
 			add(Warning, "tools", "manifest lists tool %q but no literal AddTool for it was found", t)
 		}
 	}
+	if fa.RuntimeTools && !m.Dynamic {
+		add(Error, "runtime-name", "source registers tools with names only known at runtime; set \"dynamic\": true in plugin.json or use literal names")
+	}
+	if fa.RuntimeProvides && !m.Dynamic {
+		add(Error, "runtime-name", "source provides services with names only known at runtime; set \"dynamic\": true in plugin.json or use literal names")
+	}
 	for _, ref := range fa.SecretRefs {
 		if secretRe.MatchString(ref) && !contains(m.Secrets, ref) {
 			add(Error, "secret-ref", "source references secret://%s but the manifest doesn't list it in secrets", ref)
@@ -564,6 +599,11 @@ func sameSet(a, b []string) bool {
 			return false
 		}
 	}
+	for _, x := range b {
+		if !contains(a, x) {
+			return false
+		}
+	}
 	return true
 }
 
@@ -574,7 +614,7 @@ func Infer(name string, fa *Facts) *Manifest {
 	if desc == "" {
 		desc = name + " plugin"
 	}
-	return &Manifest{Schema: 1, Name: name, Version: "0.1.0", Description: desc,
+	return &Manifest{Schema: 1, Name: name, Version: "0.1.0", Description: desc, Dynamic: fa.RuntimeTools || fa.RuntimeProvides,
 		Permissions: fa.Permissions, Requires: canonical(fa.Inject), Provides: literalOnly(fa.Provides), Tools: fa.Tools,
 		Secrets: validSecrets(fa.SecretRefs), EIPAgent: ">=" + sdkVersion()}
 }

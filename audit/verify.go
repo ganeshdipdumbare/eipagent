@@ -47,6 +47,40 @@ func VerifyKeyed(path string, key []byte) (int, error) {
 	return n, nil
 }
 
+// VerifyKeyedWithAnchor verifies a keyed log against a head copied
+// off-host (for example the last record delivered to audit_http, or a
+// head archived by a control plane). Unlike the local .head file, the
+// anchor cannot be rolled back by an attacker who can rewrite the log.
+// It fails when the log's last sequence/hash is not exactly the anchor.
+func VerifyKeyedWithAnchor(path string, key []byte, anchor Head) (int, error) {
+	if len(key) == 0 {
+		return 0, fmt.Errorf("audit: empty key")
+	}
+	if anchor.Seq == 0 || anchor.Hash == "" {
+		return 0, fmt.Errorf("audit: empty external anchor")
+	}
+	n, last, err := verifyChain(path, key)
+	if err != nil {
+		return n, err
+	}
+	if n != anchor.Seq || last != anchor.Hash {
+		return n, fmt.Errorf("audit: %s ends at seq %d (%s), but the external anchor is seq %d (%s): the log was rolled back", path, n, shortHash(last), anchor.Seq, shortHash(anchor.Hash))
+	}
+	if anchor.MAC != "" && !hmac.Equal([]byte(HeadMAC(key, anchor.Seq, anchor.Hash)), []byte(anchor.MAC)) {
+		return n, fmt.Errorf("audit: external anchor mac is invalid")
+	}
+	return n, nil
+}
+
+// DecodeHead reads a head checkpoint from JSON, as written to <log>.head.
+func DecodeHead(b []byte) (Head, error) {
+	var h Head
+	if err := json.Unmarshal(b, &h); err != nil {
+		return Head{}, fmt.Errorf("audit: head: %w", err)
+	}
+	return h, nil
+}
+
 // MissingHeadError says a keyed log has no <log>.head checkpoint. The
 // log still verifies; callers may report this as a warning rather than a
 // failure (it means the log was written before head files existed, or
@@ -56,9 +90,6 @@ type MissingHeadError struct{ Path string }
 func (e *MissingHeadError) Error() string {
 	return fmt.Sprintf("audit: %s: no head checkpoint (the last entries can't be checked for truncation)", e.Path)
 }
-
-// Warning marks this error as advisory.
-func (e *MissingHeadError) Warning() {}
 
 // Head is the checkpoint audit_jsonl writes after each append.
 type Head struct {

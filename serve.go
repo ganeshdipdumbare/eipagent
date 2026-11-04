@@ -23,6 +23,11 @@ import (
 // (bridge_llm, bridge_secrets, host.http, bridge_tools), so API keys
 // and other secrets never enter the sandbox.
 func Serve(ctx context.Context, r io.Reader, w io.Writer, opts ...Option) error {
+	// Keep plugin prints off the JSON-RPC stream. The caller's writer was
+	// captured already; redirect the global stdout for the process.
+	oldStdout := os.Stdout
+	os.Stdout = os.Stderr
+	defer func() { os.Stdout = oldStdout }()
 	conn := rpc.New(r, w, nil)
 	go conn.Serve()
 	defer conn.Close()
@@ -96,6 +101,7 @@ func Serve(ctx context.Context, r io.Reader, w io.Writer, opts ...Option) error 
 			return th.Resume(c, wr.Decisions...)
 		}
 		var ro []RunOption
+		ro = append(ro, withRunID(wr.RunID))
 		if wr.Streaming {
 			ro = append(ro, OnEvent(func(e sdk.Event) { conn.Notify("agent.event", wireEvent{RunID: wr.RunID, Event: e}) }))
 		}
@@ -133,7 +139,7 @@ func Serve(ctx context.Context, r io.Reader, w io.Writer, opts ...Option) error 
 }
 
 func stateFromWire(wr wireRun) *sdk.RunState {
-	st := &sdk.RunState{Thread: wr.Thread, User: wr.User, Roles: wr.Roles, Model: wr.Model, System: wr.System,
+	st := &sdk.RunState{ID: wr.RunID, Thread: wr.Thread, User: wr.User, Roles: wr.Roles, Model: wr.Model, System: wr.System,
 		Messages: wr.Messages, MaxSteps: wr.MaxSteps, StopOnTools: wr.StopOnTools, ToolChoice: wr.ToolChoice,
 		ResponseSchema: wr.ResponseSchema, ResponseName: wr.ResponseName, Temperature: wr.Temperature,
 		MaxTokens: wr.MaxTokens, Pending: wr.Pending, Decisions: wr.Decisions, Values: wr.Values}
@@ -175,7 +181,11 @@ func bridgeLLM(conn *rpc.Conn, chunks *chunkRouter, providers []string) engine.P
 			err := ctx.Provide("model/"+name, &sdk.Provider{Name: "bridge:" + name, Capabilities: map[string]bool{"streaming": true, "tools": true, "structured_output": true},
 				Generate: func(c context.Context, req *sdk.ModelRequest) (*sdk.ModelResponse, error) {
 					id := fmt.Sprintf("m%d", callSeq.Add(1))
-					wr := wireModelReq{CallID: id, Model: req.Model, System: req.System, Messages: req.Messages, Tools: toWireTools(req.Tools),
+					runID := ""
+					if req.Run != nil {
+						runID = req.Run.ID
+					}
+					wr := wireModelReq{RunID: runID, CallID: id, Model: req.Model, System: req.System, Messages: req.Messages, Tools: toWireTools(req.Tools),
 						ToolChoice: req.ToolChoice, ResponseSchema: req.ResponseSchema, ResponseName: req.ResponseName,
 						Temperature: req.Temperature, MaxTokens: req.MaxTokens, Extra: req.Extra, Thread: req.Thread, User: req.User, Step: req.Step,
 						Stream: req.Stream != nil}
@@ -204,7 +214,8 @@ func bridgeTools(conn *rpc.Conn, tools []wireTool) engine.Plugin {
 			ctx.AddTool(sdk.Tool{Name: name, Description: t.Description, Schema: t.Schema, Meta: t.Meta,
 				Run: func(c context.Context, args map[string]any) (string, error) {
 					var out string
-					err := conn.Call(c, "host.tool", wireToolCall{Name: name, Args: args, Info: sdk.RunInfoFrom(c)}, &out)
+					info := sdk.RunInfoFrom(c)
+					err := conn.Call(c, "host.tool", wireToolCall{RunID: info.RunID, Name: name, Args: args, Info: info}, &out)
 					if err != nil && strings.HasPrefix(err.Error(), "rpc: ") {
 						return "", sdk.Fatal(err)
 					}
@@ -234,10 +245,13 @@ type hostTransport struct{ conn *rpc.Conn }
 func (t *hostTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	var body []byte
 	if req.Body != nil {
-		b, err := io.ReadAll(req.Body)
+		b, err := io.ReadAll(io.LimitReader(req.Body, maxBrokerBody+1))
 		req.Body.Close()
 		if err != nil {
 			return nil, err
+		}
+		if len(b) > maxBrokerBody {
+			return nil, fmt.Errorf("sandbox egress: request body is over %d bytes", maxBrokerBody)
 		}
 		body = b
 	}
@@ -246,7 +260,8 @@ func (t *hostTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		h["Host"] = []string{req.Host}
 	}
 	var out wireHTTPResp
-	if err := t.conn.Call(req.Context(), "host.http", wireHTTPReq{Method: req.Method, URL: req.URL.String(), Header: h, Body: body}, &out); err != nil {
+	info := sdk.RunInfoFrom(req.Context())
+	if err := t.conn.Call(req.Context(), "host.http", wireHTTPReq{RunID: info.RunID, Method: req.Method, URL: req.URL.String(), Header: h, Body: body}, &out); err != nil {
 		return nil, err
 	}
 	return &http.Response{Status: fmt.Sprintf("%d %s", out.Status, http.StatusText(out.Status)), StatusCode: out.Status,

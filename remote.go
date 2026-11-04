@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ganeshdipdumbare/eipagent/engine"
+	"github.com/ganeshdipdumbare/eipagent/plugins"
 	"github.com/ganeshdipdumbare/eipagent/rpc"
 	"github.com/ganeshdipdumbare/eipagent/sdk"
 )
@@ -35,8 +36,16 @@ type RunIn struct {
 	PluginDirs     []string            // uploaded to the box (plugins travel as source)
 	HostPlugins    []engine.PluginSpec // extra plugins that stay on the host (e.g. mw_retry for model calls)
 	NoBridgeTools  bool                // don't expose host Go tools to the box
+	BridgedTools   []string            // host tools the box may call (nil = all; [] = none)
 	SecretHosts    map[string][]string // secret name -> rules for where its placeholder may be sent: "host", "*.host", "GET host/path/*"
 	Egress         []string            // rules for where the box may go without secrets, same form (none by default)
+	// AllowUnsafeLocal permits the "local" provider for WithRunIn. It is
+	// not an isolation boundary: the "box" is a host process that can read
+	// host files (including credentials). Use only for development.
+	AllowUnsafeLocal bool
+	// AllowPrivateEgress lets the host broker reach loopback/RFC1918/
+	// link-local addresses on behalf of the box. Off by default (SSRF).
+	AllowPrivateEgress bool
 }
 
 // WithRunIn starts the agent inside a sandbox; the API is unchanged.
@@ -45,14 +54,15 @@ func WithRunIn(r RunIn) Option { return func(c *config) { c.runIn = &r } }
 func withoutProviderAutoload() Option { return func(c *config) { c.noProviderAuto = true } }
 
 type remote struct {
-	host   *Agent
-	box    *sdk.Sandbox
-	proc   *sdk.Process
-	conn   *rpc.Conn
-	mu     sync.Mutex
-	subs   map[string]func(sdk.Event)
-	seq    int
-	broker *broker
+	host    *Agent
+	box     *sdk.Sandbox
+	proc    *sdk.Process
+	conn    *rpc.Conn
+	mu      sync.Mutex
+	subs    map[string]func(sdk.Event)
+	runs    map[string]*sdk.RunState
+	runSeen map[string]time.Time
+	broker  *broker
 
 	// What start needs to make a box again after one exits.
 	prov      *sdk.SandboxProvider
@@ -67,6 +77,80 @@ type remote struct {
 // exited; the next run starts a new box.
 var errBoxExited = errors.New("eipagent: the agent in the sandbox exited (see [box] logs); the next run starts a new sandbox")
 
+var errRunExpired = errors.New("eipagent: sandbox run expired")
+
+// boxPluginSecrets builds the secret grants the host will enforce for
+// plugins running in the box. The box cannot be trusted to declare its
+// own grants, so the host derives them from the same sources it uploads.
+func boxPluginSecrets(specs []engine.PluginSpec, dirs []string) map[string][]string {
+	out := map[string][]string{}
+	seen := map[string]bool{}
+	add := func(spec engine.PluginSpec) {
+		name := sdk.CanonicalPlugin(spec.Name())
+		if seen[name] {
+			return
+		}
+		seen[name] = true
+		var refs []string
+		collectConfigSecrets(spec.Config, &refs)
+		use := sdk.CanonicalPlugin(spec.Use)
+		if src := readBoxPluginSource(spec.Use, dirs); src != nil {
+			refs = append(refs, engine.SecretRefs(string(src))...)
+		}
+		_ = use
+		out[name] = dedupStrings(refs)
+	}
+	for _, spec := range specs {
+		add(spec)
+	}
+	for _, use := range autoPlugins {
+		add(engine.PluginSpec{Use: use})
+	}
+	return out
+}
+
+func readBoxPluginSource(use string, dirs []string) []byte {
+	for _, name := range []string{use, sdk.CanonicalPlugin(use)} {
+		for _, dir := range dirs {
+			if b, err := os.ReadFile(filepath.Join(dir, name+".go")); err == nil {
+				return b
+			}
+		}
+		if b, err := plugins.FS.ReadFile(name + ".go"); err == nil {
+			return b
+		}
+	}
+	return nil
+}
+
+func collectConfigSecrets(v any, out *[]string) {
+	switch x := v.(type) {
+	case string:
+		*out = append(*out, engine.SecretRefs(x)...)
+	case map[string]any:
+		for _, e := range x {
+			collectConfigSecrets(e, out)
+		}
+	case []any:
+		for _, e := range x {
+			collectConfigSecrets(e, out)
+		}
+	}
+}
+
+func dedupStrings(in []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, s := range in {
+		if s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	return out
+}
+
 func newRemote(cfg *config) (*Agent, error) {
 	ri := cfg.runIn
 	if ri.Binary == "" {
@@ -74,6 +158,9 @@ func newRemote(cfg *config) (*Agent, error) {
 	}
 	if ri.Provider == "" {
 		ri.Provider = "docker"
+	}
+	if ri.Provider == "local" && !ri.AllowUnsafeLocal {
+		return nil, errors.New("eipagent: RunIn.Provider \"local\" is not an isolation boundary (the box is a host process that can read host files); use docker/microsandbox or set RunIn.AllowUnsafeLocal for development")
 	}
 	// Host side: model provider + keys, sandbox provider, host-only tools.
 	hostCfg := *cfg
@@ -139,14 +226,22 @@ func newRemote(cfg *config) (*Agent, error) {
 	if !ok {
 		return fail(fmt.Errorf("eipagent: no sandbox/%s provider on the host", ri.Provider))
 	}
-	r := &remote{host: host, prov: prov, ri: ri, hostTools: cfg.tools, subs: map[string]func(sdk.Event){},
+	r := &remote{host: host, prov: prov, ri: ri, hostTools: cfg.tools, subs: map[string]func(sdk.Event){}, runs: map[string]*sdk.RunState{}, runSeen: map[string]time.Time{},
 		configs: map[string]any{"eip/profile.json": prof, "eip/policy.json": pol, "eip/eip.lock": lock},
 		uploads: map[string]string{ri.Binary: "eip/eip"}}
 	r.broker, _ = newBroker(host, ri) // rules checked above
-	r.broker.setCallers(append(append([]engine.PluginSpec{}, prof.Plugins...), pol.Require...))
+	boxAll := append(append([]engine.PluginSpec{}, prof.Plugins...), pol.Require...)
+	r.broker.setCallers(boxAll)
+	dirsForSource := append(append([]string{}, ri.PluginDirs...), cfg.dirs...)
+	r.broker.setSecretGrants(boxPluginSecrets(boxAll, dirsForSource))
 	for _, d := range append(append([]string{}, ri.PluginDirs...), cfg.dirs...) {
 		files, _ := filepath.Glob(filepath.Join(d, "*.go"))
 		for _, f := range files {
+			// A symlinked source could copy a host secret into the box.
+			if fi, err := os.Lstat(f); err != nil || fi.Mode()&os.ModeSymlink != 0 {
+				r.host.eng.Root().Logf("eipagent: skipping symlinked plugin source %s", f)
+				continue
+			}
 			r.uploads[f] = "eip/plugins/" + filepath.Base(f)
 		}
 	}
@@ -270,6 +365,19 @@ func (r *remote) call(ctx context.Context, method string, params, out any) error
 }
 
 func (r *remote) handle(noTools bool, hostTools []sdk.Tool) {
+	if !noTools && r.ri.BridgedTools != nil {
+		allowed := map[string]bool{}
+		for _, n := range r.ri.BridgedTools {
+			allowed[n] = true
+		}
+		var kept []sdk.Tool
+		for _, t := range hostTools {
+			if allowed[t.Name] {
+				kept = append(kept, t)
+			}
+		}
+		hostTools = kept
+	}
 	conn := r.conn // this box's connection; a restarted box gets its own
 	conn.Handle("host.hello", func(context.Context, json.RawMessage) (any, error) {
 		snap := r.host.eng.Root().Snapshot()
@@ -290,10 +398,22 @@ func (r *remote) handle(noTools bool, hostTools []sdk.Tool) {
 		if err := json.Unmarshal(raw, &wr); err != nil {
 			return nil, err
 		}
+		st := r.runState(wr.RunID)
+		if st == nil {
+			// A run started inside the box (a scheduled job or webhook) has
+			// no host-issued identity. Accept it for model calls, record it,
+			// and let host policy/budgets apply to this run id. Host tool
+			// calls stay unavailable to such runs (see host.tool).
+			st = &sdk.RunState{ID: wr.RunID, Thread: wr.Thread, User: wr.User, Model: wr.Model, Values: map[string]any{}}
+			if !r.setRun(st) {
+				return nil, fmt.Errorf("host.llm: too many live sandbox runs")
+			}
+		}
 		snap := r.host.eng.Root().Snapshot()
+		st.Model = wr.Model
 		req := &sdk.ModelRequest{Model: wr.Model, System: wr.System, Messages: wr.Messages, ToolChoice: wr.ToolChoice,
 			ResponseSchema: wr.ResponseSchema, ResponseName: wr.ResponseName, Temperature: wr.Temperature, MaxTokens: wr.MaxTokens,
-			Extra: wr.Extra, Thread: wr.Thread, User: wr.User, Step: wr.Step}
+			Extra: wr.Extra, Thread: st.Thread, User: st.User, Step: wr.Step, Run: st}
 		for _, t := range wr.Tools {
 			req.Tools = append(req.Tools, sdk.Tool{Name: t.Name, Description: t.Description, Schema: t.Schema, Meta: t.Meta})
 		}
@@ -330,12 +450,59 @@ func (r *remote) handle(noTools bool, hostTools []sdk.Tool) {
 		if err := json.Unmarshal(raw, &call); err != nil {
 			return nil, err
 		}
-		for _, t := range hostTools {
-			if t.Name == call.Name && !noTools {
-				return t.Run(sdk.WithRunInfo(c, call.Info), call.Args)
+		if noTools {
+			return nil, fmt.Errorf("host tools are disabled for this sandbox")
+		}
+		st := r.runState(call.RunID)
+		if st == nil {
+			return nil, fmt.Errorf("host.tool: unknown run %q (the box must start a run first)", call.RunID)
+		}
+		var tool *sdk.Tool
+		for i := range hostTools {
+			if hostTools[i].Name == call.Name {
+				tool = &hostTools[i]
+				break
 			}
 		}
-		return nil, fmt.Errorf("no host tool %q", call.Name)
+		if tool == nil {
+			return nil, fmt.Errorf("no host tool %q", call.Name)
+		}
+		info := sdk.RunInfo{RunID: st.ID, Thread: st.Thread, User: st.User, Roles: st.Roles, Step: call.Info.Step,
+			CallID: call.Info.CallID, Model: st.Model}
+		args, _ := sdk.RedactValue(call.Args).(map[string]any)
+		if args == nil {
+			args = call.Args
+		}
+		snap := r.host.eng.Root().Snapshot()
+		req := &sdk.ToolRequest{Call: sdk.ToolCall{ID: info.CallID, Name: call.Name, Args: args},
+			Tool: tool, Thread: st.Thread, User: st.User, Step: info.Step, Run: st}
+		base := func(c context.Context, req *sdk.ToolRequest) (*sdk.ToolResult, error) {
+			out, err := req.Tool.Run(sdk.WithRunInfo(c, info), req.Call.Args)
+			return &sdk.ToolResult{Content: out}, err
+		}
+		res, err := snap.ToolChain(base)(c, req)
+		if _, audited := snap.Services["audit"]; !audited {
+			outcome := "ok"
+			if err != nil || (res != nil && res.IsError) {
+				outcome = "failed"
+			}
+			r.broker.audit("tool.call", map[string]any{"run": st.ID, "thread": st.Thread, "user": st.User,
+				"tool": call.Name, "call_id": info.CallID, "step": info.Step, "plugin": "host",
+				"args": args, "outcome": outcome})
+		}
+		if err != nil {
+			return nil, err
+		}
+		if res == nil {
+			return "", nil
+		}
+		if res.Interrupt != nil {
+			return nil, fmt.Errorf("host tool %s requires approval on the host", call.Name)
+		}
+		if res.IsError {
+			return nil, fmt.Errorf("%s", sdk.Redact(res.Content))
+		}
+		return sdk.Redact(res.Content), nil
 	})
 	conn.Handle("agent.event", func(_ context.Context, raw json.RawMessage) (any, error) {
 		var ev wireEvent
@@ -351,15 +518,74 @@ func (r *remote) handle(noTools bool, hostTools []sdk.Tool) {
 	})
 }
 
-func (r *remote) subscribe(fn func(sdk.Event)) (string, func()) {
+func (r *remote) subscribe(runID string, fn func(sdk.Event)) func() {
 	r.mu.Lock()
-	r.seq++
-	id := fmt.Sprintf("r%d", r.seq)
 	if fn != nil {
-		r.subs[id] = fn
+		r.subs[runID] = fn
+	} else {
+		delete(r.subs, runID)
 	}
 	r.mu.Unlock()
-	return id, func() { r.mu.Lock(); delete(r.subs, id); r.mu.Unlock() }
+	return func() { r.mu.Lock(); delete(r.subs, runID); r.mu.Unlock() }
+}
+
+// setRun records the host-side identity of a run. Box calls to host.llm
+// and host.tool are checked against this map, not against the identity
+// the box supplies, so a compromised box can't act as another user.
+func (r *remote) setRun(st *sdk.RunState) bool {
+	if st == nil || st.ID == "" {
+		return false
+	}
+	var expired []*sdk.RunState
+	r.mu.Lock()
+	if len(r.runs) > 1024 {
+		for id, at := range r.runSeen {
+			if time.Since(at) > time.Hour {
+				if old := r.runs[id]; old != nil {
+					expired = append(expired, old)
+				}
+				delete(r.runs, id)
+				delete(r.runSeen, id)
+			}
+		}
+	}
+	if len(r.runs) > 1024 {
+		r.mu.Unlock()
+		for _, old := range expired {
+			r.endHostRun(context.Background(), old, nil, errRunExpired)
+		}
+		return false
+	}
+	r.runs[st.ID] = st
+	r.runSeen[st.ID] = time.Now()
+	r.mu.Unlock()
+	for _, old := range expired {
+		r.endHostRun(context.Background(), old, nil, errRunExpired)
+	}
+	return true
+}
+
+func (r *remote) runState(id string) *sdk.RunState {
+	r.mu.Lock()
+	st := r.runs[id]
+	stale := st != nil && time.Since(r.runSeen[id]) > time.Hour
+	if stale {
+		delete(r.runs, id)
+		delete(r.runSeen, id)
+	}
+	r.mu.Unlock()
+	if stale {
+		r.endHostRun(context.Background(), st, nil, errRunExpired)
+		return nil
+	}
+	return st
+}
+
+func (r *remote) endRun(id string) {
+	r.mu.Lock()
+	delete(r.runs, id)
+	delete(r.runSeen, id)
+	r.mu.Unlock()
 }
 
 func toWire(st *sdk.RunState, id string, streaming bool) wireRun {
@@ -370,13 +596,36 @@ func toWire(st *sdk.RunState, id string, streaming bool) wireRun {
 }
 
 func (r *remote) run(ctx context.Context, st *sdk.RunState, ro *runOptions) (*Result, error) {
-	id, done := r.subscribe(ro.onEvent)
+	if st.ID == "" {
+		st.ID = sdk.NewRunID()
+	}
+	r.setRun(st)
+	defer r.endRun(st.ID)
+	if err := r.host.eng.Root().Snapshot().AgentStart(ctx, st); err != nil {
+		r.endHostRun(ctx, st, nil, err)
+		return nil, err
+	}
+	done := r.subscribe(st.ID, ro.onEvent)
 	defer done()
 	var res Result
-	if err := r.call(ctx, "agent.run", toWire(st, id, ro.onEvent != nil), &res); err != nil {
+	err := r.call(ctx, "agent.run", toWire(st, st.ID, ro.onEvent != nil), &res)
+	r.endHostRun(ctx, st, &res, err)
+	if err != nil {
 		return nil, err
 	}
 	return &res, nil
+}
+
+// endHostRun fires host agent/end hooks so per-run host state (policy
+// budgets, hook_limits counters, trace spans) is released even when the
+// run happened in a sandbox.
+func (r *remote) endHostRun(ctx context.Context, st *sdk.RunState, res *Result, runErr error) {
+	out := &sdk.RunResult{FinishReason: "error"}
+	if runErr == nil && res != nil {
+		out = &sdk.RunResult{Text: res.Text, Steps: res.Steps, Usage: res.Usage, FinishReason: res.FinishReason,
+			Interrupts: res.Interrupts, Messages: res.Messages}
+	}
+	r.host.eng.Root().Snapshot().AgentEnd(ctx, st, out)
 }
 
 func (r *remote) thread(ctx context.Context, thread, prompt string, decisions []sdk.Decision, opts []RunOption) (*Result, error) {
@@ -384,12 +633,26 @@ func (r *remote) thread(ctx context.Context, thread, prompt string, decisions []
 	for _, o := range opts {
 		o(ro)
 	}
-	id, done := r.subscribe(ro.onEvent)
+	runID := sdk.NewRunID()
+	st := &sdk.RunState{ID: runID, Thread: thread, User: ro.user, Roles: ro.roles, Model: r.host.model,
+		Values: map[string]any{}}
+	if ro.model != "" {
+		st.Model = ro.model
+	}
+	r.setRun(st)
+	defer r.endRun(runID)
+	if err := r.host.eng.Root().Snapshot().AgentStart(ctx, st); err != nil {
+		r.endHostRun(ctx, st, nil, err)
+		return nil, err
+	}
+	done := r.subscribe(runID, ro.onEvent)
 	defer done()
-	wr := wireRun{RunID: id, Thread: thread, Prompt: prompt, Decisions: decisions, User: ro.user, Roles: ro.roles,
+	wr := wireRun{RunID: runID, Thread: thread, Prompt: prompt, Decisions: decisions, User: ro.user, Roles: ro.roles,
 		MaxSteps: ro.maxSteps, Streaming: ro.onEvent != nil}
 	var res Result
-	if err := r.call(ctx, "agent.thread", wr, &res); err != nil {
+	err := r.call(ctx, "agent.thread", wr, &res)
+	r.endHostRun(ctx, st, &res, err)
+	if err != nil {
 		return nil, err
 	}
 	return &res, nil

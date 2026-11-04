@@ -12,5 +12,6 @@
   "secrets": [
     "hello_mcp_TOKEN"
   ],
+  "dynamic": true,
   "eipagent": ">=0.3.0"
 }

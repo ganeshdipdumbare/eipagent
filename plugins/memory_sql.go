@@ -66,7 +66,7 @@ func Apply(p *sdk.Plugin) error {
 	}
 	return p.Provide("memory", &sdk.Store{
 		Put: func(c context.Context, ns []string, key string, val map[string]any) error {
-			raw, err := json.Marshal(val)
+			raw, err := json.Marshal(sdk.RedactMap(val))
 			if err != nil {
 				return err
 			}

@@ -81,7 +81,7 @@ func TestRunInSecretsStayOnHost(t *testing.T) {
 	a, err := eipagent.New(eipagent.WithModel("mock:m"), eipagent.WithPreset("dev"),
 		eipagent.WithPlugin("model_mock", map[string]any{"script": []any{call(api.URL), map[string]any{"text": "ok"}, call(other), map[string]any{"text": "ok"}}}),
 		eipagent.WithPluginDir(dir), eipagent.WithPlugins("probe"),
-		eipagent.WithRunIn(eipagent.RunIn{Provider: "local", ProviderConfig: map[string]any{"root": t.TempDir()}, Binary: bin,
+		eipagent.WithRunIn(eipagent.RunIn{Provider: "local", AllowUnsafeLocal: true, AllowPrivateEgress: true, ProviderConfig: map[string]any{"root": t.TempDir()}, Binary: bin,
 			SecretHosts: map[string][]string{"GH_TOKEN": {"127.0.0.1"}},
 			HostPlugins: []eipagent.PluginSpec{{Use: "audit_file", Config: map[string]any{"path": auditPath}}}}))
 	if err != nil {
@@ -137,12 +137,12 @@ func TestRunInSecretsStayOnHost(t *testing.T) {
 
 func TestRunInRefusesSecretsInSpec(t *testing.T) {
 	_, err := eipagent.New(eipagent.WithModel("mock:m"),
-		eipagent.WithRunIn(eipagent.RunIn{Provider: "local", Binary: "eip", Spec: sdk.SandboxSpec{Env: map[string]string{"GITHUB_TOKEN": "ghp_x"}}}))
+		eipagent.WithRunIn(eipagent.RunIn{Provider: "local", AllowUnsafeLocal: true, Binary: "eip", Spec: sdk.SandboxSpec{Env: map[string]string{"GITHUB_TOKEN": "ghp_x"}}}))
 	if err == nil || !strings.Contains(err.Error(), "looks like a credential") {
 		t.Fatalf("a credential in RunIn.Spec.Env must be refused: %v", err)
 	}
 	_, err = eipagent.New(eipagent.WithModel("mock:m"),
-		eipagent.WithRunIn(eipagent.RunIn{Provider: "local", Binary: "eip", Spec: sdk.SandboxSpec{Mounts: []sdk.Mount{{Host: "/var/run/docker.sock", Box: "/var/run/docker.sock"}}}}))
+		eipagent.WithRunIn(eipagent.RunIn{Provider: "local", AllowUnsafeLocal: true, Binary: "eip", Spec: sdk.SandboxSpec{Mounts: []sdk.Mount{{Host: "/var/run/docker.sock", Box: "/var/run/docker.sock"}}}}))
 	if err == nil || !strings.Contains(err.Error(), "not allowed") {
 		t.Fatalf("a docker socket mount must be refused: %v", err)
 	}
@@ -201,7 +201,7 @@ func TestRunInMicrosandbox(t *testing.T) {
 	a, err := eipagent.New(eipagent.WithModel("mock:m"), eipagent.WithPreset("dev"),
 		eipagent.WithPlugin("model_mock", map[string]any{"script": []any{map[string]any{"tool": "probe", "args": map[string]any{"url": api.URL}}, map[string]any{"text": "ok"}}}),
 		eipagent.WithPluginDir(dir), eipagent.WithPlugins("probe"),
-		eipagent.WithRunIn(eipagent.RunIn{Provider: "microsandbox", Binary: bin, SecretHosts: map[string][]string{"GH_TOKEN": {"127.0.0.1"}}}))
+		eipagent.WithRunIn(eipagent.RunIn{Provider: "microsandbox", AllowPrivateEgress: true, Binary: bin, SecretHosts: map[string][]string{"GH_TOKEN": {"127.0.0.1"}}}))
 	if err != nil {
 		t.Fatal(err)
 	}

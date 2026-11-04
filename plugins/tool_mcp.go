@@ -30,6 +30,7 @@ import (
 //	  url:     "https://mcp.example.com/mcp", headers: {"Authorization": "secret://MCP_TOKEN"},        // or streamable HTTP
 //	  tools:   ["only", "these"],
 //	  trust_annotations: false,  // true: treat the server's readOnlyHint as read-only for policy
+//	  allow_insecure: false,     // allow http with headers (loopback is always allowed)
 //	  timeout_seconds: 60
 //	}]
 //
@@ -42,6 +43,8 @@ import (
 //	}})
 //	// Shortcut: eipagent.WithMCP("github", "npx", "-y", "@modelcontextprotocol/server-github")
 var Permissions = []string{"net", "exec"}
+
+var Requires = []string{"?secrets"} // secret:// keys/headers are optional
 
 // rpcMsg is only decoded into. Outgoing messages are built as maps:
 // Yaegi can't json.Marshal interface fields of interpreted structs.
@@ -104,7 +107,7 @@ func resolveMap(p *sdk.Plugin, raw any) (map[string]string, error) {
 		if x, ok := v.(string); ok {
 			s = x
 		}
-		r, err := p.Secret(s)
+		r, err := p.SecretValue(s)
 		if err != nil {
 			return nil, err
 		}
@@ -262,6 +265,18 @@ func httpClient(p *sdk.Plugin, name string, s map[string]any) (*client, error) {
 	if err != nil {
 		return nil, err
 	}
+	rawHeaders := map[string]string{}
+	if m, ok := s["headers"].(map[string]any); ok {
+		for k, v := range m {
+			if str, ok := v.(string); ok {
+				rawHeaders[k] = str
+			}
+		}
+	}
+	allowInsecure, _ := s["allow_insecure"].(bool)
+	if err := sdk.CheckCredentialURL(url, len(headers) > 0, allowInsecure); err != nil {
+		return nil, fmt.Errorf("tool_mcp %s: %w", name, err)
+	}
 	timeout := 60 * time.Second
 	if t, ok := s["timeout_seconds"].(float64); ok {
 		timeout = time.Duration(t) * time.Second
@@ -279,8 +294,12 @@ func httpClient(p *sdk.Plugin, name string, s map[string]any) (*client, error) {
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Accept", "application/json, text/event-stream")
 		req.Header.Set("MCP-Protocol-Version", "2025-06-18")
-		for k, v := range headers {
-			req.Header.Set(k, v)
+		for k, ref := range rawHeaders {
+			val, err := p.SecretValue(ref)
+			if err != nil {
+				return nil, err
+			}
+			req.Header.Set(k, val)
 		}
 		mu.Lock()
 		if session != "" {

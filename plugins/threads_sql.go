@@ -60,7 +60,7 @@ func Apply(p *sdk.Plugin) error {
 		},
 		Save: func(c context.Context, st *sdk.ThreadState, expected int64) error {
 			st.Version = expected + 1
-			raw, err := json.Marshal(st)
+			raw, err := json.Marshal(sdk.RedactThreadState(st))
 			if err != nil {
 				return err
 			}

@@ -89,14 +89,14 @@ func Apply(p *sdk.Plugin) error {
 			if x, ok := v.(string); ok {
 				s = x
 			}
-			val, err := p.Secret(s)
+			val, err := p.SecretValue(s)
 			if err != nil {
 				return err
 			}
 			req.Header.Set(k, val)
 		}
 		if hmacRef != "" {
-			key, err := p.Secret(hmacRef)
+			key, err := p.SecretValue(hmacRef)
 			if err != nil {
 				return err
 			}

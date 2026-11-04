@@ -122,7 +122,10 @@ func TestInterpolateHidesSecretNames(t *testing.T) {
 	if v != "secret-value" {
 		t.Fatalf("env:secrets expansion: %v", v)
 	}
-	v, err = interpolate("${ZZ_REGION}", nil)
+	if _, err := interpolate("${ZZ_REGION}", nil); err == nil {
+		t.Fatal("plain ${ENV} expanded without the env permission")
+	}
+	v, err = interpolate("${ZZ_REGION}", []string{PermEnv})
 	if err != nil || v != "eu-west-1" {
 		t.Fatalf("plain expansion: %v %v", v, err)
 	}
@@ -370,5 +373,110 @@ func Apply(ctx *sdk.Plugin) error {
 	load(t, e, "guarded2", map[string]any{"parent": base, "link": link, "src": srcDir})
 	if st := e.State("guarded2"); st != Active {
 		t.Fatalf("guarded2: %s", st)
+	}
+}
+
+// exec children must not inherit the agent's secret environment.
+func TestExecChildEnvIsFiltered(t *testing.T) {
+	t.Setenv("ZZ_API_KEY", "super-secret")
+	src := `//go:build ignore
+
+package plugin
+
+import (
+	"fmt"
+	"os/exec"
+	"strings"
+
+	"eipagent/sdk"
+)
+
+var Permissions = []string{"exec"}
+
+func Apply(ctx *sdk.Plugin) error {
+	out, err := exec.Command("sh", "-c", "env").Output()
+	if err != nil {
+		return err
+	}
+	if strings.Contains(string(out), "ZZ_API_KEY=") || strings.Contains(string(out), "super-secret") {
+		return fmt.Errorf("child inherited the credential")
+	}
+	return nil
+}
+`
+	dir := t.TempDir()
+	writePlugin(t, dir, "execenv", src)
+	e := newTest(t, DevPolicy(), dir)
+	load(t, e, "execenv", nil)
+	if st := e.State("execenv"); st != Active {
+		t.Fatalf("execenv: %s", st)
+	}
+}
+
+// fs:read must not become a way to read the process environment via procfs.
+func TestFSReadRefusesProcAndSys(t *testing.T) {
+	src := `//go:build ignore
+
+package plugin
+
+import (
+	"fmt"
+	"io/fs"
+	"os"
+
+	"eipagent/sdk"
+)
+
+var Permissions = []string{"fs:read"}
+
+func Apply(ctx *sdk.Plugin) error {
+	if _, err := fs.ReadFile(os.DirFS("/"), "proc/self/environ"); err == nil {
+		return fmt.Errorf("DirFS read /proc/self/environ was allowed")
+	}
+	for _, p := range []string{"/proc/self/environ", "/proc/self/cmdline", "/sys/kernel/notes"} {
+		if _, err := os.ReadFile(p); err == nil {
+			return fmt.Errorf("read %s was allowed", p)
+		}
+	}
+	if _, err := os.Open("/proc/self/environ"); err == nil {
+		return fmt.Errorf("open /proc/self/environ was allowed")
+	}
+	return nil
+}
+`
+	dir := t.TempDir()
+	writePlugin(t, dir, "fsread", src)
+	e := newTest(t, DevPolicy(), dir)
+	load(t, e, "fsread", nil)
+	if st := e.State("fsread"); st != Active {
+		t.Fatalf("fsread: %s", st)
+	}
+}
+
+// The file-serving helpers are not exposed to interpreted plugins: they
+// would bypass the read guard by opening paths inside net/http.
+func TestNoHTTPServeFileForInterpretedPlugins(t *testing.T) {
+	src := `//go:build ignore
+
+package plugin
+
+import (
+	"net/http"
+
+	"eipagent/sdk"
+)
+
+var Permissions = []string{"net", "fs:read"}
+
+func Apply(ctx *sdk.Plugin) error { _ = http.Dir("/"); return nil }
+`
+	if err := Check("p", []byte(src)); err == nil {
+		t.Fatal("http.Dir is available to an interpreted plugin")
+	}
+}
+
+func TestWriteTreeRefusesFilesystemRoot(t *testing.T) {
+	if err := checkWriteTree("/", []string{filepath.Join(t.TempDir(), "config")}); err == nil {
+		t.Fatal("RemoveAll of / was allowed")
 	}
 }

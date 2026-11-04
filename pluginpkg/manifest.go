@@ -45,6 +45,7 @@ type Manifest struct {
 	Secrets     []string `json:"secrets,omitempty"`     // secret names it resolves (secret://NAME)
 	Tools       []string `json:"tools,omitempty"`       // tools it exports
 	EIPAgent    string   `json:"eipagent,omitempty"`    // compatible SDK versions, e.g. ">=0.2.0, <1.0.0"
+	Dynamic     bool     `json:"dynamic,omitempty"`     // tools/services are registered with runtime-decided names
 	Author      string   `json:"author,omitempty"`
 	License     string   `json:"license,omitempty"`
 	Homepage    string   `json:"homepage,omitempty"`
@@ -109,10 +110,22 @@ func (m *Manifest) Check() []error {
 	if strings.TrimSpace(m.Description) == "" {
 		bad("description is empty")
 	}
+	seenPerm := map[string]bool{}
 	for _, p := range m.Permissions {
+		if seenPerm[p] {
+			bad("duplicate permission %q", p)
+		}
+		seenPerm[p] = true
 		if !contains(engine.AllPerms, p) {
 			bad("unknown permission %q (known: %s)", p, strings.Join(engine.AllPerms, ", "))
 		}
+	}
+	seenNeed := map[string]bool{}
+	for _, n := range m.Needs() {
+		if seenNeed[n] {
+			bad("duplicate requires entry %q", n)
+		}
+		seenNeed[n] = true
 	}
 	for _, s := range m.Secrets {
 		if !secretRe.MatchString(s) {

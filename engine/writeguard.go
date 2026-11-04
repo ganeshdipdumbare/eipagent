@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -13,6 +14,91 @@ import (
 // permissions: procfs/sysfs/devfs expose the host process and devices,
 // not files a plugin should change.
 var protectedWriteDirs = []string{"/proc", "/sys", "/dev"}
+
+// protectedReadDirs are never readable by interpreted plugins: procfs and
+// sysfs expose the host process and kernel state, and /dev exposes devices.
+var protectedReadDirs = []string{"/proc", "/sys", "/dev"}
+
+type deniedFS struct{ err error }
+
+func (d deniedFS) Open(string) (fs.File, error) { return nil, d.err }
+
+type guardedRootFS struct{ root string }
+
+func (g guardedRootFS) Open(name string) (fs.File, error) {
+	target, err := readTarget(filepath.Join(g.root, filepath.FromSlash(name)))
+	if err != nil {
+		return nil, err
+	}
+	return os.Open(target)
+}
+
+// readTarget refuses reads under /proc, /sys and /dev, following symlinks
+// so /proc/self/root/... cannot be used as a side door.
+func readTarget(p string) (string, error) {
+	target := resolveWritePath(p)
+	for _, root := range protectedReadDirs {
+		if target == root || strings.HasPrefix(target, root+string(filepath.Separator)) {
+			return "", fmt.Errorf("os: refusing to read %s: protected system path", p)
+		}
+	}
+	return target, nil
+}
+
+func guardedReadFile(name string) ([]byte, error) {
+	target, err := readTarget(name)
+	if err != nil {
+		return nil, err
+	}
+	return os.ReadFile(target)
+}
+
+func guardedOpen(name string) (*os.File, error) {
+	target, err := readTarget(name)
+	if err != nil {
+		return nil, err
+	}
+	return os.Open(target)
+}
+
+func guardedReadDir(name string) ([]os.DirEntry, error) {
+	target, err := readTarget(name)
+	if err != nil {
+		return nil, err
+	}
+	return os.ReadDir(target)
+}
+
+func guardedStat(name string) (os.FileInfo, error) {
+	target, err := readTarget(name)
+	if err != nil {
+		return nil, err
+	}
+	return os.Stat(target)
+}
+
+func guardedLstat(name string) (os.FileInfo, error) {
+	target, err := readTarget(name)
+	if err != nil {
+		return nil, err
+	}
+	return os.Lstat(target)
+}
+
+func guardedReadlink(name string) (string, error) {
+	target, err := readTarget(name)
+	if err != nil {
+		return "", err
+	}
+	return os.Readlink(target)
+}
+
+func guardedDirFS(dir string) fs.FS {
+	if _, err := readTarget(dir); err != nil {
+		return deniedFS{err}
+	}
+	return guardedRootFS{root: dir}
+}
 
 // resolveWritePath follows symlinks component by component, including a
 // link whose target does not exist, so a dangling link can't smuggle a
@@ -90,7 +176,12 @@ func writeTarget(p string, deny []string, protectAncestors bool) (string, error)
 		if target == root || strings.HasPrefix(target, root+string(filepath.Separator)) {
 			return true
 		}
-		return protectAncestors && strings.HasPrefix(root, target+string(filepath.Separator))
+		if !protectAncestors {
+			return false
+		}
+		// The filesystem root is an ancestor of every protect path. The
+		// prefix check misses it because target+sep is "//".
+		return target == string(filepath.Separator) || strings.HasPrefix(root, target+string(filepath.Separator))
 	}
 	for _, root := range protectedWriteDirs {
 		if match(root) {
@@ -199,27 +290,31 @@ func guardedMkdirTemp(dir, pattern string, deny []string) (string, error) {
 }
 
 func guardedRemove(name string, deny []string) error {
-	if err := checkWriteTree(name, deny); err != nil {
+	target, err := writeTarget(name, deny, true)
+	if err != nil {
 		return err
 	}
-	return os.Remove(name)
+	return os.Remove(target)
 }
 
 func guardedRemoveAll(name string, deny []string) error {
-	if err := checkWriteTree(name, deny); err != nil {
+	target, err := writeTarget(name, deny, true)
+	if err != nil {
 		return err
 	}
-	return os.RemoveAll(name)
+	return os.RemoveAll(target)
 }
 
 func guardedRename(oldname, newname string, deny []string) error {
-	if err := checkWriteTree(oldname, deny); err != nil {
+	oldTarget, err := writeTarget(oldname, deny, true)
+	if err != nil {
 		return err
 	}
-	if err := checkWriteTree(newname, deny); err != nil {
+	newTarget, err := writeTarget(newname, deny, true)
+	if err != nil {
 		return err
 	}
-	return os.Rename(oldname, newname)
+	return os.Rename(oldTarget, newTarget)
 }
 
 func guardedOpenFile(name string, flag int, perm os.FileMode, deny []string, readable bool) (*os.File, error) {
@@ -229,6 +324,11 @@ func guardedOpenFile(name string, flag int, perm os.FileMode, deny []string, rea
 	}
 	if !readable && flag&(os.O_WRONLY|os.O_RDWR) != os.O_WRONLY {
 		return nil, fmt.Errorf("open %s: reading files needs the fs:read permission (use os.O_WRONLY)", name)
+	}
+	if readable && flag&os.O_WRONLY == 0 {
+		if _, err := readTarget(name); err != nil {
+			return nil, err
+		}
 	}
 	return os.OpenFile(target, flag, perm)
 }
@@ -313,6 +413,15 @@ func guardOSSymbols(filtered map[string]reflect.Value, has map[string]bool, deny
 		setFiltered(filtered, "Environ", envViewEnviron)
 		setFiltered(filtered, "ExpandEnv", envViewExpandEnv)
 	}
+	if has[PermFSRead] {
+		setFiltered(filtered, "Open", guardedOpen)
+		setFiltered(filtered, "ReadFile", guardedReadFile)
+		setFiltered(filtered, "ReadDir", guardedReadDir)
+		setFiltered(filtered, "Stat", guardedStat)
+		setFiltered(filtered, "Lstat", guardedLstat)
+		setFiltered(filtered, "Readlink", guardedReadlink)
+		setFiltered(filtered, "DirFS", guardedDirFS)
+	}
 	if !has[PermFSWrite] {
 		return
 	}
@@ -355,10 +464,38 @@ func guardOSSymbols(filtered map[string]reflect.Value, has map[string]bool, deny
 }
 
 func guardIoutilSymbols(out map[string]map[string]reflect.Value, has map[string]bool, deny []string) {
+	syms, ok := out["io/ioutil/ioutil"]
+	if ok && has[PermFSRead] {
+		cp := make(map[string]reflect.Value, len(syms))
+		for k, v := range syms {
+			cp[k] = v
+		}
+		if _, ok := cp["ReadFile"]; ok {
+			cp["ReadFile"] = reflect.ValueOf(guardedReadFile)
+		}
+		if _, ok := cp["ReadDir"]; ok {
+			cp["ReadDir"] = reflect.ValueOf(func(name string) ([]os.FileInfo, error) {
+				ents, err := guardedReadDir(name)
+				if err != nil {
+					return nil, err
+				}
+				var out []os.FileInfo
+				for _, e := range ents {
+					info, err := e.Info()
+					if err != nil {
+						return nil, err
+					}
+					out = append(out, info)
+				}
+				return out, nil
+			})
+		}
+		out["io/ioutil/ioutil"] = cp
+		syms = cp
+	}
 	if !has[PermFSWrite] {
 		return
 	}
-	syms, ok := out["io/ioutil/ioutil"]
 	if !ok {
 		return
 	}

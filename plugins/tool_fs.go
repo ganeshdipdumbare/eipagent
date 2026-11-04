@@ -4,11 +4,16 @@ package plugin
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"path"
+	"regexp"
 	"strings"
 
 	"eipagent/sdk"
 )
+
+var errStopWalk = errors.New("stop walk")
 
 // File tools in the "workspace" world: read_file, write_file, edit_file,
 // list_dir, find_files, grep. Writes are recorded per run (Result.Changes)
@@ -29,19 +34,47 @@ func Apply(p *sdk.Plugin) error {
 	rw := map[string]any{"risk": "medium", "sandbox": world.Name}
 
 	box := func(c context.Context) (*sdk.Sandbox, error) { return world.For(c) }
-	sh := func(c context.Context, script string, params ...string) (string, error) {
-		b, err := box(c)
-		if err != nil {
-			return "", err
+	// walkFiles walks the sandbox through its own file API instead of
+	// running find/grep in a shell. That keeps the workspace confinement
+	// working for sandbox_local and avoids passing model-controlled paths
+	// to a shell.
+	walkFiles := func(c context.Context, b *sdk.Sandbox, root string, fn func(string) error) error {
+		const maxDepth, maxEntries = 32, 20000
+		entries := 0
+		var walk func(string, int) error
+		walk = func(dir string, depth int) error {
+			if depth > maxDepth || entries > maxEntries {
+				return nil
+			}
+			fis, err := b.ListDir(c, dir)
+			if err != nil {
+				if depth > 0 {
+					return nil // skip an unreadable subdirectory, like find/grep
+				}
+				return err
+			}
+			for _, fi := range fis {
+				entries++
+				if entries > maxEntries {
+					return nil
+				}
+				p := path.Join(dir, fi.Name)
+				if fi.IsDir {
+					if fi.Name == ".git" {
+						continue
+					}
+					if err := walk(p, depth+1); err != nil {
+						return err
+					}
+					continue
+				}
+				if err := fn(p); err != nil {
+					return err
+				}
+			}
+			return nil
 		}
-		res, err := b.Exec(c, sdk.ExecRequest{Cmd: "sh", Args: append([]string{"-c", script, "_"}, params...), TimeoutSeconds: 60})
-		if err != nil {
-			return "", err
-		}
-		if res.ExitCode > 1 {
-			return "", fmt.Errorf("%s", strings.TrimSpace(res.Stderr))
-		}
-		return res.Stdout, nil
+		return walk(root, 0)
 	}
 
 	p.AddTool(sdk.Tool{
@@ -103,26 +136,95 @@ func Apply(p *sdk.Plugin) error {
 		Name: "find_files", Description: "Find files by name pattern (shell glob, e.g. *.go)", Meta: ro,
 		Schema: sdk.Object(map[string]any{"pattern": sdk.Str("name glob"), "path": sdk.Str("where to look (default .)")}, "pattern"),
 		Run: func(c context.Context, a map[string]any) (string, error) {
+			b, err := box(c)
+			if err != nil {
+				return "", err
+			}
 			fpath := sdk.ArgString(a, "path")
 			if fpath == "" {
 				fpath = "."
 			}
-			return sh(c, `find "$2" -type f -name "$1" -not -path "*/.git/*" | head -n 200`, sdk.ArgString(a, "pattern"), fpath)
+			pattern := sdk.ArgString(a, "pattern")
+			if _, err := path.Match(pattern, ""); err != nil {
+				return "", fmt.Errorf("invalid pattern: %v", err)
+			}
+			var out []string
+			add := func(p string) error {
+				if ok, _ := path.Match(pattern, path.Base(p)); ok {
+					out = append(out, p)
+				}
+				if len(out) >= 200 {
+					return errStopWalk
+				}
+				return nil
+			}
+			if _, err := b.ReadFile(c, fpath); err == nil {
+				if err := add(fpath); err != nil && err != errStopWalk {
+					return "", err
+				}
+				return strings.Join(out, "\n"), nil
+			}
+			err = walkFiles(c, b, fpath, add)
+			if err != nil && err != errStopWalk {
+				return "", err
+			}
+			return strings.Join(out, "\n"), nil
 		},
 	})
 	p.AddTool(sdk.Tool{
 		Name: "grep", Description: "Search file contents with a regular expression", Meta: ro,
 		Schema: sdk.Object(map[string]any{"pattern": sdk.Str("regex"), "path": sdk.Str("file or directory (default .)")}, "pattern"),
 		Run: func(c context.Context, a map[string]any) (string, error) {
+			b, err := box(c)
+			if err != nil {
+				return "", err
+			}
 			fpath := sdk.ArgString(a, "path")
 			if fpath == "" {
 				fpath = "."
 			}
-			out, err := sh(c, `grep -rnIE --exclude-dir=.git -e "$1" -- "$2" | head -n 200`, sdk.ArgString(a, "pattern"), fpath)
-			if err == nil && out == "" {
-				out = "no matches"
+			re, err := regexp.Compile(sdk.ArgString(a, "pattern"))
+			if err != nil {
+				return "", fmt.Errorf("invalid pattern: %v", err)
 			}
-			return out, err
+			var out []string
+			matchData := func(p string, data []byte) error {
+				if len(data) > maxRead {
+					data = data[:maxRead]
+				}
+				if strings.IndexByte(string(data), 0) >= 0 {
+					return nil
+				}
+				for i, line := range strings.Split(string(data), "\n") {
+					if re.MatchString(line) {
+						out = append(out, fmt.Sprintf("%s:%d:%s", p, i+1, line))
+						if len(out) >= 200 {
+							return errStopWalk
+						}
+					}
+				}
+				return nil
+			}
+			if data, err := b.ReadFile(c, fpath); err == nil {
+				if err := matchData(fpath, data); err != nil && err != errStopWalk {
+					return "", err
+				}
+			} else {
+				err = walkFiles(c, b, fpath, func(p string) error {
+					data, err := b.ReadFile(c, p)
+					if err != nil {
+						return nil // an unreadable file is skipped, like grep -I
+					}
+					return matchData(p, data)
+				})
+				if err != nil && err != errStopWalk {
+					return "", err
+				}
+			}
+			if len(out) == 0 {
+				return "no matches", nil
+			}
+			return strings.Join(out, "\n"), nil
 		},
 	})
 	if readonly {

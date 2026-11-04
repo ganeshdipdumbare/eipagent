@@ -26,8 +26,9 @@ import (
 //	base_url:    default https://api.openai.com/v1
 //	api_key:     literal or secret://NAME (default secret://OPENAI_API_KEY; "" for none)
 //	structured:  json_schema | json_object (how ResponseSchema is sent)
-//	headers:     extra HTTP headers
+//	headers:     extra HTTP headers; values may be secret://NAME
 //	timeout_seconds: default 120
+//	allow_insecure: allow a non-loopback http base_url when a key/header is set
 //
 // Example:
 //
@@ -35,6 +36,8 @@ import (
 //	// Any other OpenAI-compatible server, e.g. vLLM, then WithModel("vllm:qwen3-32b"):
 //	eipagent.WithPlugin("model_openai", map[string]any{"name": "vllm", "base_url": "http://gpu-box:8000/v1", "api_key": ""})
 var Permissions = []string{"net"}
+
+var Requires = []string{"?secrets"} // secret:// keys/headers are optional
 
 func Apply(p *sdk.Plugin) error {
 	name := p.ConfigString("name", "openai")
@@ -45,13 +48,14 @@ func Apply(p *sdk.Plugin) error {
 	}
 	structured := p.ConfigString("structured", "json_schema")
 	headers := p.ConfigMap("headers")
-	client := &http.Client{Timeout: time.Duration(p.ConfigInt("timeout_seconds", 120)) * time.Second}
+	allowInsecure := p.ConfigBool("allow_insecure", false)
+	client := &http.Client{Timeout: time.Duration(p.ConfigInt("timeout_seconds", 120)) * time.Second, CheckRedirect: sdk.RefuseRedirect}
 
 	return p.Provide("model/"+name, &sdk.Provider{
 		Name:         name,
 		Capabilities: map[string]bool{"streaming": true, "tools": true, "structured_output": true, "vision": true},
 		Generate: func(c context.Context, req *sdk.ModelRequest) (*sdk.ModelResponse, error) {
-			key, err := p.Secret(keyRef)
+			key, err := p.SecretValue(keyRef)
 			if err != nil {
 				return nil, err
 			}
@@ -66,9 +70,18 @@ func Apply(p *sdk.Plugin) error {
 				hr.Header.Set("Authorization", "Bearer "+key)
 			}
 			for k, v := range headers {
-				if s, ok := v.(string); ok {
-					hr.Header.Set(k, s)
+				s, ok := v.(string)
+				if !ok {
+					continue
 				}
+				val, err := p.SecretValue(s)
+				if err != nil {
+					return nil, err
+				}
+				hr.Header.Set(k, val)
+			}
+			if err := sdk.CheckCredentialURL(hr.URL.String(), key != "" || len(headers) > 0, allowInsecure); err != nil {
+				return nil, err
 			}
 			resp, err := client.Do(hr)
 			if err != nil {
