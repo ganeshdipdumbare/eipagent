@@ -1,4 +1,4 @@
-package eipagent
+package kiln
 
 import (
 	"fmt"

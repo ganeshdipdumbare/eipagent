@@ -4,7 +4,7 @@
     { title: "Getting Started", pages: ["installation", "quickstart", "concepts", "ollama", "troubleshooting"] },
     { title: "Foundations", pages: ["providers", "generating-text", "streaming", "tools", "structured-output", "threads", "human-in-the-loop"] },
     { title: "Agents", pages: ["agent-loop", "multi-agent", "evals", "lifecycles"] },
-    { title: "Plugins", pages: ["plugins", "plugins-choose", "kind-tools", "kind-hooks", "kind-models", "kind-threads-memory", "kind-sandboxes", "kind-triggers", "kind-telemetry", "kind-secrets", "kind-policy", "plugin-permissions", "runtime-plugins", "plugin-packages", "plugin-api"] },
+    { title: "Modules", pages: ["modules", "modules-choose", "kind-tools", "kind-hooks", "kind-models", "kind-threads-memory", "kind-sandboxes", "kind-triggers", "kind-telemetry", "kind-secrets", "kind-policy", "module-permissions", "module-permissions", "module-api"] },
     { title: "Security", pages: ["security", "production-checklist"] },
     { title: "Reference", pages: ["reference-options", "reference-run", "reference-result", "cli"] }
   ];
@@ -24,8 +24,8 @@
   // ---- sidebar ----
   var sidenav = document.getElementById("sidenav");
   var openGroups = {};
-  try { openGroups = JSON.parse(localStorage.getItem("eip-nav-open") || "{}") || {}; } catch (e) {}
-  function saveGroups() { try { localStorage.setItem("eip-nav-open", JSON.stringify(openGroups)); } catch (e) {} }
+  try { openGroups = JSON.parse(localStorage.getItem("kiln-nav-open") || "{}") || {}; } catch (e) {}
+  function saveGroups() { try { localStorage.setItem("kiln-nav-open", JSON.stringify(openGroups)); } catch (e) {} }
   NAV.forEach(function (g) {
     if (!g.title) {
       g.pages.forEach(function (id) { sidenav.insertAdjacentHTML("beforeend", '<a class="item top-item" href="#' + id + '">' + title(id) + "</a>"); });
@@ -126,10 +126,10 @@
   // ---- routing: one page at a time ----
   var crumbs = document.getElementById("crumbs"), pager = document.getElementById("pager"), toc = document.getElementById("toc");
   var current = null, labController = null;
-  // Pages merged into the Plugins section in v0.4; old links keep working.
-  var MOVED = Object.assign(Object.create(null), { "writing-plugins": "plugins", "middleware": "kind-hooks", "sandboxes": "kind-sandboxes", "persistence": "kind-threads-memory",
+  // Pages merged into the Modules section in v0.4; old links keep working.
+  var MOVED = Object.assign(Object.create(null), { "writing-modules": "modules", "middleware": "kind-hooks", "sandboxes": "kind-sandboxes", "persistence": "kind-threads-memory",
     "integrations": "kind-tools", "automation": "kind-triggers", "observability": "kind-telemetry", "secrets": "kind-secrets",
-    "policy": "kind-policy", "reference-hooks": "plugin-api", "reference-plugins": "plugins-choose" });
+    "policy": "kind-policy", "reference-hooks": "module-api", "reference-modules": "modules-choose" });
   function pageFor(hash) {
     if (MOVED[hash]) hash = MOVED[hash];
     if (pages[hash]) return { page: hash };
@@ -187,9 +187,9 @@
         var anchor = pages[id].querySelector(".titlerow") || pages[id].querySelector("h1");
         if (anchor) anchor.parentNode.insertBefore(det, anchor.nextSibling);
       }
-      var top = hash === "plugin-lab" ? "lab" : id.indexOf("reference") === 0 || id === "cli" ? "reference" : id === "providers" ? "providers" : "docs";
+      var top = hash === "composition" ? "lab" : id.indexOf("reference") === 0 || id === "cli" ? "reference" : id === "providers" ? "providers" : "docs";
       document.querySelectorAll(".toplinks a").forEach(function (a) { if (a.dataset.top === top) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current"); });
-      try { document.title = title(id) + " · eipagent Docs"; } catch (e) {}
+      try { document.title = title(id) + " · kiln Docs"; } catch (e) {}
       document.body.classList.remove("nav-open");
       document.getElementById("menubtn").setAttribute("aria-expanded", "false");
       document.body.setAttribute("data-page", id);
@@ -251,7 +251,7 @@
 
   // ---- theme toggle ----
   var root = document.documentElement;
-  try { var saved = localStorage.getItem("eip-theme"); if (saved) root.dataset.theme = saved; } catch (e) {}
+  try { var saved = localStorage.getItem("kiln-theme"); if (saved) root.dataset.theme = saved; } catch (e) {}
   var themeBtn = document.getElementById("themebtn");
   var sunIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>';
   var moonIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>';
@@ -266,7 +266,7 @@
   syncTheme();
   themeBtn.addEventListener("click", function () {
     root.dataset.theme = themeIsDark() ? "light" : "dark";
-    try { localStorage.setItem("eip-theme", root.dataset.theme); } catch (e) {}
+    try { localStorage.setItem("kiln-theme", root.dataset.theme); } catch (e) {}
     syncTheme();
   });
 
@@ -370,19 +370,19 @@
     copyText(b.getAttribute("data-copy"), b, ICON.check, ICON.copy);
   });
 
-  // ---- plugin lab ----
-  var LAB_PLUGINS = [
-    { id: "tool_shell", group: "Sandbox tools", plane: "sandbox", name: "tool_shell", desc: "Runs bash inside the sandbox.", tags: ["sandbox"], changes: ["adds the bash tool inside the sandbox", "tests and git commands run next to the agent"], summary: ["+ bash"], config: ['  eipagent.WithPlugins("tool_shell"),'] },
-    { id: "tool_fs", group: "Sandbox tools", plane: "sandbox", name: "tool_fs", desc: "Reads and writes files inside the sandbox.", tags: ["sandbox"], changes: ["adds read_file, write_file, edit_file, list_dir, find_files and grep inside the sandbox"], summary: ["+ file tools"], config: ['  eipagent.WithPlugins("tool_fs"),'] },
-    { id: "tool_fetch", group: "Sandbox tools", plane: "sandbox", name: "tool_fetch", desc: "Fetches allowed URLs through the host egress broker.", tags: ["sandbox", "net"], changes: ["adds http_fetch inside the sandbox", "every request goes through the host egress broker"], summary: ["+ fetch"], config: ['  eipagent.WithPlugins("tool_fetch"),'] },
-    { id: "hook_approval", group: "Safety", plane: "sandbox", name: "hook_approval", desc: "Pauses before the pull-request call.", tags: ["sandbox", "+ approval"], changes: ["pauses before http_fetch POST /pulls until a person decides"], summary: ["+ approval"], config: ['  eipagent.WithPlugin("hook_approval", map[string]any{"interrupt_on": map[string]any{"http_fetch": true}}),'] },
+  // ---- module lab ----
+  var LAB_MODULES = [
+    { id: "tool_shell", group: "Sandbox tools", plane: "sandbox", name: "tool_shell", desc: "Runs bash inside the sandbox.", tags: ["sandbox"], changes: ["adds the bash tool inside the sandbox", "tests and git commands run next to the agent"], summary: ["+ bash"], config: ['  kiln.WithModules("tool_shell"),'] },
+    { id: "tool_fs", group: "Sandbox tools", plane: "sandbox", name: "tool_fs", desc: "Reads and writes files inside the sandbox.", tags: ["sandbox"], changes: ["adds read_file, write_file, edit_file, list_dir, find_files and grep inside the sandbox"], summary: ["+ file tools"], config: ['  kiln.WithModules("tool_fs"),'] },
+    { id: "tool_fetch", group: "Sandbox tools", plane: "sandbox", name: "tool_fetch", desc: "Fetches allowed URLs through the host egress broker.", tags: ["sandbox", "net"], changes: ["adds http_fetch inside the sandbox", "every request goes through the host egress broker"], summary: ["+ fetch"], config: ['  kiln.WithModules("tool_fetch"),'] },
+    { id: "hook_approval", group: "Safety", plane: "sandbox", name: "hook_approval", desc: "Pauses before the pull-request call.", tags: ["sandbox", "+ approval"], changes: ["pauses before http_fetch POST /pulls until a person decides"], summary: ["+ approval"], config: ['  kiln.WithModuleConfig("hook_approval", map[string]any{"interrupt_on": map[string]any{"http_fetch": true}}),'] },
     { id: "secrets_vault", group: "Safety", plane: "host", host: true, name: "secrets_vault", desc: "Keeps GITHUB_TOKEN on the host; the sandbox gets a placeholder.", tags: ["host", "+ secret"], changes: ["keeps GITHUB_TOKEN on the host", "the sandbox only sees an eipsec_ placeholder"], summary: ["+ host secret"] },
     { id: "audit_file", group: "Operations", plane: "host", host: true, name: "audit_file", desc: "Writes host-side audit records, including sandbox.egress.", tags: ["host", "+ audit"], changes: ["writes host audit records for model, tool and egress events"], summary: ["+ host audit"] },
-    { id: "hook_compact", group: "Operations", plane: "sandbox", name: "hook_compact", desc: "Compacts long test logs inside the sandbox.", tags: ["sandbox", "+ context"], changes: ["compacts 12,480 chars of test output when context passes 80%"], summary: ["+ context guard"], config: ['  eipagent.WithPlugin("hook_compact", map[string]any{"max_fraction": 0.8}),'] },
+    { id: "hook_compact", group: "Operations", plane: "sandbox", name: "hook_compact", desc: "Compacts long test logs inside the sandbox.", tags: ["sandbox", "+ context"], changes: ["compacts 12,480 chars of test output when context passes 80%"], summary: ["+ context guard"], config: ['  kiln.WithModuleConfig("hook_compact", map[string]any{"max_fraction": 0.8}),'] },
     { id: "trace_otlp", group: "Operations", plane: "host", host: true, name: "trace_otlp", desc: "Exports host and sandbox spans to OpenTelemetry.", tags: ["host", "+ traces"], changes: ["exports one trace per run, with host and sandbox spans"], summary: ["+ traces"] }
   ];
   var LAB_BY = {};
-  LAB_PLUGINS.forEach(function (p) { LAB_BY[p.id] = p; });
+  LAB_MODULES.forEach(function (p) { LAB_BY[p.id] = p; });
   var LAB_PRESETS = {
     prototype: ["tool_shell", "tool_fs"],
     team: ["tool_shell", "tool_fs", "tool_fetch", "secrets_vault", "audit_file", "hook_approval"],
@@ -400,17 +400,17 @@
     var toolIds = sandbox.filter(function (id) { return id.indexOf("tool_") === 0; });
     var otherIds = sandbox.filter(function (id) { return id.indexOf("tool_") !== 0; });
     var lines = [
-      "agent, err := eipagent.New(",
-      '  eipagent.WithModel("anthropic:claude-sonnet-5-5"),',
-      '  eipagent.WithInstructions("You are a careful coding agent."),',
+      "agent, err := kiln.New(",
+      '  kiln.WithModel("anthropic:claude-sonnet-5-5"),',
+      '  kiln.WithInstructions("You are a careful coding agent."),',
       "",
-      "  // The agent, its plugins and its tools run inside this cloud sandbox.",
-      "  eipagent.WithRunIn(eipagent.RunIn{",
+      "  // The agent, its modules and its tools run inside this cloud sandbox.",
+      "  kiln.WithRunIn(kiln.RunIn{",
       '    Provider: "tensorlake",',
       '    Spec:     sdk.SandboxSpec{Image: "tensorlake/ubuntu-minimal", Network: sdk.NetworkPolicy{Mode: "none"}},'
     ];
     if (host.length) {
-      lines.push("    HostPlugins: []eipagent.PluginSpec{");
+      lines.push("    HostModules: []kiln.ModuleSpec{");
       host.forEach(function (id) {
         if (id === "audit_file") lines.push('      {Use: "audit_file", Config: map[string]any{"path": "audit.jsonl"}},');
         else if (id === "trace_otlp") lines.push('      {Use: "trace_otlp", Config: map[string]any{"endpoint": "http://otel-collector:4318"}},');
@@ -423,7 +423,7 @@
     if (sandbox.length) {
       lines.push("");
       lines.push("  // These load inside the sandbox.");
-      if (toolIds.length) lines.push('  eipagent.WithPlugins(' + toolIds.map(function (id) { return '"' + id + '"'; }).join(", ") + "),");
+      if (toolIds.length) lines.push('  kiln.WithModules(' + toolIds.map(function (id) { return '"' + id + '"'; }).join(", ") + "),");
       otherIds.forEach(function (id) { LAB_BY[id].config.forEach(function (line) { lines.push(line); }); });
     }
     lines.push(")");
@@ -432,18 +432,18 @@
 
   function labTrace(sel) {
     var ev = [];
-    function add(plane, type, title, detail, status, plugin) {
-      ev.push({ plane: plane, type: type, title: title, detail: detail, status: status || "ok", plugin: plugin || "" });
+    function add(plane, type, title, detail, status, module) {
+      ev.push({ plane: plane, type: type, title: title, detail: detail, status: status || "ok", module: module || "" });
     }
     add("host", "run", "run.start", "host process · builds the RunIn spec", "ok");
     add("cloud", "cloud", "sandbox.create", "tensorlake/ubuntu-minimal · x86_64 Linux · network none", "ok");
-    add("sandbox", "agent", "agent.start", "eip serve --stdio · no secret env vars", "ok");
+    add("sandbox", "agent", "agent.start", "kiln serve --stdio · no secret env vars", "ok");
     if (sel.tool_shell) add("sandbox", "tool", "tool.call bash", "go test ./... · 12,480 chars of output", "ok", "tool_shell");
     if (sel.tool_fs) add("sandbox", "tool", "tool.call read_file", "logs/test.log · 41 lines", "ok", "tool_fs");
     add("host", "secret", "host.model", "model key stays on the host · sandbox holds none", "ok");
     add("host", "model", "model.call", "host calls the model with its key · decides to open a PR", "acc");
     if (sel.hook_compact) add("sandbox", "context", "hook_compact · context_usage", "83% → old tool output cleared → 61%", "ok", "hook_compact");
-    if (sel.secrets_vault) add("boundary", "secret", "host.secret", "plugin asks for GITHUB_TOKEN → eipsec_… placeholder", "ok", "secrets_vault");
+    if (sel.secrets_vault) add("boundary", "secret", "host.secret", "module asks for GITHUB_TOKEN → eipsec_… placeholder", "ok", "secrets_vault");
     if (sel.hook_approval && sel.tool_fetch) {
       add("sandbox", "wait", "hook_approval · interrupt", "about to POST /repos/acme/app/pulls", "wait", "hook_approval");
       add("sandbox", "decision", "decision", "pending · Ada is deciding", "wait", "hook_approval");
@@ -466,7 +466,7 @@
   (function initLab() {
     var lab = document.querySelector("[data-lab]");
     if (!lab) return;
-    var rowsEl = lab.querySelector("[data-lab-plugins]");
+    var rowsEl = lab.querySelector("[data-lab-modules]");
     var countEl = lab.querySelector("[data-lab-count]");
     var statusEl = lab.querySelector("[data-lab-status]");
     var summaryEl = lab.querySelector("[data-lab-summary]");
@@ -498,12 +498,12 @@
     var started = false;
 
     var groups = [];
-    LAB_PLUGINS.forEach(function (p) { if (groups.indexOf(p.group) < 0) groups.push(p.group); });
+    LAB_MODULES.forEach(function (p) { if (groups.indexOf(p.group) < 0) groups.push(p.group); });
     var rows = "";
     groups.forEach(function (g) {
       rows += '<div class="lab-group"><h5>' + esc(g) + "</h5>";
-      LAB_PLUGINS.filter(function (p) { return p.group === g; }).forEach(function (p) {
-        rows += '<button type="button" class="lab-plugin" role="switch" aria-checked="false" data-plugin="' + p.id + '">' +
+      LAB_MODULES.filter(function (p) { return p.group === g; }).forEach(function (p) {
+        rows += '<button type="button" class="lab-module" role="switch" aria-checked="false" data-module="' + p.id + '">' +
           "<span><b>" + esc(p.name) + "</b><small>" + esc(p.desc) + '</small><span class="chips">' +
           p.tags.map(function (t) { return '<span class="chip">' + esc(t) + "</span>"; }).join("") +
           '</span></span><span class="lab-switch" aria-hidden="true"></span></button>';
@@ -531,8 +531,8 @@
     }
 
     function renderRows() {
-      rowsEl.querySelectorAll("[data-plugin]").forEach(function (b) {
-        var on = !!sel[b.getAttribute("data-plugin")];
+      rowsEl.querySelectorAll("[data-module]").forEach(function (b) {
+        var on = !!sel[b.getAttribute("data-module")];
         b.setAttribute("aria-checked", String(on));
       });
       var n = selectedIds(sel).length;
@@ -541,8 +541,8 @@
 
     function renderSummary() {
       var ids = selectedIds(sel);
-      if (!ids.length) { summaryEl.innerHTML = '<span>no optional plugins</span>'; return; }
-      var out = ["<span>" + ids.length + " plugins</span>"];
+      if (!ids.length) { summaryEl.innerHTML = '<span>no optional modules</span>'; return; }
+      var out = ["<span>" + ids.length + " modules</span>"];
       ids.forEach(function (id) {
         LAB_BY[id].summary.forEach(function (s) {
           out.push('<span class="' + (s.charAt(0) === "+" ? "add" : "") + '">' + esc(s) + "</span>");
@@ -567,7 +567,7 @@
         if (!sel[id] && LAB_BY[id]) out.push({ k: "rm", t: "removes " + LAB_BY[id].name });
       });
       if (!out.length) {
-        diffEl.innerHTML = '<h5>What changed</h5><p style="margin:0;color:var(--fg-3);font-size:13px">Nothing yet. Toggle a plugin.</p>';
+        diffEl.innerHTML = '<h5>What changed</h5><p style="margin:0;color:var(--fg-3);font-size:13px">Nothing yet. Toggle a module.</p>';
       } else {
         diffEl.innerHTML = '<h5>What changed</h5><ul class="lab-diff-list">' + out.map(function (o) {
           return '<li class="' + o.k + '">' + esc(o.t) + "</li>";
@@ -603,9 +603,9 @@
         return '<div class="trace-event ' + e.status + '" data-i="' + i + '" tabindex="0" role="button" aria-expanded="false">' +
           '<span class="trace-dot"></span><div class="line"><div class="type"><span>' + esc(e.title) + "</span>" +
           (e.plane ? '<span class="plane ' + esc(e.plane) + '">' + esc(e.plane) + "</span>" : "") +
-          (e.plugin ? '<span class="plugin">' + esc(e.plugin) + "</span>" : "") +
+          (e.module ? '<span class="module">' + esc(e.module) + "</span>" : "") +
           '</div><p class="detail">' + esc(e.detail) + '</p><p class="meta">' + esc(e.type) + " · +" + (i * 0.15).toFixed(2) + 's</p>' +
-          '<div class="trace-extra"><dl><dt>Plane</dt><dd>' + esc(e.plane) + '</dd><dt>Plugin</dt><dd>' + esc(e.plugin || "core") + '</dd><dt>Step</dt><dd>' + esc(e.type) + " · " + esc(e.title) + '</dd></dl></div>' +
+          '<div class="trace-extra"><dl><dt>Plane</dt><dd>' + esc(e.plane) + '</dd><dt>Module</dt><dd>' + esc(e.module || "core") + '</dd><dt>Step</dt><dd>' + esc(e.type) + " · " + esc(e.title) + '</dd></dl></div>' +
           (e.type === "decision" ? '<div class="lab-approval-slot"></div>' : "") +
           "</div></div>";
       }).join("");
@@ -740,10 +740,10 @@
       }
       if (!ok) {
         events = events.slice(0, idx + 1).concat([
-          { plane: "sandbox", type: "tool", title: "tool.call http_fetch", detail: "skipped · supervisor rejected", status: "bad", plugin: "" },
-          { plane: "sandbox", type: "model", title: "model.call", detail: "explains that no PR was opened", status: "acc", plugin: "" },
-          { plane: "host", type: "cloud", title: "sandbox.destroy", detail: "ephemeral sandbox deleted", status: "ok", plugin: "" },
-          { plane: "host", type: "run", title: "run.end", detail: "stop · no PR opened", status: "bad", plugin: "" }
+          { plane: "sandbox", type: "tool", title: "tool.call http_fetch", detail: "skipped · supervisor rejected", status: "bad", module: "" },
+          { plane: "sandbox", type: "model", title: "model.call", detail: "explains that no PR was opened", status: "acc", module: "" },
+          { plane: "host", type: "cloud", title: "sandbox.destroy", detail: "ephemeral sandbox deleted", status: "ok", module: "" },
+          { plane: "host", type: "run", title: "run.end", detail: "stop · no PR opened", status: "bad", module: "" }
         ]);
         traceEl.innerHTML = traceHTML();
         traceEl.querySelectorAll(".trace-event").forEach(function (e) { e.classList.add("in"); });
@@ -802,7 +802,7 @@
         traceEl.scrollTop = 0;
         traceEl.querySelectorAll(".trace-event").forEach(function (e) { e.classList.add("in"); });
         setStatus("Ready", "idle");
-        setLive("Ready · toggle a plugin", "idle");
+        setLive("Ready · toggle a module", "idle");
         setProgress(0);
         setPlane("");
       } else {
@@ -812,11 +812,11 @@
     }
 
     lab.addEventListener("click", function (e) {
-      var t = e.target.closest && e.target.closest("[data-plugin],[data-preset],[data-approve],[data-reject],[data-lab-copy]");
+      var t = e.target.closest && e.target.closest("[data-module],[data-preset],[data-approve],[data-reject],[data-lab-copy]");
       if (!t) return;
       if (t.hasAttribute("data-lab-copy")) { copyText(labConfig(sel), t, "Copied", "Copy config"); return; }
-      if (t.hasAttribute("data-plugin")) {
-        var id = t.getAttribute("data-plugin");
+      if (t.hasAttribute("data-module")) {
+        var id = t.getAttribute("data-module");
         if (sel[id]) delete sel[id]; else sel[id] = true;
         started = true;
         if (window.innerWidth <= 900) setLabView("run");
@@ -921,7 +921,7 @@
     var box = document.getElementById("demo-embed");
     if (!box) return;
     var here = /vercel\.app$|^localhost$|^127\.0\.0\.1$/.test(location.hostname);
-    var url = here ? "demo/" : "https://eipagent-docs.vercel.app/demo/";
+    var url = here ? "demo/" : "https://kiln-docs.vercel.app/demo/";
     box.innerHTML = (here ? '<div class="demo-frame"><iframe src="' + url + '" title="Acme Support Desk demo" loading="lazy"></iframe></div>' : "") +
       '<p class="demo-cap">' + (here ? "The live demo, served by the Go backend (on a free instance, so the first visit can take a minute to wake it; until then you can use a replay of recorded runs). Chat as Sam, then switch to Ada to decide. " : "") +
       '<a href="' + url + '">Open the demo in a new tab</a>.</p>';

@@ -2,11 +2,11 @@
 # Prepare a self-hosted Firecracker sandbox on Linux with /dev/kvm.
 # Downloads a Firecracker binary, a kernel and Ubuntu rootfs from the
 # Firecracker CI, adds a local SSH key, and builds an ext4 rootfs.
-# Run from anywhere; files go to .eipagent/firecracker.
+# Run from anywhere; files go to .kiln/firecracker.
 set -eu
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
-DIR="${FC_DIR:-$REPO_ROOT/.eipagent/firecracker}"
+DIR="${FC_DIR:-$REPO_ROOT/.kiln/firecracker}"
 OWNER="${SUDO_USER:-$(id -un)}"
 SUDO=""
 if [ "$(id -u)" -ne 0 ]; then SUDO="sudo -n"; fi

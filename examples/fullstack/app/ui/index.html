@@ -256,13 +256,11 @@ tr:last-child td { border-bottom: 0; }
         <button role="tab" aria-selected="true" data-tab="approvals">Approvals <span class="count" id="appcount" hidden>0</span></button>
         <button role="tab" aria-selected="false" data-tab="activity">Audit trail</button>
         <button role="tab" aria-selected="false" data-tab="orders">Orders</button>
-        <button role="tab" aria-selected="false" data-tab="plugins">Plugins</button>
         <button role="tab" aria-selected="false" data-tab="hood">Under the hood</button>
       </div>
       <div class="pane" id="pane-approvals"></div>
       <div class="pane" id="pane-activity" hidden></div>
       <div class="pane" id="pane-orders" hidden></div>
-      <div class="pane" id="pane-plugins" hidden></div>
       <div class="pane" id="pane-hood" hidden></div>
     </aside>
   </div>
@@ -285,17 +283,7 @@ tr:last-child td { border-bottom: 0; }
     { label: "Policy question", text: "What's your return policy?" }
   ];
   var state = { user: "sam", thread: null, busy: false, live: false, replay: null, hood: [] };
-  // Chat suggestions: the scenarios above, plus one per running plugin
-  // added from the Plugins tab (its sample question).
-  function prompts() {
-    var j = plugins.data || {}, extra = [];
-    (j.plugins || []).forEach(function (p) {
-      if (!p.active) return;
-      var s = (j.samples || []).filter(function (x) { return x.name === p.name; })[0];
-      if (s && s.ask) extra.push({ label: "Ask the " + p.name + " plugin", text: s.ask, plugin: true });
-    });
-    return PROMPTS.concat(extra);
-  }
+  function prompts() { return PROMPTS; }
 
   // ---------------------------------------------------------------- API
   // Live mode talks to the Go backend. Replay mode (no backend, e.g. on
@@ -321,31 +309,12 @@ tr:last-child td { border-bottom: 0; }
   };
 
   var replay = {
-    scenes: [], scene: null, snap: null, branch: null, plugin: null, stage: "empty",
+    scenes: [], scene: null, snap: null, branch: null,
     start: function (rec) {
-      this.scenes = rec.scenes; this.snap = rec.empty; this.plugin = rec.plugin || null;
+      this.scenes = rec.scenes; this.snap = rec.empty;
     },
     sceneFor: function (text) {
-      var pl = this.plugin;
-      if (pl && this.stage === "running" && pl.scene.text === text) return pl.scene;
       return this.scenes.filter(function (s) { return s.text === text; })[0];
-    },
-    // The Plugins tab in replay mode steps through the recorded states:
-    // Sam submits the first sample, Ada approves it, the chat can use it.
-    plugins: function () { return Promise.resolve(this.plugin ? this.plugin.states[this.stage] : { plugins: [], samples: [] }); },
-    pluginPost: function (path, body) {
-      var pl = this.plugin, res = function (status, json) { return Promise.resolve({ status: status, json: json }); };
-      var notRecorded = "The replay recorded adding and approving the first sample only. Run the demo locally to try updates, rollback and removal: go run ./examples/fullstack";
-      if (!pl) return res(503, { error: notRecorded });
-      if (path === "api/plugins") {
-        if (body.sample !== pl.sample || this.stage !== "empty") return res(422, { error: notRecorded });
-        this.stage = "submitted"; this.snap = pl.submitted_snap;
-        return res(200, pl.submit);
-      }
-      if (USERS[body.user].role !== "supervisor") return res(403, { error: "only supervisors can approve, roll back or remove plugins" });
-      if (body.action !== "approve" || this.stage !== "submitted") return res(422, { error: notRecorded });
-      this.stage = "running"; this.snap = pl.running_snap;
-      return res(200, { ok: true });
     },
     play: function (events, onEvent) {
       var i = 0, speed = 1;
@@ -389,11 +358,11 @@ tr:last-child td { border-bottom: 0; }
   }
   function backend() {
     var toReplay = function () {
-      if (window.EIP_RECORDING) { state.replay = window.EIP_RECORDING; replay.start(state.replay); return { mode: "replay", model: state.replay.model, refund_limit: state.replay.refund_limit }; }
+      if (window.KILN_RECORDING) { state.replay = window.KILN_RECORDING; replay.start(state.replay); return { mode: "replay", model: state.replay.model, refund_limit: state.replay.refund_limit }; }
       return { mode: "offline" };
     };
     var live = function (h) { state.live = true; return h; };
-    if (!window.EIP_RECORDING) return health(10000).then(live, toReplay);
+    if (!window.KILN_RECORDING) return health(10000).then(live, toReplay);
     return new Promise(function (resolve) {
       var deadline = Date.now() + 75000, done = false;
       var finish = function (v) { if (!done) { done = true; resolve(v); } };
@@ -432,7 +401,7 @@ tr:last-child td { border-bottom: 0; }
   }
   function chip(p) {
     var b = document.createElement("button");
-    b.type = "button"; b.className = "chip" + (p.plugin ? " plug" : ""); b.innerHTML = "<b>" + esc(p.label) + "</b> · " + esc(p.text.length > 46 ? p.text.slice(0, 46) + "…" : p.text);
+    b.type = "button"; b.className = "chip"; b.innerHTML = "<b>" + esc(p.label) + "</b> · " + esc(p.text.length > 46 ? p.text.slice(0, 46) + "…" : p.text);
     b.addEventListener("click", function () { if (!state.busy) send(p.text); });
     return b;
   }
@@ -441,7 +410,6 @@ tr:last-child td { border-bottom: 0; }
     if (msgs.querySelector(".hello")) return;
     prompts().forEach(function (p) { var b = chip(p); b.innerHTML = esc(p.label); b.title = p.text; c.appendChild(b); });
   }
-  // Re-draw the suggestions after the running plugins change.
   function refreshPrompts() {
     var h = $("#hellochips");
     if (h) { h.innerHTML = ""; prompts().forEach(function (p) { h.appendChild(chip(p)); }); }
@@ -582,7 +550,7 @@ tr:last-child td { border-bottom: 0; }
   }
 
   // ------------------------------------------------------------- panes
-  function refreshAll() { refreshConvs(); refreshApprovals(); refreshAudit(); refreshOrders(); refreshPlugins(); }
+  function refreshAll() { refreshConvs(); refreshApprovals(); refreshAudit(); refreshOrders(); }
   function highlightConv() { document.querySelectorAll(".conv").forEach(function (c) { c.setAttribute("aria-current", String(c.dataset.id === state.thread)); }); }
   function refreshConvs() {
     load("threads").then(function (j) {
@@ -618,25 +586,18 @@ tr:last-child td { border-bottom: 0; }
   function auditRow(e) {
     var d = e.data || {}, ic = "", what = "", why = "";
     switch (e.type) {
-      case "plugin.active": ic = "info"; what = "Plugin " + d.plugin + " active"; why = (d.kind || "") + (d.perms && d.perms.length ? " · perms " + d.perms.join(",") : ""); break;
-      case "plugin.disposed": what = "Plugin " + d.plugin + " unloaded"; break;
-      case "plugin.failed": case "plugin.refused": ic = "bad"; what = "Plugin " + d.plugin + " " + e.type.split(".")[1]; why = d.error || ""; break;
+      case "module.active": ic = "info"; what = "Module " + d.module + " active"; break;
+      case "module.disposed": what = "Module " + d.module + " disposed"; break;
+      case "module.failed": ic = "bad"; what = "Module " + d.module + " failed"; why = d.error || ""; break;
       case "model.call": what = "Model call · " + d.model; why = "step " + d.step + " · " + (d.input_tokens || 0) + " in / " + (d.output_tokens || 0) + " out tokens" + (d.tool_calls ? " · " + d.tool_calls + " tool call(s)" : "") + " · user " + (d.user || "-") + run(d); break;
       case "tool.call":
         ic = d.outcome === "ok" ? "ok" : d.outcome === "interrupted" ? "wait" : "bad";
-        what = d.tool + " · " + d.outcome + (d.plugin ? " · plugin " + d.plugin : "");
+        what = d.tool + " · " + d.outcome + (d.module ? " · module " + d.module : "");
         why = (d.decision ? d.decision + " by " + (d.decided_by || "?") + " · " : "") + JSON.stringify(d.args || {}) + run(d);
         break;
-      case "plugin.install": ic = "info"; what = "Plugin " + d.plugin + " v" + d.version + " installed · " + d.state; why = "submitted by " + (d.by || "?") + " · signed by " + (d.signer || "none"); break;
-      case "plugin.approve": ic = "info"; what = "Plugin " + d.plugin + " v" + d.version + " approved"; why = "by " + (d.by || "?"); break;
-      case "plugin.enable": ic = "ok"; what = "Plugin " + d.plugin + " v" + d.version + " enabled"; why = d.previous ? "replaced v" + d.previous : "first version"; break;
-      case "plugin.enable_failed": ic = "bad"; what = "Plugin " + d.plugin + " v" + d.version + " failed to start"; why = (d.error || "") + (d.kept ? " · kept v" + d.kept : ""); break;
-      case "plugin.rollback": ic = "wait"; what = "Plugin " + d.plugin + " rolled back"; why = "v" + d.from + " → v" + d.to; break;
-      case "plugin.disable": what = "Plugin " + d.plugin + " disabled"; why = "v" + d.version; break;
-      case "plugin.uninstall": ic = "bad"; what = "Plugin " + d.plugin + " removed"; why = ""; break;
       case "secret.access":
         ic = d.outcome === "granted" ? "info" : "bad";
-        what = "Secret " + d.secret + " · " + d.outcome + " to " + d.plugin;
+        what = "Secret " + d.secret + " · " + d.outcome + " to " + d.module;
         why = d.error || "value never logged; redacted wherever it appears";
         break;
       default: what = e.type;
@@ -645,7 +606,7 @@ tr:last-child td { border-bottom: 0; }
   }
   function refreshAudit() {
     load("audit").then(function (j) {
-      var pane = $("#pane-activity"), list = (j.entries || []).filter(function (e) { return e.type !== "plugin.disposed"; });
+      var pane = $("#pane-activity"), list = (j.entries || []).filter(function (e) { return e.type !== "module.disposed"; });
       pane.innerHTML = '<div class="chain">' + (j.verified ? '<span class="tag ok">Chain verified</span>' : '<span class="tag bad">Chain broken</span>') + "<span>" + (j.count || list.length) + " entries · each line is hash-linked to the one before (audit_file)</span></div>";
       if (!list.length) { pane.insertAdjacentHTML("beforeend", '<div class="none">No activity yet.</div>'); return; }
       pane.insertAdjacentHTML("beforeend", '<ul class="feed">' + list.map(auditRow).join("") + "</ul>");
@@ -663,106 +624,6 @@ tr:last-child td { border-bottom: 0; }
         '<p class="intro" style="margin-top:16px">Outbox</p>' + (out || '<div class="none">No emails sent.</div>');
     });
   }
-  // ------------------------------------------------------------- plugins
-  // Add, update and remove plugins in the running agent. Each version is
-  // linted (nothing runs), signed by the server and held until a
-  // supervisor approves it; a version that fails to start never replaces
-  // the running one. The public demo offers sample plugins only.
-  function postJSON(path, body) {
-    return fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
-      .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { return { status: r.status, json: j }; }); });
-  }
-  var plugins = { data: null, result: "" };
-  var STATE_TAG = { ACTIVE: "ok", VALIDATED: "wait", APPROVED: "", FAILED: "bad", QUARANTINED: "bad" };
-  function refreshPlugins() {
-    var pane = $("#pane-plugins");
-    if (!state.live && !replay.plugin) {
-      pane.innerHTML = '<p class="intro">Add, update and remove plugins while the agent runs.</p><div class="none">The plugin editor needs the live backend. It may be waking up (refresh in a minute), or run it locally: <code>go run ./examples/fullstack</code></div>';
-      return;
-    }
-    (state.live ? api.get("api/plugins") : replay.plugins()).then(function (j) { plugins.data = j; renderPlugins(); refreshPrompts(); });
-  }
-  function pluginPost(path, body) { return state.live ? postJSON(path, body) : replay.pluginPost(path, body); }
-  function tryButton(ask) { return ask ? '<div class="pv-actions"><button class="btn primary" type="button" data-try="' + esc(ask) + '">Ask in the chat: “' + esc(ask) + '”</button></div>' : ""; }
-  function renderPlugins() {
-    var j = plugins.data || {}, pane = $("#pane-plugins"), sup = USERS[state.user].role === "supervisor";
-    var keepCode = $("#pv-code") ? $("#pv-code").value : null, keepName = $("#pv-name") ? $("#pv-name").value : null, keepSample = $("#pv-sample") ? $("#pv-sample").value : null;
-    var html = '<p class="intro">Add, update and remove plugins while the agent runs. Each version is linted without running it, signed by the server and held until a supervisor approves it. A version that fails to start never replaces the running one.</p>' +
-      (state.live ? "" : '<p class="banner">Replay mode: submit the first sample as Sam, switch to Ada and approve it, then ask its question in the chat. Each step replays the recorded backend.</p>');
-    var list = j.plugins || [];
-    if (!list.length) html += '<div class="none" style="padding:14px 10px">No plugins added yet. Pick a sample below and submit it.</div>';
-    list.forEach(function (p) {
-      html += '<div class="item"><div class="top2"><h5 class="mono">' + esc(p.name) + '</h5>' + (p.active ? '<span class="tag ok">running v' + esc(p.active) + '</span>' : '<span class="tag">not running</span>') + "</div>";
-      (p.versions || []).slice().reverse().forEach(function (v) {
-        var canApprove = v.state === "VALIDATED" || v.state === "APPROVED" || v.state === "FAILED";
-        html += '<div class="pv-ver"><span class="mono">v' + esc(v.version) + '</span><span><span class="tag ' + (STATE_TAG[v.state] || "") + '">' + esc(v.state) + "</span></span>" +
-          (canApprove && v.version !== p.active ? '<button class="btn" type="button" data-act="approve" data-name="' + esc(p.name) + '" data-ver="' + esc(v.version) + '"' + (sup ? "" : " disabled") + ">Approve &amp; enable</button>" : "<span></span>") +
-          '<div class="why">' + esc(v.summary || "") + (v.installed_by ? " · submitted by " + esc(v.installed_by) : "") + (v.approved_by ? " · approved by " + esc(v.approved_by) : "") + "</div>" +
-          (v.error ? '<div class="why bad">Failed to start: ' + esc(v.error) + "</div>" : "") + (v.reason ? '<div class="why bad">' + esc(v.reason) + "</div>" : "") + "</div>";
-      });
-      html += '<div class="pv-actions">' + (p.previous && p.previous !== p.active ? '<button class="btn" type="button" data-act="rollback" data-name="' + esc(p.name) + '"' + (sup ? "" : " disabled") + ">Roll back to v" + esc(p.previous) + "</button>" : "") +
-        '<button class="btn danger" type="button" data-act="remove" data-name="' + esc(p.name) + '"' + (sup ? "" : " disabled") + ">Remove</button></div>";
-      if (!sup) html += '<p class="meta" style="margin:8px 0 0">Switch to Ada (supervisor) to approve, roll back or remove.</p>';
-      html += "</div>";
-    });
-    var samples = j.samples || [];
-    html += '<div class="item pv-form"><h5>Add or update a plugin</h5><label for="pv-sample">Start from</label><select id="pv-sample">' +
-      samples.map(function (s) { return '<option value="' + esc(s.id) + '">' + esc(s.title) + "</option>"; }).join("") + (j.allow_code ? '<option value="">Your own code</option>' : "") + "</select>" +
-      '<label for="pv-name">Plugin name</label><input id="pv-name"' + (j.allow_code ? "" : " readonly") + '>' +
-      '<label for="pv-code">Code' + (j.allow_code ? "" : " (read-only on the public demo: run it locally with -allow-plugin-code to write your own)") + '</label><textarea id="pv-code" spellcheck="false"' + (j.allow_code ? "" : " readonly") + "></textarea>" +
-      '<div class="pv-actions"><button class="btn primary" type="button" id="pv-submit">Submit for review</button></div><div class="pv-result" id="pv-result">' + plugins.result + "</div></div>";
-    pane.innerHTML = html;
-    var sel = $("#pv-sample");
-    function fill() {
-      var s = samples.filter(function (x) { return x.id === sel.value; })[0];
-      if (s) { $("#pv-name").value = s.name; $("#pv-code").value = s.code; }
-    }
-    if (keepSample !== null) sel.value = keepSample;
-    if (keepCode !== null && (j.allow_code || keepSample === sel.value)) { $("#pv-code").value = keepCode; $("#pv-name").value = keepName; } else fill();
-    sel.addEventListener("change", fill);
-    $("#pv-submit").addEventListener("click", submitPlugin);
-    pane.querySelectorAll("[data-act]").forEach(function (b) {
-      b.addEventListener("click", function () { pluginAction(b.dataset.name, b.dataset.act, b.dataset.ver); });
-    });
-    pane.querySelectorAll("[data-try]").forEach(function (b) {
-      b.addEventListener("click", function () { $("#newconv").click(); send(b.dataset.try); });
-    });
-  }
-  function askFor(name) {
-    var s = ((plugins.data || {}).samples || []).filter(function (x) { return x.name === name; })[0];
-    return s ? s.ask : "";
-  }
-  function sup() { return USERS[state.user].role === "supervisor"; }
-  function submitPlugin() {
-    var sample = $("#pv-sample").value, body = { user: state.user, name: $("#pv-name").value, code: $("#pv-code").value };
-    var s = ((plugins.data || {}).samples || []).filter(function (x) { return x.id === sample; })[0];
-    if (s && s.code === body.code && s.name === body.name) body = { user: state.user, sample: sample };
-    $("#pv-submit").disabled = true;
-    pluginPost("api/plugins", body).then(function (r) {
-      var j = r.json, out = "";
-      if (r.status === 200) {
-        out = '<span class="tag wait">v' + esc(j.version) + " " + esc(j.state) + "</span> " + esc(j.summary || "") + "<br>Held until a supervisor approves it" + (sup() ? "." : ": switch to Ada (supervisor) and approve it above.") + (s ? " Then ask in the chat: “" + esc(s.ask) + "”" : "");
-      } else {
-        out = '<span class="tag bad">not installed</span> ' + esc(j.error || "error " + r.status);
-        var issues = (j.issues || []).filter(function (i) { return i.level === "error"; });
-        if (issues.length) out += "<ul>" + issues.map(function (i) { return "<li>" + esc(i.rule + ": " + i.message) + "</li>"; }).join("") + "</ul>";
-      }
-      plugins.result = out;
-      refreshPlugins(); refreshAudit();
-    }).finally(function () { var b = $("#pv-submit"); if (b) b.disabled = false; });
-  }
-  function pluginAction(name, act, ver) {
-    if (act === "remove" && !confirm("Remove " + name + " and every version of it?")) return;
-    pluginPost("api/plugins/" + encodeURIComponent(name), { user: state.user, action: act, version: ver || "" }).then(function (r) {
-      var j = r.json;
-      plugins.result = r.status === 200
-        ? '<span class="tag ok">done</span> ' + esc(act === "approve" ? name + " v" + ver + " approved and running." : act === "rollback" ? name + " rolled back." : name + " removed.") +
-          (act !== "remove" ? tryButton(askFor(name)) : "")
-        : '<span class="tag bad">' + esc(act) + " failed</span> " + esc(j.error || "") + (act === "approve" ? "<br>The version that was running keeps running." : "");
-      refreshPlugins(); refreshAudit();
-    });
-  }
-
   function hood(e) {
     var pane = $("#pane-hood");
     if (!pane.dataset.init) { pane.dataset.init = "1"; pane.innerHTML = '<p class="intro">Events from the current run. “Model saw” is the last customer message after every middleware ran — card numbers are masked by hook_pii before the model gets them.</p><div id="hoodlist"></div>'; }
@@ -790,7 +651,6 @@ tr:last-child td { border-bottom: 0; }
       state.user = b.dataset.user;
       document.querySelectorAll(".seg button").forEach(function (x) { x.setAttribute("aria-pressed", String(x === b)); });
       if (state.thread) openThread(state.thread);
-      if (plugins.data) renderPlugins();
     });
   });
   $("#newconv").addEventListener("click", function () { if (state.busy) return; state.thread = null; cards = {}; $("#title").textContent = "New conversation"; hello(); renderChips(); highlightConv(); });

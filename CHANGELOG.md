@@ -1,8 +1,42 @@
 # Changelog
 
-All notable changes to eipagent. Versions follow [semantic versioning](https://semver.org); see [Versioning](README.md#versioning) for what that covers while the major version is 0.
+All notable changes to kiln. Versions follow [semantic versioning](https://semver.org); see [Versioning](README.md#versioning) for what that covers while the major version is 0.
 
 ## Unreleased
+
+
+## v0.5.0 — 2026-11-05
+
+**Renamed from eipagent to kiln.** The project is now `kiln`: the Go module is `github.com/ganeshdipdumbare/kiln`, the package is `kiln`, the CLI is `kiln` (`cmd/kiln`), and environment variables are `KILN_*` (`KILN_MODEL`, `KILN_BOX`, `KILN_BOX_DIR`, `KILN_DATABASE_URL`). The logo and docs are updated; older entries below use the current name.
+
+**kiln is a statically composed, capability-secured module SDK.** The runtime plugin system is gone. Nothing is loaded, interpreted or fetched at run time: every unit of functionality is a compiled Go module, and `kiln.New` validates the whole composition before starting it.
+
+### Breaking changes
+
+- **Interpreted plugins removed.** Yaegi is no longer a dependency. Plugins written as `//go:build ignore` source files with `package plugin` cannot be loaded. Convert each to a Go package that exports `var Module = engine.Module{...}` and import it with `kiln.WithModule(m)` (see [MODULES.md](MODULES.md)). The 56 standard plugins are now the packages under [`modules/`](modules). Old import paths (`github.com/ganeshdipdumbare/eipagent`, `.../eipagent/sdk`) must be updated to the `kiln` paths.
+- **`engine.Plugin` → `engine.Module`; `sdk.Plugin` → `sdk.Module`.** `sdk.Tool.Plugin` is now `sdk.Tool.Module`. The `sdk.Context` alias and the v0.4 name aliases are removed.
+- **Runtime lifecycle removed.** `Engine.Load`, `Reload`, `Unload`, `Watch`, `Pins`, `LoadProfile`, `Profile.Plugins`, `PluginSpec`, `PluginStatus`, `WithPluginDir`, `WithPluginStore`, `WithPreset`, `WithHotReload`, `WithLockFile`, `WithCompiledPlugin`, `kiln.lock` and the `plugins.FS` embedded source set no longer exist. There is no hot reload: rebuild and redeploy.
+- **Plugin store and signed packages removed.** `pluginpkg`, the `kiln plugin *` commands (init, validate, fix, pack/build, inspect, keygen, install, approve, enable, disable, update, rollback, quarantine, uninstall, list, pin) and `examples/plugins`, `examples/plugin-store`, `examples/plugin-validate` are deleted.
+- **Options renamed.** `WithPlugin(use, cfg)` → `WithModuleConfig(name, cfg)`; `WithPlugins(names...)` → `WithModules(names...)`; `WithPluginSpec` → `WithModuleSpec`; `WithCompiledPlugin` → `WithModule`. `Policy.RequirePins` and `Policy.HotReload` are gone; `engine.DevPolicy` is gone (`SecurePolicy()` is the default).
+- **Profiles use `modules`, not `plugins`.** A profile is `{"model", "instructions", "max_steps", "modules": [{"use", "as", "config", "disabled", "priority"}]}`.
+- **Old module names are gone**, not aliased: `llm_*` → `model_*`, `mw_*` → `hook_*`, `checkpoint_*` → `threads_*`, `store_*` → `memory_*`, `exec_*` → `workspace_*`, `jobs` → `trigger_schedule`, `audit_jsonl` → `audit_file`, `agents` → `tool_subagents`, `memory_store` → `tool_memory`, `loop_default` → `loop`, `mcp_client` → `tool_mcp`, `skills_dir` → `tool_skills`.
+- **`WithRunIn` runs the box differently.** The host no longer uploads plugin source or a separate `kiln` binary; it uploads its own program (or `RunIn.Binary`, built for the box's OS/arch) and starts it with `KILN_BOX=1` and `KILN_BOX_DIR=kiln`. The program checks `kiln.InBox()` and calls `kiln.ServeBox`, which takes the profile and policy the host uploaded. Modules the box needs are compiled into that program. `RunIn.PluginDirs` is gone; `RunIn.HostPlugins` is now `[]engine.ModuleSpec`. The old `kiln serve --stdio` box entry point is replaced by `ServeBox`.
+- **Directory creation moved to the application.** Modules work inside directories they are given and never create them. `WithPersistence("file", dir)` and `WithAudit(path)` create theirs; an app that configures `threads_file`, `memory_file` or `audit_file` directly must `os.MkdirAll` first. `sandbox_local`, `audit_file`, `memory_file`, `threads_file`, `trace_file` and `tool_skills` now require their directory to exist.
+- **Redaction and audit wording.** Audit records now use `"module": "<name>"` (was `"plugin"`) and the writer is `module:<name>` for module-submitted records. Lifecycle events are `module.active` / `module.failed` / `module.disposed` (were `plugin.*`).
+
+### Added
+
+- **Static composition with validation.** `engine.Compose` checks the whole plan before running anything: unknown or denied modules, duplicate providers, missing requirements (with a hint naming the modules that would supply it), unknown capabilities, and cycles. It returns a deterministic start order; policy-required rows start in the order the policy lists them. `Plan.Start` is all-or-nothing: a failure disposes what already started.
+- **Capability broker.** Modules reach the outside world only through `p.HTTP` (host allow-list, no redirects, private/reserved/metadata addresses refused unless `AllowPrivate`), `p.Listen`, `p.Dir` (`os.Root`, so `..` and symlinks cannot escape), `p.Exec` (named programs, no shell, filtered environment, explicit secrets), `p.Env` and `p.DB`. Every call fails closed with the missing capability name; `Provide` of an undeclared service fails.
+- **Contracts on `sdk.Module`.** `SetContract`, `Grants`, `Granted`; a module can resolve only the secrets it declares or that the app writes as `secret://` in its config.
+- **Build-time analyzer (`internal/modulecheck`)** and `kiln module list | check [dir] | manifest [dir]`. `check` refuses stdlib access that bypasses the broker (`os`, `os/exec`, `net`, `syscall`, `database/sql` except `db_sql`, `unsafe`, `io/ioutil`, `embed`), undeclared capabilities and services, descriptor mistakes, and `init` functions. `manifest` emits modules, requires, provides, capabilities and the capabilities each module's code uses.
+- `examples/boxprobe` and `internal/boxtest`: application modules compiled into a box program, the way `WithRunIn` runs them.
+- `sdk.SetEgressBridge`: a box routes broker HTTP through the host, so placeholders are swapped and egress is recorded even though modules now hold their own `p.HTTP` client.
+
+### Removed
+
+- `pluginpkg`, `plugins/`, `engine/symbols/`, `engine/perms.go`, `engine/check.go`, `engine/writeguard.go`, `internal/docgen`, `docs/gen`, and the `plugins.FS` embedded registry.
+- The `kiln plugin`, `kiln serve --stdio` and `-plugins/-use store`-based CLI paths. `kiln` now runs the standard modules; application modules are compiled into your own program.
 
 ## v0.4.8 — 2026-11-04
 
@@ -24,9 +58,9 @@ All notable changes to eipagent. Versions follow [semantic versioning](https://s
 - Interpreted plugins can no longer reach the mutable `sdk.PluginRenames` global.
 - `writeTarget` refuses `/` as an ancestor of protected paths, closing `RemoveAll("/")`.
 - Plugin packages reject symlinked files and oversized assets; lint and runtime now share secret-reference extraction.
-- `os.DirFS` is per-Open guarded; `os.Stdout`/`os.Stderr` are not exposed and `eip serve` redirects plugin prints to stderr.
+- `os.DirFS` is per-Open guarded; `os.Stdout`/`os.Stderr` are not exposed and `kiln serve` redirects plugin prints to stderr.
 - `plugin.json` supports `"dynamic": true` for plugins such as MCP adapters whose tool/service names are decided at runtime.
-- Audit: `VerifyKeyedWithAnchor` and `eip audit verify -anchor` verify against an off-host head, detecting a log+local-head rollback by a host-level attacker.
+- Audit: `VerifyKeyedWithAnchor` and `kiln audit verify -anchor` verify against an off-host head, detecting a log+local-head rollback by a host-level attacker.
 - Redaction uses a trie-backed `strings.Replacer` rebuilt only when the set changes, so `Redact` is linear in the input rather than in the number of registered forms.
 - Firecracker `network: none` now fails closed if it cannot install the INPUT/FORWARD iptables rules, and removes them on teardown.
 
@@ -70,7 +104,7 @@ All notable changes to eipagent. Versions follow [semantic versioning](https://s
 ### Fixed
 
 - `WithRunIn`: when the agent in the sandbox exits, the run waiting on it fails with an error saying so (not `rpc: connection closed`), and the next run starts a new sandbox. Threads kept in the old sandbox are gone with it unless their store is outside the box.
-- `eip serve --stdio` keeps stdin and stdout for the host's messages only: a plugin that prints goes to the host's `[box]` log, and one that reads stdin gets EOF. The host also reads a message that has stray output in front of it on the same line, so a print without a newline no longer leaves a call waiting.
+- `kiln serve --stdio` keeps stdin and stdout for the host's messages only: a plugin that prints goes to the host's `[box]` log, and one that reads stdin gets EOF. The host also reads a message that has stray output in front of it on the same line, so a print without a newline no longer leaves a call waiting.
 
 ## v0.4.2 — 2026-11-03
 
@@ -84,9 +118,9 @@ All notable changes to eipagent. Versions follow [semantic versioning](https://s
 - `hook_fallback` also falls back when a model refuses (`on_refusal`, default true). Providers report `FinishReason: "refusal"` (Anthropic `refusal`, OpenAI `content_filter`, Gemini safety stops).
 - `sdk.Usage.CacheReadTokens` and `CacheWriteTokens`, filled by all three providers.
 - `WithSaveEachStep()`, `Thread.Continue` and `Thread.Fork`.
-- Package `evals` and `eip eval`: grade an agent on a dataset (contains, regex, tools, step budget, judge model).
+- Package `evals` and `kiln eval`: grade an agent on a dataset (contains, regex, tools, step budget, judge model).
 - Every built-in plugin's docs show an example; a test checks each one parses and uses only config keys the plugin reads.
-- `eip plugin validate` warns (rule `interpreter`) about two Yaegi quirks: `x, _ := v.(T)` in a loop body, and several conditions in one `case` of a switch with no tag.
+- `kiln plugin validate` warns (rule `interpreter`) about two Yaegi quirks: `x, _ := v.(T)` in a loop body, and several conditions in one `case` of a switch with no tag.
 
 ### Changed
 
@@ -104,24 +138,24 @@ All notable changes to eipagent. Versions follow [semantic versioning](https://s
 
 - `WithRunIn`: secrets never enter the sandbox. `secrets_*` providers stay on the host. The box's `secrets` service returns placeholders (`eipsec_...`), and the box's HTTP is made by the host, which swaps a placeholder for its value only on requests that match that secret's `RunIn.SecretHosts` rules. Responses come back redacted. Requests without secrets may reach only `RunIn.Egress`, which is empty by default.
 - Sandbox env and mounts are checked by the core (`sdk.CheckSandboxSpec`, `sdk.CheckSandboxEnv`): resolved secret values, credential-looking names without a placeholder, and mounts of `/` or a container runtime socket are refused.
-- `eip serve --stdio` refuses to start when its environment holds a credential.
+- `kiln serve --stdio` refuses to start when its environment holds a credential.
 - `WithRunIn`: the host answers a box's secret lookup only for a plugin the box was started with (its profile, the policy's `require`, and the plugins it loads on its own). The box names the asking plugin itself, so before this it could claim another plugin's grants. A refusal is audited as a denied `secret.access`.
 - **Behavior change:** HTTP from plugins inside a `WithRunIn` box goes through the host and is refused unless the host is listed in `RunIn.Egress` or `RunIn.SecretHosts`.
 
 ## v0.4.0 — 2026-11-01
 
-One vocabulary, in Go terms, and a documentation section that says what to use when. **Nothing breaks:** every old name below keeps working until v1.0 and logs a notice once. `eip plugin fix` rewrites plugin files.
+One vocabulary, in Go terms, and a documentation section that says what to use when. **Nothing breaks:** every old name below keeps working until v1.0 and logs a notice once. `kiln plugin fix` rewrites plugin files.
 
 ```bash
-go get github.com/ganeshdipdumbare/eipagent@v0.4.0
+go get github.com/ganeshdipdumbare/kiln@v0.4.0
 ```
 
 ### Renamed (old names still accepted)
 
 | Before | Now |
 |---|---|
-| `sdk.Context`, `eipagent.PluginContext` | `sdk.Plugin`, `eipagent.PluginAPI` (`func Apply(p *sdk.Plugin) error`) |
-| `var Inject`, `eipagent.Plugin{Inject}`, manifest `"inject"` | `var Requires`, `eipagent.Plugin{Requires}`, manifest `"requires"` |
+| `sdk.Context`, `kiln.PluginContext` | `sdk.Plugin`, `kiln.PluginAPI` (`func Apply(p *sdk.Plugin) error`) |
+| `var Inject`, `kiln.Plugin{Inject}`, manifest `"inject"` | `var Requires`, `kiln.Plugin{Requires}`, manifest `"requires"` |
 | `OnAgentStart`, `OnAgentEnd`, `OnStepPrepare`, `OnModelAfter`, `OnDispose` | `OnRunStart`, `OnRunEnd`, `BeforeStep`, `AfterModel`, `OnUnload` |
 | services `llm/<name>`, `checkpointer`, `store`, `exec` | `model/<name>`, `threads`, `memory`, `workspace` |
 | `llm_openai`, `llm_anthropic`, `llm_gemini`, `llm_mock` | `model_openai`, `model_anthropic`, `model_gemini`, `model_mock` |
@@ -131,7 +165,7 @@ go get github.com/ganeshdipdumbare/eipagent@v0.4.0
 | `memory_store`, `agents`, `skills_dir`, `mcp_client`, `tool_http_fetch` | `tool_memory`, `tool_subagents`, `tool_skills`, `tool_mcp`, `tool_fetch` |
 | `exec_local`, `exec_sandbox` | `workspace_local`, `workspace_sandbox` |
 | `jobs`, `audit_jsonl`, `loop_default` | `trigger_schedule`, `audit_file`, `loop` |
-| `eip plugin init -template middleware / provider / store / webhook` | `hook / model / memory / trigger` |
+| `kiln plugin init -template middleware / provider / store / webhook` | `hook / model / memory / trigger` |
 
 Old names work in profiles, `WithPlugin`, policy lists (allow, deny, locked, grants), secret grants, `Requires` and `Service` lookups. Instance names don't change: a plugin loaded as `llm_openai` keeps that name (and its grants).
 
@@ -139,7 +173,7 @@ Old names work in profiles, `WithPlugin`, policy lists (allow, deny, locked, gra
 
 - **Options for common setups:** `WithPersistence("memory" | "file" | "postgres", …)`, `WithApprovals(tools…)`, `WithSandbox(provider)`, `WithAudit(path)`, `WithTracing(endpoint)`, `WithMCP(name, command | url, args…)`.
 - **Plumbing loads itself:** a plugin waiting on `workspace`, `sandbox/local`, `db`, `threads`, `memory` or `loop` gets the default provider, shown as `auto` in `Status()`.
-- **`eip plugin init` asks what the plugin should do**; `validate` and `inspect` end with a one-line summary of what the code does; **`eip plugin fix`** rewrites old names; lint warns about them (`old-name`).
+- **`kiln plugin init` asks what the plugin should do**; `validate` and `inspect` end with a one-line summary of what the code does; **`kiln plugin fix`** rewrites old names; lint warns about them (`old-name`).
 - **Docs:** one Plugins section, made up of: a five-minute intro; "What to use when"; a page per kind (tools, hooks, model providers, threads and memory, sandboxes and workspaces, triggers, telemetry and audit, secrets, policy) with when to use it, every built-in and its config, how to write your own, and gotchas; permissions; and the plugin API. The built-in reference and template code are generated from the plugins (`go run ./docs/gen`), and a test fails if they drift.
 
 ## v0.3.0 — 2026-10-31
@@ -147,12 +181,12 @@ Old names work in profiles, `WithPlugin`, policy lists (allow, deny, locked, gra
 The first tagged release. Install it with:
 
 ```bash
-go get github.com/ganeshdipdumbare/eipagent@v0.3.0
+go get github.com/ganeshdipdumbare/kiln@v0.3.0
 ```
 
 ### Breaking changes
 
-- **Module path.** The module is now `github.com/ganeshdipdumbare/eipagent` (it was `eipagent`), so it can be fetched by version. Update Go imports, for example `"eipagent"` → `"github.com/ganeshdipdumbare/eipagent"` and `"eipagent/sdk"` → `"github.com/ganeshdipdumbare/eipagent/sdk"`. The package names don't change (`eipagent.New`, `sdk.Tool` ...). **Plugin files don't change:** interpreted plugins keep `import "eipagent/sdk"`, a stable alias the engine resolves whatever the module path is.
+- **Module path.** The module is now `github.com/ganeshdipdumbare/kiln` (it was `kiln`), so it can be fetched by version. Update Go imports, for example `"kiln"` → `"github.com/ganeshdipdumbare/kiln"` and `"kiln/sdk"` → `"github.com/ganeshdipdumbare/kiln/sdk"`. The package names don't change (`kiln.New`, `sdk.Tool` ...). **Plugin files don't change:** interpreted plugins keep `import "kiln/sdk"`, a stable alias the engine resolves whatever the module path is.
 - **Tool and skill names are owned.** `AddTool` / `AddSkill` refuse a name another plugin already registered (logged; the first one keeps it). `Tool.Plugin` is always the registering plugin.
 - **The `env` permission hides credential-looking variables** (`*_API_KEY`, `*_TOKEN`, `*PASSWORD*` ...). Secret providers declare the new `env:secrets` permission. Policies with `grants` must grant it to `secrets_env` / `secrets_vault`.
 - **Tighter plugin permissions.** `fs:write` alone opens files write-only; `io/ioutil`'s read and write functions need `fs:read` / `fs:write`; `net/textproto` needs `net`; `mime/multipart` needs `fs:write`; `os.NewFile` and `os.Stdin` are gone.
@@ -167,8 +201,8 @@ go get github.com/ganeshdipdumbare/eipagent@v0.3.0
 
 ### Added
 
-- Plugin packaging: `plugin.json` manifests, `eip plugin init | validate | build | inspect | keygen`, signed reproducible `.eip` packages (`pluginpkg`).
-- A plugin store with an install lifecycle (VALIDATED → APPROVED → ACTIVE, FAILED, QUARANTINED; install, approve, enable, update, rollback, quarantine, uninstall), live through `eipagent.WithPluginStore`.
+- Plugin packaging: `plugin.json` manifests, `kiln plugin init | validate | build | inspect | keygen`, signed reproducible `.kiln` packages (`pluginpkg`).
+- A plugin store with an install lifecycle (VALIDATED → APPROVED → ACTIVE, FAILED, QUARANTINED; install, approve, enable, update, rollback, quarantine, uninstall), live through `kiln.WithPluginStore`.
 - Secrets: caller identity bound by the core, redaction of resolved values (and their JSON / URL / base64 / hex forms) in logs, traces and audit, `secret.access` audit records, `secrets_vault`.
 - Observability: `audit_http`, `trace_otlp`, standard audit fields (`run`, `plugin`, `provider`, `call_id`, `writer` ...), `RunState.ID`, optional keyed audit chain (`audit_jsonl` `key`, `audit.VerifyKeyed`).
 - Examples: `secrets`, `observability`, `plugin-validate`, `plugin-store`, and a plugin per template in `examples/plugins`.
@@ -179,4 +213,4 @@ go get github.com/ganeshdipdumbare/eipagent@v0.3.0
 
 ## Before v0.3.0
 
-Untagged development on `main` (module path `eipagent`): the core engine and trust gate, the facade (`Generate`, `Stream`, `GenerateObject`, threads, human-in-the-loop), providers, the middleware pack, memory and Postgres, MCP, subagents, skills, sandboxes in both directions, policy and audit, jobs and webhooks, the CLI, the docs site and the full-stack demo.
+Untagged development on `main` (module path `kiln`): the core engine and trust gate, the facade (`Generate`, `Stream`, `GenerateObject`, threads, human-in-the-loop), providers, the middleware pack, memory and Postgres, MCP, subagents, skills, sandboxes in both directions, policy and audit, jobs and webhooks, the CLI, the docs site and the full-stack demo.

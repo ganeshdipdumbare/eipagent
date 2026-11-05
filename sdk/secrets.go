@@ -17,12 +17,12 @@ import (
 	"time"
 )
 
-// Version is the eipagent SDK version plugins are checked against
-// (the "eipagent" field of a plugin manifest).
-const Version = "0.4.8"
+// Version is the kiln SDK version modules are checked against
+// (the "kiln" field of a module manifest).
+const Version = "0.5.0"
 
 // Redaction: every secret value resolved through the "secrets" service
-// is remembered here, and audit / trace / log plugins pass what they
+// is remembered here, and audit / trace / log modules pass what they
 // write through Redact, so a secret that ends up in a tool argument,
 // model output or error message never reaches those sinks.
 
@@ -51,7 +51,7 @@ const maxRedactions = 20000
 // traces or audit output, together with its common encodings (JSON
 // string escaping, URL query escaping, base64), so a secret that was
 // serialized on its way to a sink is caught too. It reports false for
-// values shorter than MinRedactLen, which are not registered. Plugins
+// values shorter than MinRedactLen, which are not registered. Modules
 // can't call it: only the core and compiled code register values.
 func AddRedaction(v string) bool {
 	if len(v) < MinRedactLen {
@@ -293,9 +293,9 @@ func RedactValue(v any) any {
 	return Redact(fmt.Sprint(v))
 }
 
-// Granted reads are audited once per plugin and secret every
+// Granted reads are audited once per module and secret every
 // grantAuditEvery, or right away when the value changes (a rotation).
-// Plugins that resolve secrets per call (as they should) would otherwise
+// Modules that resolve secrets per call (as they should) would otherwise
 // flood the log, and an audit sink that resolves its own key would feed
 // itself. Denials are always recorded.
 const grantAuditEvery = 10 * time.Minute
@@ -308,7 +308,7 @@ type grantMark struct {
 // auditGrant reports whether a granted read should be recorded now. The
 // marks live on the agent's root registry, so two agents in one process
 // each audit their own reads.
-func (c *Plugin) auditGrant(caller, name, v string) bool {
+func (c *Module) auditGrant(caller, name, v string) bool {
 	r := c.reg
 	for r.parent != nil {
 		r = r.parent
@@ -328,19 +328,19 @@ func (c *Plugin) auditGrant(caller, name, v string) bool {
 	return true
 }
 
-// rawService looks a service up without the per-plugin binding (for
+// rawService looks a service up without the per-module binding (for
 // records the core itself writes).
-func (c *Plugin) rawService(name string) any {
+func (c *Module) rawService(name string) any {
 	v, _ := c.reg.service(name)
 	return v
 }
 
-// boundAudit is what Service("audit") hands a plugin: every record it
-// submits is stamped writer="plugin:<name>" (overwriting any writer the
-// plugin set), so a plugin can't pass its own records off as the core's
-// or another plugin's. Records the core writes carry writer="core".
-func (c *Plugin) boundAudit(a *Audit) *Audit {
-	writer := "plugin:" + c.PluginName()
+// boundAudit is what Service("audit") hands a module: every record it
+// submits is stamped writer="module:<name>" (overwriting any writer the
+// module set), so a module can't pass its own records off as the core's
+// or another module's. Records the core writes carry writer="core".
+func (c *Module) boundAudit(a *Audit) *Audit {
+	writer := "module:" + c.PluginName()
 	return &Audit{Record: func(kind string, data map[string]any) {
 		d := make(map[string]any, len(data)+1)
 		for k, v := range data {
@@ -351,15 +351,15 @@ func (c *Plugin) boundAudit(a *Audit) *Audit {
 	}}
 }
 
-// boundSecrets is what Service("secrets") hands a plugin: the caller is
-// fixed to the plugin's identity (a plugin can't ask as someone else),
+// boundSecrets is what Service("secrets") hands a module: the caller is
+// fixed to the module's identity (a module can't ask as someone else),
 // values are registered for redaction and every access is audited.
-func (c *Plugin) boundSecrets(s *Secrets) *Secrets {
+func (c *Module) boundSecrets(s *Secrets) *Secrets {
 	caller := c.PluginName()
 	return &Secrets{Get: func(ctx context.Context, _ string, name string) (string, error) {
 		var err error
 		if c.restrictSecrets && !secretAllowed(c.secretGrants, name) {
-			err = fmt.Errorf("secret %q is not declared by plugin %s", name, caller)
+			err = fmt.Errorf("secret %q is not declared by module %s", name, caller)
 		} else {
 			var v string
 			v, err = s.Get(ctx, caller, name)
@@ -371,7 +371,7 @@ func (c *Plugin) boundSecrets(s *Secrets) *Secrets {
 				return v, nil // already audited recently
 			}
 			if a, ok := c.rawService("audit").(*Audit); ok && a.Record != nil {
-				d := map[string]any{"plugin": caller, "secret": name, "outcome": "granted", "writer": "core"}
+				d := map[string]any{"module": caller, "secret": name, "outcome": "granted", "writer": "core"}
 				if !redactable {
 					d["redaction"] = "not possible: value shorter than 4 bytes"
 				}
@@ -383,15 +383,15 @@ func (c *Plugin) boundSecrets(s *Secrets) *Secrets {
 			return v, err
 		}
 		if a, ok := c.rawService("audit").(*Audit); ok && a.Record != nil {
-			a.Record("secret.access", map[string]any{"plugin": caller, "secret": name, "outcome": "denied",
+			a.Record("secret.access", map[string]any{"module": caller, "secret": name, "outcome": "denied",
 				"error": Redact(err.Error()), "writer": "core"})
 		}
 		return "", err
 	}}
 }
 
-// secretAllowed matches a declared secret name against the plugin's
-// grants. Grants are exact names: a plugin must not be able to declare
+// secretAllowed matches a declared secret name against the module's
+// grants. Grants are exact names: a module must not be able to declare
 // "*" and read every secret the host allows.
 func secretAllowed(grants []string, name string) bool {
 	for _, g := range grants {

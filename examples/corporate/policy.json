@@ -1,6 +1,4 @@
 {
-  "require_pins": true,
-  "hot_reload": false,
   "allow": [],
   "deny": ["creator", "sandbox_local"],
   "grants": {
@@ -13,10 +11,10 @@
   },
   "locked": ["policy", "audit_file", "secrets_env"],
   "require": [
-    { "use": "audit_file", "config": { "path": "/var/log/eipagent/audit.jsonl" } },
+    { "use": "audit_file", "config": { "path": "/var/log/kiln/audit.jsonl" } },
     { "use": "secrets_env", "config": {
-        "allow": ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "EIP_DATABASE_URL"],
-        "grants": { "model_openai": ["OPENAI_API_KEY"], "model_anthropic": ["ANTHROPIC_API_KEY"], "db_sql": ["EIP_DATABASE_URL"] } } },
+        "allow": ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "KILN_DATABASE_URL"],
+        "grants": { "model_openai": ["OPENAI_API_KEY"], "model_anthropic": ["ANTHROPIC_API_KEY"], "db_sql": ["KILN_DATABASE_URL"] } } },
     { "use": "policy" }
   ],
   "rules": {

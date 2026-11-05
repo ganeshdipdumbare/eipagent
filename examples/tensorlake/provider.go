@@ -6,28 +6,31 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/sixt/tensorlake-go"
 
-	"github.com/ganeshdipdumbare/eipagent"
-	"github.com/ganeshdipdumbare/eipagent/sdk"
+	"github.com/ganeshdipdumbare/kiln/engine"
+	"github.com/ganeshdipdumbare/kiln/sdk"
 )
 
 // tensorlake is a sandbox provider for Tensorlake cloud sandboxes. The
-// host process stays local (or on your server); the agent, plugins and tools
+// host process stays local (or on your server); the agent, modules and tools
 // run in the cloud sandbox.
 //
 // It reads TENSORLAKE_API_KEY from the host environment and never sends it
-// into the sandbox.
-func tensorlakeProvider() eipagent.Plugin {
-	return eipagent.Plugin{
-		Name: "sandbox_tensorlake",
-		Apply: func(p *sdk.Plugin) error {
+// into the sandbox. Host files (the sandbox binary, uploads) go through
+// p.Dir, and variables through p.Env, so the module imports no os package.
+func tensorlakeProvider() engine.Module {
+	return engine.Module{
+		Name:        "sandbox_tensorlake",
+		Provides:    []string{"sandbox/tensorlake"},
+		Permissions: []string{"env", "fs:read", "fs:write"},
+		Apply: func(p *sdk.Module) error {
 			opts := []tensorlake.Option{}
 			if key := p.ConfigString("api_key", ""); key != "" {
 				opts = append(opts, tensorlake.WithAPIKey(key))
@@ -39,9 +42,9 @@ func tensorlakeProvider() eipagent.Plugin {
 				opts = append(opts, tensorlake.WithSandboxProxyBaseURL(proxy))
 			}
 			client := tensorlake.NewClient(opts...)
-			image := p.ConfigString("image", envOr("TL_IMAGE", "tensorlake/ubuntu-minimal"))
-			timeout := int64(p.ConfigInt("timeout_secs", envInt("TL_TIMEOUT_SECS", 900)))
-			workdir := p.ConfigString("workdir", envOr("TL_WORKDIR", "/home/tl-user"))
+			image := p.ConfigString("image", envOr(p, "TL_IMAGE", "tensorlake/ubuntu-minimal"))
+			timeout := int64(p.ConfigInt("timeout_secs", envInt(p, "TL_TIMEOUT_SECS", 900)))
+			workdir := p.ConfigString("workdir", envOr(p, "TL_WORKDIR", "/home/tl-user"))
 			return p.Provide("sandbox/tensorlake", &sdk.SandboxProvider{
 				Name:      "tensorlake",
 				Isolation: "remote",
@@ -78,7 +81,7 @@ func tensorlakeProvider() eipagent.Plugin {
 						return nil, err
 					}
 					p.Logf("created Tensorlake sandbox %s (image %s)", resp.SandboxId, img)
-					return wrapTensorlake(client, resp.SandboxId, workdir), nil
+					return wrapTensorlake(p, client, resp.SandboxId, workdir), nil
 				},
 				Attach: func(c context.Context, id string) (*sdk.Sandbox, error) {
 					info, err := client.GetSandbox(c, id)
@@ -94,7 +97,7 @@ func tensorlakeProvider() eipagent.Plugin {
 						return nil, err
 					}
 					p.Logf("attached Tensorlake sandbox %s", id)
-					return wrapTensorlake(client, id, workdir), nil
+					return wrapTensorlake(p, client, id, workdir), nil
 				},
 			})
 		},
@@ -136,7 +139,7 @@ func waitSandbox(ctx context.Context, client *tensorlake.Client, id string) erro
 	return fmt.Errorf("tensorlake: sandbox %s did not become running", id)
 }
 
-func wrapTensorlake(client *tensorlake.Client, id, wd string) *sdk.Sandbox {
+func wrapTensorlake(p *sdk.Module, client *tensorlake.Client, id, wd string) *sdk.Sandbox {
 	abs := func(p string) string {
 		if strings.HasPrefix(p, "/") {
 			return p
@@ -307,7 +310,12 @@ func wrapTensorlake(client *tensorlake.Client, id, wd string) *sdk.Sandbox {
 			return nil
 		},
 		Upload: func(c context.Context, hostPath, boxPath string) error {
-			f, err := os.Open(hostPath)
+			hd, err := p.Dir(filepath.Dir(hostPath), false)
+			if err != nil {
+				return err
+			}
+			defer hd.Close()
+			f, err := hd.Open(filepath.Base(hostPath))
 			if err != nil {
 				return err
 			}
@@ -325,7 +333,12 @@ func wrapTensorlake(client *tensorlake.Client, id, wd string) *sdk.Sandbox {
 			if err != nil {
 				return fmt.Errorf("tensorlake: %w", err)
 			}
-			return os.WriteFile(hostPath, b, 0o644)
+			hd, err := p.Dir(filepath.Dir(hostPath), true)
+			if err != nil {
+				return err
+			}
+			defer hd.Close()
+			return hd.WriteFile(filepath.Base(hostPath), b, 0o644)
 		},
 		Close: func(c context.Context) error {
 			cc, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -412,15 +425,16 @@ func lines(r *tensorlake.ProcessOutputResponse) string {
 	return strings.Join(r.Lines, "\n") + "\n"
 }
 
-func envOr(key, def string) string {
-	if v := os.Getenv(key); v != "" {
+// envOr and envInt read a host variable through the module's "env" grant.
+func envOr(p *sdk.Module, key, def string) string {
+	if v, err := p.Env(key); err == nil && v != "" {
 		return v
 	}
 	return def
 }
 
-func envInt(key string, def int) int {
-	if v := os.Getenv(key); v != "" {
+func envInt(p *sdk.Module, key string, def int) int {
+	if v, err := p.Env(key); err == nil && v != "" {
 		fmt.Sscanf(v, "%d", &def)
 	}
 	return def

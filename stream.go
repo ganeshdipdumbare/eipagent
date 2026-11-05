@@ -1,10 +1,10 @@
-package eipagent
+package kiln
 
 import (
 	"context"
 	"iter"
 
-	"github.com/ganeshdipdumbare/eipagent/sdk"
+	"github.com/ganeshdipdumbare/kiln/sdk"
 )
 
 // Stream is a run in progress. Range over Events or Text, then call

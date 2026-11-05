@@ -2,9 +2,9 @@
 // microsandbox, E2B, Kubernetes pods, a remote VM) plugs in by providing
 // "sandbox/<name>"; workspace_sandbox and tool_sandbox then use it unchanged.
 //
-// This one is compiled Go and wraps an existing sandbox; a real provider
-// would call its backend's API in Create/Exec/ReadFile/WriteFile/Close.
-// The same struct can be built from an interpreted plugin file too.
+// This one is a compiled application module (WithModule) that wraps an
+// existing sandbox; a real provider would call its backend's API in
+// Create/Exec/ReadFile/WriteFile/Close.
 package main
 
 import (
@@ -12,15 +12,16 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/ganeshdipdumbare/eipagent"
-	"github.com/ganeshdipdumbare/eipagent/sdk"
+	"github.com/ganeshdipdumbare/kiln"
+	"github.com/ganeshdipdumbare/kiln/sdk"
 )
 
 func main() {
-	provider := eipagent.Plugin{
+	provider := kiln.Module{
 		Name:     "sandbox_audited",
 		Requires: []string{"sandbox/local"},
-		Apply: func(p *sdk.Plugin) error {
+		Provides: []string{"sandbox/audited"},
+		Apply: func(p *sdk.Module) error {
 			inner := p.Service("sandbox/local").(*sdk.SandboxProvider)
 			return p.Provide("sandbox/audited", &sdk.SandboxProvider{
 				Name:      "audited",
@@ -41,16 +42,16 @@ func main() {
 			})
 		},
 	}
-	a, err := eipagent.New(
-		eipagent.WithModel("mock:demo"),
-		eipagent.WithPlugin("model_mock", map[string]any{"script": []any{
+	a, err := kiln.New(
+		kiln.WithModel("mock:demo"),
+		kiln.WithModuleConfig("model_mock", map[string]any{"script": []any{
 			map[string]any{"tool": "bash", "args": map[string]any{"command": "echo hello from the sandbox"}},
 			map[string]any{"text": "done"},
 		}}),
-		eipagent.WithPlugins("sandbox_local"),
-		eipagent.WithCompiledPlugin(provider),
-		eipagent.WithPlugin("workspace_sandbox", map[string]any{"provider": "audited"}),
-		eipagent.WithPlugins("tool_shell"),
+		kiln.WithModules("sandbox_local"),
+		kiln.WithModule(provider),
+		kiln.WithModuleConfig("workspace_sandbox", map[string]any{"provider": "audited"}),
+		kiln.WithModules("tool_shell"),
 	)
 	if err != nil {
 		log.Fatal(err)

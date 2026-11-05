@@ -1,15 +1,17 @@
-# eipagent
+# kiln
 
-**eipagent is an agent SDK for Go where everything is a plugin. It is built for companies and aims to be simple to use and secure by default.**
+**kiln is a statically composed, capability-secured agent SDK for Go. It is built for companies and aims to be simple to write and secure by default.**
 
-- **Everything is a plugin.** The core engine only loads plugins and routes calls between them. The agent loop, every LLM provider, tools, memory, middleware, sandboxes, persistence, tracing, audit and the policy rules are all plugins, and you can swap any of them. The model is [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) and its Cordis plugin framework.
+- **Everything is a module.** The agent loop, every model provider, tools, memory, hooks, sandboxes, persistence, tracing, audit and the policy rules are compiled Go modules. There is no runtime plugin loading and no interpreted code: the application decides what is in the binary.
+- **Compose at build time, validate before execution.** `kiln.New` checks the whole composition first, and fails with a named error for an unknown module, a missing requirement, a duplicate provider or a dependency cycle.
 - **Easy to use.** The API looks like the [AI SDK](https://ai-sdk.dev): `Generate`, `Stream`, `GenerateObject[T]` and typed `Tool(...)`.
 - **Feature rich.** It covers what [LangChain](https://docs.langchain.com/oss/python/langchain/overview) offers: many providers, a middleware pack, durable memory, human-in-the-loop, MCP, multi-agent and skills.
 - **Secure by default.**
-  - Plugins are pinned by sha256 and limited to the capabilities they declare.
+  - A module reaches the network, files, processes and databases only through the SDK broker, and only with the capabilities the policy grants.
+  - A build-time check (`kiln module check`) refuses stdlib access that bypasses the broker.
   - A locked policy layer always runs first.
   - The audit log is tamper-evident.
-  - Each plugin gets only the secrets granted to it.
+  - Each module gets only the secrets it declares.
   - Sandboxes are pluggable, and the agent can run inside one.
 
 ## Quick start
@@ -17,7 +19,7 @@
 Requires **Go 1.27**.
 
 ```bash
-go get github.com/ganeshdipdumbare/eipagent@v0.4.8
+go get github.com/ganeshdipdumbare/kiln@v0.5.0
 ```
 
 The repository is private: run `go env -w GOPRIVATE=github.com/ganeshdipdumbare/*` once, and `gh auth setup-git` (or an SSH key) so `git` can fetch it.
@@ -30,13 +32,13 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/ganeshdipdumbare/eipagent"
+	"github.com/ganeshdipdumbare/kiln"
 )
 
 func main() {
-	agent, err := eipagent.New(
-		eipagent.WithModel("mock:demo"), // or "anthropic:claude-sonnet-5-5", "openai:gpt-4.1", "ollama:llama3" ...
-		eipagent.WithInstructions("You are a concise assistant."),
+	agent, err := kiln.New(
+		kiln.WithModel("mock:demo"), // or "anthropic:claude-sonnet-5-5", "openai:gpt-4.1", "ollama:llama3" ...
+		kiln.WithInstructions("You are a concise assistant."),
 	)
 	if err != nil {
 		log.Fatal(err)
@@ -51,18 +53,19 @@ func main() {
 }
 ```
 
-`mock:demo` is an offline fake model, so this runs with no API key. For a real model, change the model string and set its key (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY` …). The right provider plugin loads by itself.
+`mock:demo` is an offline fake model, so this runs with no API key. For a real model, change the model string and set its key (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY` …). The right provider module is enabled by itself.
 
-**Words you'll meet** (the [glossary](https://eipagent-docs.vercel.app/#concepts) has more):
+**Words you'll meet** (the [glossary](https://kiln-docs.vercel.app/#concepts) has more):
 
-- **Plugin:** a Go file with `func Apply(p *sdk.Plugin) error`. The loop, providers, tools, memory and policy are all plugins.
-- **Service:** something a plugin provides by name for others to use: `model/anthropic`, `threads`, `memory`, `secrets`.
-- **Hook:** code a plugin runs around each step, model call or tool call (retries, approvals, redaction …).
+- **Module:** a compiled Go package that exports a descriptor and `func Apply(p *sdk.Module) error`. The loop, providers, tools, memory and policy are all modules.
+- **Service:** something a module provides by name for others to use: `model/anthropic`, `threads`, `memory`, `secrets`.
+- **Hook:** code a module runs around each step, model call or tool call (retries, approvals, redaction …).
+- **Capability:** what a module may reach through the broker: `net`, `exec`, `fs:read`, `fs:write`, `env`, `env:secrets`, `db`.
 - **Run** and **thread:** one `Generate` call, and a conversation saved across runs.
 
-**Demo:** [`examples/fullstack`](examples/fullstack) is a support desk with a Go backend and web UI: streaming, refunds that wait for a supervisor, redaction and an audit trail. Run it with `go run ./examples/fullstack`, or try it live at https://eipagent-docs.vercel.app/demo/ (the backend runs on a free instance, so the first visit can take a minute to wake it).
+**Demo:** [`examples/fullstack`](examples/fullstack) is a support desk with a Go backend and web UI: streaming, refunds that wait for a supervisor, redaction and an audit trail. Run it with `go run ./examples/fullstack`, or try it live at https://kiln-docs.vercel.app/demo/ (the backend runs on a free instance, so the first visit can take a minute to wake it).
 
-**Docs:** https://eipagent-docs.vercel.app has the full guide, with examples, lifecycles and reference. The content is `docs/site.html`; the design system, self-hosted fonts and interactions live in `docs/assets/` (after changing a plugin, run `go run ./docs/gen`; CI fails if you forget). Every push to `main` that touches the docs, plugins or demo rebuilds the site and deploys it ([`docs.yml`](.github/workflows/docs.yml)); to build it locally, run `docs/build.sh` (add `SKIP_RECORD=1` to skip re-recording the demo).
+**Docs:** https://kiln-docs.vercel.app has the full guide, with examples, lifecycles and reference. The content is `docs/site.html`; the design system, self-hosted fonts and interactions live in `docs/assets/` (the content is generated from the code and the examples). Every push to `main` that touches the docs or demo rebuilds the site and deploys it ([`docs.yml`](.github/workflows/docs.yml)); to build it locally, run `docs/build.sh` (add `SKIP_RECORD=1` to skip re-recording the demo).
 
 Releases and breaking changes are listed in [CHANGELOG.md](CHANGELOG.md); see [Versioning](#versioning).
 
@@ -76,7 +79,7 @@ go run ./examples/readme         # runs every example in this README
 1. [Quick start](#quick-start)
 2. [Examples](#examples)
 3. [How it works: lifecycles](#how-it-works-lifecycles)
-4. [Plugins](#plugins)
+4. [Modules](#modules)
 5. [Sandboxes](#sandboxes)
 6. [Security](#security)
 7. [Scaling and persistence](#scaling-and-persistence)
@@ -94,7 +97,7 @@ Every snippet below comes from [`examples/readme/main.go`](examples/readme/main.
 
 ```bash
 ollama pull lfm3
-go run ./examples/ollama -demo text      # also: stream, tools, plugins, object, thread, approve, shell, vision
+go run ./examples/ollama -demo text      # also: stream, tools, object, thread, approve, shell, vision
 ```
 
 The model string is just `ollama:<model>` (for example `ollama:qwen3.5:4b`). Set `OLLAMA_HOST` to use an Ollama running on another machine. See [`examples/ollama`](examples/ollama/main.go).
@@ -103,14 +106,12 @@ The model string is just `ollama:<model>` (for example `ollama:qwen3.5:4b`). Set
 
 | Example | Shows |
 |---|---|
-| [`examples/secrets`](examples/secrets/main.go) | `secrets_vault` against an in-process Vault: per-plugin grants, a plugin that can't ask as another, key rotation without a restart, a leaked key redacted from logs and audit, `secret.access` records |
-| [`examples/microsandbox`](examples/microsandbox/main.go) | the agent in a [microsandbox](https://microsandbox.dev) microVM with no network (needs `msb`; set `MSB_BACKEND=cloud` and `MSB_API_KEY` for microsandbox cloud): no secret env vars in the VM, a plugin that holds only a placeholder, the host swapping in the real token on `GET /orders` only, the echoed token redacted, a `DELETE` and any other host refused, and the host's `sandbox.egress` record of every request |
+| [`examples/secrets`](examples/secrets/main.go) | `secrets_vault` against an in-process Vault: per-module grants, a module that can't ask as another, key rotation without a restart, a leaked key redacted from logs and audit, `secret.access` records |
+| [`examples/microsandbox`](examples/microsandbox/main.go) | the agent in a [microsandbox](https://microsandbox.dev) microVM with no network (needs `msb`; set `MSB_BACKEND=cloud` and `MSB_API_KEY` for microsandbox cloud): no secret env vars in the VM, a module that holds only a placeholder, the host swapping in the real token on `GET /orders` only, the echoed token redacted, a `DELETE` and any other host refused, and the host's `sandbox.egress` record of every request |
 | [`examples/firecracker`](examples/firecracker/main.go) | a self-hosted [Firecracker](https://firecracker-microvm.github.io/) microVM, created and connected to like a small hosted sandbox (Linux with `/dev/kvm`; includes a Lima setup for macOS): tap device, Firecracker API, SSH, `WithRunIn`, and the same secret-placeholder, host-swap, redaction and `sandbox.egress` guarantees. Set `FC_HOST` to run the host process on one machine and Firecracker on another |
 | [`examples/tensorlake`](examples/tensorlake/main.go) | the agent inside a real [Tensorlake](https://docs.tensorlake.ai/sandboxes/introduction) cloud sandbox (needs `TENSORLAKE_API_KEY`): the host keeps the model provider, secrets and broker, the provider runs the VM, and the same placeholder, host-swap, redaction and `sandbox.egress` flow is shown on a real hosted service |
-| [`examples/observability`](examples/observability/main.go) | `audit_http` to an in-process SIEM that checks HMAC signatures and the hash chain; `trace_otlp` to an in-process OpenTelemetry collector, printing the span tree and the shared fields (`run`, `thread`, `user`, `plugin`, `provider`) |
-| [`examples/plugin-validate`](examples/plugin-validate/main.go) | the linter's report on a plugin with mistakes, then a signed package, and what verification refuses: a tampered file, a manifest that grants itself `exec`, an unknown signer, an unsigned package, a wrong pin |
-| [`examples/plugin-store`](examples/plugin-store/main.go) | one plugin through install, approval, enable, update, a failed update that keeps the old version, rollback and quarantine, in a running agent |
-| [`examples/plugins`](examples/plugins) | a ready-made plugin for every `eip plugin init` choice: tool, hook, model provider, memory, sandbox, trigger, MCP adapter |
+| [`examples/observability`](examples/observability/main.go) | `audit_http` to an in-process SIEM that checks HMAC signatures and the hash chain; `trace_otlp` to an in-process OpenTelemetry collector, printing the span tree and the shared fields (`run`, `thread`, `user`, `module`, `provider`) |
+| [`examples/boxprobe`](examples/boxprobe/main.go) | application modules compiled into a box program (`internal/boxtest`), the way `WithRunIn` runs them |
 
 ### Generate with a typed tool
 
@@ -119,15 +120,15 @@ type WeatherIn struct {
 	City string `json:"city" desc:"city name"`
 }
 
-weather := eipagent.Tool("weather", "Current weather for a city",
+weather := kiln.Tool("weather", "Current weather for a city",
 	func(ctx context.Context, in WeatherIn) (string, error) {
 		return "18°C and light rain in " + in.City, nil
 	})
 
-agent, err := eipagent.New(
-	eipagent.WithModel("anthropic:claude-sonnet-5-5"),
-	eipagent.WithInstructions("You are a concise travel assistant."),
-	eipagent.WithTools(weather),
+agent, err := kiln.New(
+	kiln.WithModel("anthropic:claude-sonnet-5-5"),
+	kiln.WithInstructions("You are a concise travel assistant."),
+	kiln.WithTools(weather),
 )
 defer agent.Close()
 
@@ -170,7 +171,7 @@ type Trip struct {
 	Budget  int      `json:"budget_eur,omitempty"`
 }
 
-trip, err := eipagent.GenerateObject[Trip](ctx, agent, "Plan what to pack for Lisbon.")
+trip, err := kiln.GenerateObject[Trip](ctx, agent, "Plan what to pack for Lisbon.")
 ```
 
 How the schema reaches the model depends on the provider:
@@ -179,14 +180,14 @@ How the schema reaches the model depends on the provider:
 - Anthropic gets the schema as a forced tool.
 - DeepSeek and Groq use JSON mode, with the schema in the prompt.
 
-If the reply doesn't parse, eipagent asks the model once to repair it and then returns `ErrNoObject`.
+If the reply doesn't parse, kiln asks the model once to repair it and then returns `ErrNoObject`.
 
 ### Threads (durable conversations)
 
 ```go
-agent, err := eipagent.New(
-	eipagent.WithModel("openai:gpt-4.1"),
-	eipagent.WithPlugin("threads_file", map[string]any{"dir": ".eipagent/threads"}), // or threads_sql
+agent, err := kiln.New(
+	kiln.WithModel("openai:gpt-4.1"),
+	kiln.WithModuleConfig("threads_file", map[string]any{"dir": ".kiln/threads"}), // or threads_sql
 )
 th := agent.Thread("customer-42")
 th.Generate(ctx, "My name is Ada.")
@@ -199,87 +200,115 @@ Without `WithPersistence`, threads are kept in memory (`threads_inmem`).
 ### Human in the loop
 
 ```go
-agent, _ := eipagent.New(
-	eipagent.WithModel("openai:gpt-4.1"),
-	eipagent.WithTools(refund),
-	eipagent.WithPlugin("hook_approval", map[string]any{"interrupt_on": map[string]any{"refund": true}}),
+agent, _ := kiln.New(
+	kiln.WithModel("openai:gpt-4.1"),
+	kiln.WithTools(refund),
+	kiln.WithModuleConfig("hook_approval", map[string]any{"interrupt_on": map[string]any{"refund": true}}),
 )
 th := agent.Thread("ticket-981")
 res, _ := th.Generate(ctx, "Refund order A-17")
 for res.Interrupted() { // paused before the tool ran; the pause is saved
 	in := res.Interrupts[0]
 	fmt.Println("approve?", in.Message, in.ToolCall.Args)
-	res, _ = th.Resume(ctx, eipagent.Approve(in.ID)) // or Reject(id, why) / Edit(id, args) / Respond(id, text)
+	res, _ = th.Resume(ctx, kiln.Approve(in.ID)) // or Reject(id, why) / Edit(id, args) / Respond(id, text)
 }
 ```
 
 The pause is saved with the thread. With `threads_sql`, a different process or pod can resume it, possibly hours later. Two other ways to answer interrupts:
 
 - **Without a thread:** call `agent.Resume(ctx, res, decisions)`. The state travels in `res`.
-- **In-process, synchronously:** pass `eipagent.WithApprover(func(ctx, in) (*Decision, error))`, for example to prompt in a CLI.
+- **In-process, synchronously:** pass `kiln.WithApprover(func(ctx, in) (*Decision, error))`, for example to prompt in a CLI.
 
 To pause on everything risky instead of naming tools, use `{"non_readonly": true}` or `{"risk": ["high"]}`. You can also put `hook_review` in front: a reviewer model then approves, denies or escalates each call to a human.
 
-### Hooks from the standard plugins
+### Hooks from the standard modules
 
 ```go
-agent, _ := eipagent.New(
-	eipagent.WithModel("anthropic:claude-sonnet-5-5"),
-	eipagent.WithPlugin("hook_retry", map[string]any{"max_retries": 3}),                         // 429/5xx with backoff
-	eipagent.WithPlugin("hook_fallback", map[string]any{"models": []any{"openai:gpt-4.1"}}),     // next model on failure
-	eipagent.WithPlugin("hook_limits", map[string]any{"model_calls_run": 20, "tool_calls_run": 50}),
-	eipagent.WithPlugin("hook_pii", map[string]any{"types": []any{"email", "credit_card"}}),     // redact, mask, hash or block
-	eipagent.WithPlugin("hook_summarize", map[string]any{"trigger_messages": 40, "keep_messages": 10}),
+agent, _ := kiln.New(
+	kiln.WithModel("anthropic:claude-sonnet-5-5"),
+	kiln.WithModuleConfig("hook_retry", map[string]any{"max_retries": 3}),                         // 429/5xx with backoff
+	kiln.WithModuleConfig("hook_fallback", map[string]any{"models": []any{"openai:gpt-4.1"}}),     // next model on failure
+	kiln.WithModuleConfig("hook_limits", map[string]any{"model_calls_run": 20, "tool_calls_run": 50}),
+	kiln.WithModuleConfig("hook_pii", map[string]any{"types": []any{"email", "credit_card"}}),     // redact, mask, hash or block
+	kiln.WithModuleConfig("hook_summarize", map[string]any{"trigger_messages": 40, "keep_messages": 10}),
 )
 ```
 
 ### Your own hooks
 
-A compiled plugin is ordinary Go code. An interpreted plugin is the same code in a `.go` file loaded at runtime (see [Plugins](#plugins)).
+A module is ordinary Go code compiled into your program (see [Modules](#modules)).
 
 ```go
-timing := eipagent.Plugin{Name: "timing", Apply: func(p *sdk.Plugin) error {
-	p.WrapModel(func(c context.Context, req *eipagent.ModelRequest, next eipagent.ModelHandler) (*eipagent.ModelResponse, error) {
+timing := kiln.Module{Name: "timing", Apply: func(p *sdk.Module) error {
+	p.WrapModel(func(c context.Context, req *kiln.ModelRequest, next kiln.ModelHandler) (*kiln.ModelResponse, error) {
 		resp, err := next(c, req) // the model call, plus any inner hooks
 		if err == nil {
 			p.Logf("%s step %d used %d tokens", req.Model, req.Step, resp.Usage.TotalTokens)
 		}
 		return resp, err
 	})
-	p.WrapTool(func(c context.Context, req *eipagent.ToolRequest, next eipagent.ToolHandler) (*eipagent.ToolResult, error) {
+	p.WrapTool(func(c context.Context, req *kiln.ToolRequest, next kiln.ToolHandler) (*kiln.ToolResult, error) {
 		if req.Call.Name == "drop_database" {
-			return &eipagent.ToolResult{Content: "not allowed", IsError: true}, nil
+			return &kiln.ToolResult{Content: "not allowed", IsError: true}, nil
 		}
 		return next(c, req)
 	})
 	return nil
 }}
-agent, _ := eipagent.New(eipagent.WithModel("openai:gpt-4.1"), eipagent.WithCompiledPlugin(timing))
+agent, _ := kiln.New(kiln.WithModel("openai:gpt-4.1"), kiln.WithModule(timing))
 ```
 
-### Add, update and remove plugins at runtime
+### Add your own modules
+
+Application modules are compiled into your binary and composed with the standard ones. Declare what they need, what they provide and which capabilities they use; `New` validates all of it before anything runs.
 
 ```go
-eng := agent.Engine()
-eng.Load(eipagent.PluginSpec{Use: "tool_memory"}) // needs "memory", so it waits: PENDING
-eng.Load(eipagent.PluginSpec{Use: "memory_inmem"})  // the store arrives, tool_memory becomes ACTIVE
-eng.Load(eipagent.PluginSpec{Use: "hook_pii", Config: map[string]any{"strategy": "hash"}}) // load again = update config
-eng.Reload("hook_pii")                               // recompile from source
-eng.Unload("memory_inmem")                          // tool_memory goes back to PENDING and its tools disappear
-for _, s := range agent.Status() { fmt.Println(s.String()) }
+console := kiln.Module{
+	Name:     "console",
+	Requires: []string{"memory"},                 // must exist first ("?svc" = optional)
+	Provides: []string{"tool/console"},           // only these names may be provided
+	Permissions: []string{"net"},                 // broker capabilities: net, exec, fs:read, fs:write, env, env:secrets, db
+	Apply: func(p *sdk.Module) error {
+		hc, err := p.HTTP(sdk.HTTPOptions{AllowHosts: []string{"api.example.com"}})
+		if err != nil {
+			return err
+		}
+		p.AddTool(sdk.Tool{Name: "lookup", Schema: sdk.Object(map[string]any{"id": sdk.Str("id")}, "id"),
+			Run: func(c context.Context, args map[string]any) (string, error) {
+				req, _ := http.NewRequestWithContext(c, "GET", "https://api.example.com/"+sdk.ArgString(args, "id"), nil)
+				resp, err := hc.Do(req)
+				if err != nil {
+					return "", err
+				}
+				defer resp.Body.Close()
+				b, _ := io.ReadAll(resp.Body)
+				return string(b), nil
+			}})
+		return nil
+	},
+}
+
+agent, err := kiln.New(
+	kiln.WithModel("openai:gpt-4.1"),
+	kiln.WithModule(console),
+)
 ```
 
-A run that is already in progress keeps the plugins it started with. If an update fails, the old version keeps running. See [Plugin lifecycle](#plugin-lifecycle).
+A missing requirement names the registry modules that would supply it, so the fix is one line:
 
-To see it live with a local model, run `go run ./examples/ollama -demo plugins`. The demo starts with no tools, loads `tool_time`, writes a brand-new plugin file and loads it, edits that file's code and reloads it, shows a broken edit being refused while the old version keeps working, and then unloads everything. The model is asked a question after each step.
+```text
+kiln: module console requires "memory", which no enabled module provides (add one of: memory_file, memory_inmem, memory_sql)
+```
+
+Modules reach the outside world only through the broker: `p.HTTP`, `p.Listen`, `p.Dir`, `p.Exec`, `p.Env` and `p.DB`. Each call is refused with the missing capability name when the policy does not grant it. `p.Dir` roots file access with `os.Root`, so `..` and absolute symlinks cannot escape; `p.Exec` starts named programs without a shell.
 
 ### Subagents and handoffs
 
 ```go
-agent, _ := eipagent.New(
-	eipagent.WithModel("openai:gpt-4.1"),
-	eipagent.WithPlugins("tool_time"),
-	eipagent.WithPlugin("tool_subagents", map[string]any{"agents": []any{
+agent, _ := kiln.New(
+	kiln.WithModel("openai:gpt-4.1"),
+	kiln.WithModules("tool_time"),
+	kiln.WithModuleConfig("tool_subagents", map[string]any{"agents": []any{
 		map[string]any{"name": "researcher", "description": "Finds facts",
 			"instructions": "Research carefully.", "tools": []any{"current_time"}},       // called as a tool
 		map[string]any{"name": "billing", "description": "Invoices and refunds",
@@ -287,18 +316,18 @@ agent, _ := eipagent.New(
 	}}),
 )
 
-// A whole agent, with its own plugins, model and policy, can also be a tool:
-eipagent.WithTools(expertAgent.AsTool("legal_expert", "Answers legal questions"))
+// A whole agent, with its own modules, model and policy, can also be a tool:
+kiln.WithTools(expertAgent.AsTool("legal_expert", "Answers legal questions"))
 ```
 
 ### Shell and file tools in a sandbox
 
 ```go
-agent, _ := eipagent.New(
-	eipagent.WithModel("openai:gpt-4.1"),
-	eipagent.WithPlugins("sandbox_docker"),                                     // or sandbox_local, or your own
-	eipagent.WithPlugin("workspace_sandbox", map[string]any{"provider": "docker"}),  // one box per thread, no network
-	eipagent.WithPlugins("tool_shell", "tool_fs"),
+agent, _ := kiln.New(
+	kiln.WithModel("openai:gpt-4.1"),
+	kiln.WithModules("sandbox_docker"),                                     // or sandbox_local, or your own
+	kiln.WithModuleConfig("workspace_sandbox", map[string]any{"provider": "docker"}),  // one box per thread, no network
+	kiln.WithModules("tool_shell", "tool_fs"),
 )
 res, _ := agent.Generate(ctx, "Write notes.md and count its lines")
 for _, ch := range res.Changes { // review what the agent changed
@@ -309,45 +338,45 @@ for _, ch := range res.Changes { // review what the agent changed
 ### MCP servers, skills, the web
 
 ```go
-eipagent.WithPlugin("tool_mcp", map[string]any{"servers": []any{
+kiln.WithModuleConfig("tool_mcp", map[string]any{"servers": []any{
 	map[string]any{"name": "github", "command": "github-mcp-server", "args": []any{"stdio"},
 		"env": map[string]any{"GITHUB_TOKEN": "secret://GITHUB_TOKEN"}},
 	map[string]any{"name": "docs", "url": "https://mcp.internal.example.com/mcp"},
 }}) // tools appear as github__create_issue, docs__search, ...
-eipagent.WithPlugin("tool_skills", map[string]any{"dirs": []any{"./skills"}})       // folders with SKILL.md
-eipagent.WithPlugin("tool_fetch", map[string]any{"allow_hosts": []any{"*.wikipedia.org"}})
-eipagent.WithWebSearch("duckduckgo")                                                 // tool_websearch; also tavily, brave, searxng
+kiln.WithModuleConfig("tool_skills", map[string]any{"dirs": []any{"./skills"}})       // folders with SKILL.md
+kiln.WithModuleConfig("tool_fetch", map[string]any{"allow_hosts": []any{"*.wikipedia.org"}})
+kiln.WithWebSearch("duckduckgo")                                                 // tool_websearch; also tavily, brave, searxng
 ```
 
 ### Reasoning, caching and structured output
 
 ```go
-eipagent.WithThinking("high")                                       // hook_thinking: Anthropic adaptive thinking, OpenAI reasoning_effort, Gemini thinkingConfig
-eipagent.WithPlugin("hook_cache", map[string]any{"ttl": "1h"})      // prompt caching (Anthropic cache_control, OpenAI prompt_cache_key)
-eipagent.WithPlugin("hook_output_validate", map[string]any{"max_retries": 2}) // re-ask when GenerateObject output doesn't match the schema
+kiln.WithThinking("high")                                       // hook_thinking: Anthropic adaptive thinking, OpenAI reasoning_effort, Gemini thinkingConfig
+kiln.WithModuleConfig("hook_cache", map[string]any{"ttl": "1h"})      // prompt caching (Anthropic cache_control, OpenAI prompt_cache_key)
+kiln.WithModuleConfig("hook_output_validate", map[string]any{"max_retries": 2}) // re-ask when GenerateObject output doesn't match the schema
 ```
 
 ### Long runs, guardrails and evals
 
 ```go
-eipagent.WithPlugin("hook_compact", map[string]any{"max_fraction": 0.8}) // stay inside the context window, cheapest first
-eipagent.WithPlugin("tool_search", map[string]any{"threshold": 15})      // reveal tools on demand (big MCP servers)
-eipagent.WithPlugins("tool_plan", "hook_loop_detect", "hook_tool_output_limit")
-eipagent.WithPlugin("hook_guardrails", map[string]any{"rules": []any{
+kiln.WithModuleConfig("hook_compact", map[string]any{"max_fraction": 0.8}) // stay inside the context window, cheapest first
+kiln.WithModuleConfig("tool_search", map[string]any{"threshold": 15})      // reveal tools on demand (big MCP servers)
+kiln.WithModules("tool_plan", "hook_loop_detect", "hook_tool_output_limit")
+kiln.WithModuleConfig("hook_guardrails", map[string]any{"rules": []any{
 	map[string]any{"on": "output", "detect": "secrets", "action": "redact"},
 }})
-eipagent.WithSaveEachStep() // a crash keeps the run's progress; Thread.Continue resumes it
+kiln.WithSaveEachStep() // a crash keeps the run's progress; Thread.Continue resumes it
 ```
 
-`agent.Thread(id).Fork(ctx, newID)` copies a conversation to try another direction. `eip eval cases.json` (or package [`evals`](evals/evals.go)) grades the agent on a dataset of prompts.
+`agent.Thread(id).Fork(ctx, newID)` copies a conversation to try another direction. `kiln eval cases.json` (or package [`evals`](evals/evals.go)) grades the agent on a dataset of prompts.
 
 ### Scheduled jobs and webhooks
 
 ```go
-eipagent.WithPlugin("trigger_schedule", map[string]any{"jobs": []any{
+kiln.WithModuleConfig("trigger_schedule", map[string]any{"jobs": []any{
 	map[string]any{"name": "weekly-report", "schedule": "weekly fri 17:00", "prompt": "Summarize this week's tickets", "user": "ops"},
 }}) // the model also gets schedule_create / schedule_list / schedule_cancel
-eipagent.WithPlugin("trigger_webhook", map[string]any{"routes": []any{
+kiln.WithModuleConfig("trigger_webhook", map[string]any{"routes": []any{
 	map[string]any{"path": "/github", "secret": "secret://GH_WEBHOOK_TOKEN", "thread": "gh-{repository.full_name}"},
 }}) // requests must carry an HMAC-SHA256 signature
 ```
@@ -359,16 +388,16 @@ eipagent.WithPlugin("trigger_webhook", map[string]any{"routes": []any{
   "model": "anthropic:claude-sonnet-5-5",
   "instructions": "You are the internal engineering assistant.",
   "max_steps": 30,
-  "plugins": [
+  "modules": [
     { "use": "hook_retry" },
     { "use": "hook_approval", "config": { "non_readonly": true } },
-    { "use": "model_openai", "as": "llm_local", "config": { "name": "local", "base_url": "http://vllm:8000/v1", "api_key": "" } },
+    { "use": "model_openai", "as": "model_local", "config": { "name": "local", "base_url": "http://vllm:8000/v1", "api_key": "" } },
     { "use": "threads_sql" }
   ]
 }
 ```
 
-Load it with `eipagent.New(eipagent.WithProfile("eip.json"))`. Layers apply in order, and later ones win:
+Load it with `kiln.New(kiln.WithProfile("kiln.json"))`. Layers apply in order, and later ones win:
 
 1. Profiles, in the order given.
 2. Options passed in code.
@@ -384,33 +413,27 @@ Load it with `eipagent.New(eipagent.WithProfile("eip.json"))`. Layers apply in o
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Configuring: New(opts...)
-    Configuring --> Loading: preset, policy, profiles, lock resolved
-    Loading --> Ready: every plugin ACTIVE or PENDING
-    Loading --> [*]: any plugin refused or FAILED → New returns the error
+    [*] --> Resolving: New(opts...)
+    Resolving --> Composing: policy, profiles and options merged
+    Composing --> [*]: invalid plan → New returns a named error
+    Composing --> Starting: valid plan, deterministic order
+    Starting --> [*]: a module failed → everything started is disposed
+    Starting --> Ready: every module ACTIVE
     Ready --> Ready: Generate / Stream / Thread runs (concurrently)
-    Ready --> Ready: Load / Reload / Unload plugins, hot reload
     Ready --> Closed: Close()
     Closed --> [*]
 ```
 
 **`New`:**
 
-1. **Resolve the configuration.** The preset (`secure` by default, or `dev`) or an explicit admin policy, the profiles, the code options and `eip.lock` combine into one plugin list.
-2. **Load plugins in a fixed order:**
-   1. Plugins the policy requires, such as audit, policy and secrets. They load first so they see everything after them.
-   2. Built-ins: `agent_service`, `loop`, `secrets_env` and `threads_inmem`.
-   3. Your plugins.
-   4. The provider implied by the model prefix, if no profile row provides it.
+1. **Resolve the configuration.** The policy (secure by default), the profiles and the code options combine into one list of module rows. Defaults give way to a module of the same family: `threads_sql` replaces `threads_inmem`, for example.
+2. **Add the defaults a requirement needs.** If a required service has no provider, the facade adds its standard provider and marks it `auto`. There is no runtime loading.
+3. **Compose.** `engine.Compose` validates the whole plan without running any module: unknown modules, policy allow/deny, duplicate providers, missing requirements (with a hint naming the modules that would supply it) and cycles. It returns a deterministic start order; policy-required rows (audit, policy, secrets) start in the order the policy lists them.
+4. **Start.** Modules `Apply` in that order. If one fails or panics, everything already started is disposed in reverse and `New` returns the error. You never get a half-configured agent.
 
-   A plugin of the same family replaces a default. For example, `threads_sql` replaces `threads_inmem`.
-3. **Pass each plugin through the trust gate**, then start it (see the plugin lifecycle below).
-4. **Fail fast.** If any plugin is refused or fails, everything already loaded is disposed and `New` returns the error. You never get a half-configured agent.
-5. **Start the file watcher** if the policy allows hot reload.
+**Ready:** an agent is safe for concurrent use. Each run takes a snapshot of the current services and keeps it.
 
-**Ready:** an agent is safe for concurrent use. Each run takes a snapshot of the current plugins and keeps it. You can load, reload and unload plugins while runs are in progress.
-
-**`Close`:** disposes every plugin in reverse load order, running each one's cleanups. The effects:
+**`Close`:** disposes every module in reverse start order, running each one's cleanups. The effects:
 
 - Sandboxes are destroyed.
 - Jobs and webhook runs are cancelled and awaited.
@@ -423,11 +446,11 @@ stateDiagram-v2
 ```mermaid
 sequenceDiagram
     participant App
-    participant Runner as loop plugin
+    participant Runner as loop module
     participant Hooks as middleware & hooks
-    participant LLM as llm provider
+    participant LLM as model provider
     participant Tool
-    App->>Runner: Generate(prompt) (snapshot of plugins taken)
+    App->>Runner: Generate(prompt) (snapshot of services taken)
     Runner->>Hooks: agent/start  (may refuse the run)
     loop each step, up to max_steps
         Runner->>Hooks: step/prepare (rewrite model, messages, tools)
@@ -450,8 +473,8 @@ Step by step:
 
 1. **Start.**
    - The facade builds the run state: history, the new user message, model, instructions and the user's identity.
-   - It takes a **snapshot** of the plugins, so a change made during the run won't show up until the next one.
-   - It hands the run to the `loop` service, which is itself a plugin.
+   - It takes a **snapshot** of the services, so the run is stable even if the composition changes later.
+   - It hands the run to the `loop` service, which is itself a module.
    - **`agent/start`** hooks run. An error from one refuses the run.
 2. **Resume (only when resuming).** Pending tool calls run first, using the decisions you supplied:
    - `approve` runs the call.
@@ -469,9 +492,9 @@ Step by step:
       - A returned **interrupt** pauses the run. If an `approver` service is loaded, it can decide on the spot. Otherwise the run finishes `interrupted`, and the pending calls are kept in the run state, or in the thread when there is one.
    7. If a tool listed in `StopOnTool` was called, the run finishes with `tool:<name>`.
 4. **Stop.** Reaching the step limit finishes the run with `max_steps`.
-5. **End.** **`agent/end`** hooks always run exactly once, even when the run fails (`FinishReason: "error"`), so plugins can always clean up. Observers then get `finish`, or `error` when the run failed.
+5. **End.** **`agent/end`** hooks always run exactly once, even when the run fails (`FinishReason: "error"`), so modules can always clean up. Observers then get `finish`, or `error` when the run failed.
 
-Default priorities (higher means outer). Set `priority` on a profile row to override a value; the reserved band is only for locked plugins.
+Default priorities (higher means outer). Set `priority` on a profile row to override a value; the reserved band is only for locked modules.
 
 | Priority | Model middleware (`model/wrap`) | Tool middleware (`tool/wrap`) |
 |---|---|---|
@@ -479,7 +502,7 @@ Default priorities (higher means outer). Set `priority` on a profile row to over
 | 30 | `hook_pii` | `hook_pii` |
 | 20 | `hook_fallback` | |
 | 10 | `hook_retry` | `hook_retry` (`tool_retries`) |
-| 0 | `hook_limits`, `hook_log`, `trace_file`, your plugins (in load order) | `hook_review`, `hook_limits`, `hook_log`, `trace_file`, your plugins |
+| 0 | `hook_limits`, `hook_log`, `trace_file`, your modules (in start order) | `hook_review`, `hook_limits`, `hook_log`, `trace_file`, your modules |
 | −10 | | `hook_approval` (innermost, so reviewers and policy decide first) |
 
 Events in order: `step_start`, then the `text`/`reasoning` deltas, `step_end`, `tool_call`, and `tool_result` or `interrupt`, repeated for each step; then `finish` or `error`. `OnEvent` and `Stream.Events()` see the same events.
@@ -501,38 +524,31 @@ stateDiagram-v2
 
 Each turn goes through four steps:
 
-1. **Load** the state (messages, pending interrupts, plugin values such as the active handoff agent or the sandbox id) from the `threads` service.
+1. **Load** the state (messages, pending interrupts, run values such as the active handoff agent or the sandbox id) from the `threads` service.
 2. **Run** the turn.
 3. **Save** with optimistic versioning. If another process saved first, you get `ErrThreadBusy` and nothing is lost.
 4. **Wait on pauses.** A thread with pending interrupts accepts only `Resume`.
 
 Any process that shares the thread storage can continue any thread.
 
-### Plugin lifecycle
+### Module lifecycle
+
+Modules are compiled and composed, not loaded at runtime. The lifecycle is the application's:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Refused: trust gate says no (not allowed, unpinned, hash mismatch, import not permitted)
-    [*] --> PENDING: Load (compiled)
-    PENDING --> LOADING: every Inject dependency exists
-    LOADING --> ACTIVE: Apply returned nil
-    LOADING --> FAILED: Apply errored or panicked (everything it registered is rolled back)
-    ACTIVE --> PENDING: a dependency disappeared (disposed)
-    ACTIVE --> ACTIVE: an optional dependency changed (restarted)
-    ACTIVE --> [*]: Unload / Close (disposed)
-    ACTIVE --> ACTIVE: Reload / Load with new config (new version replaces old, dependents restart)
+    [*] --> Compose: New
+    Compose --> Refused: unknown module, missing requirement, duplicate provider, cycle, denied by policy
+    Compose --> Start: valid plan, in dependency order
+    Start --> ACTIVE: Apply returned nil
+    Start --> FAILED: Apply errored or panicked (everything already started is disposed, in reverse)
+    ACTIVE --> [*]: Close (disposed in reverse order)
 ```
 
-- **Trust gate.** Before any plugin code runs, the core:
-  - checks the policy allow/deny lists;
-  - checks the sha256 pin (file plugins under the secure preset);
-  - parses the source for `Inject`, `Permissions` and imports;
-  - intersects the declared permissions with the policy's grants;
-  - refuses any import those permissions don't cover;
-  - then interprets the plugin with a symbol table restricted to exactly those packages.
-- **Dispose.** Everything a plugin registered through its context is undone in reverse order: tools, services, hooks, skills and `Effect` cleanups.
-- **Safe updates.** If a reload fails to compile or start, the old version keeps running.
-- **Locked plugins** (from the policy) can't be unloaded or replaced at runtime, and only they may use the reserved, outermost priority band.
+- **Compose is pure.** It runs no module code. It checks names, the policy allow/deny lists, declared capabilities against the policy's grants, every required service against the enabled providers, duplicate providers, and cycles, then produces a deterministic start order. Policy-required rows start in the order the policy lists them, so an `audit_file` listed first sees everything after it.
+- **Start is all-or-nothing.** A failed `Apply` disposes every module already started, so `New` never returns a half-built agent.
+- **Dispose.** Everything a module registered through its context is undone in reverse order: tools, services, hooks, skills and `Effect` cleanups.
+- **No hot reload.** Change a module, rebuild, redeploy.
 
 ### Sandbox lifecycle (`workspace_sandbox`)
 
@@ -540,15 +556,15 @@ stateDiagram-v2
 2. **Reused** for every later turn of that thread.
 3. **Remembered.** The box id is saved in the thread at the end of each run.
 4. **Re-attached** when the thread resumes in a new process.
-5. **Destroyed** after `idle_ttl_seconds`, or when the plugin unloads or the agent closes.
+5. **Destroyed** after `idle_ttl_seconds`, or when the agent closes.
 
 With `tool_sandbox`, the model creates and destroys boxes itself, up to `max_boxes` per thread.
 
 ### Remote agent lifecycle (`WithRunIn`)
 
 1. `New` builds a small **host** agent. It holds the model provider and its keys, the sandbox provider, and your Go tools.
-2. The host creates a box. It uploads the `eip` binary, the profile, the admin policy, `eip.lock` and the plugin sources.
-3. The host starts `eip serve --stdio` in the box.
+2. The host creates a box and uploads the program (its own binary by default, or `RunIn.Binary` built for the box's OS and architecture), plus the resolved profile and admin policy.
+3. The host starts the program with `KILN_BOX=1`; the program calls `kiln.ServeBox` (check `kiln.InBox()` first) and serves the agent over JSON-RPC on stdin/stdout. Its own modules come with it, compiled in.
 4. The box builds its agent and replies `ready`, or reports the startup error.
 5. Runs and threads are proxied over JSON-RPC. Model calls come back to the host, through the host's middleware and policy, so keys never enter the box. Your Go tools are bridged back too.
 6. `Close` stops the process, destroys the box and closes the host agent.
@@ -557,94 +573,87 @@ With `tool_sandbox`, the model creates and destroys boxes itself, up to `max_box
 
 ---
 
-## Plugins
+## Modules
 
-Everything the agent does comes from a plugin, but **most apps never type a plugin name**. Common setups are options, and plumbing (the loop, a workspace for shell tools, the database connection) loads itself and shows as `auto` in `agent.Status()`:
+Everything the agent does comes from a module, but **most apps never type a module name**. Common setups are options, and plumbing (the loop, a workspace for shell tools, the database connection) is resolved statically and shows as `auto` in `agent.Status()`:
 
 ```go
-agent, _ := eipagent.New(
-	eipagent.WithModel("anthropic:claude-sonnet-5-5"),            // model_anthropic
-	eipagent.WithApprovals("issue_refund"),                       // hook_approval
-	eipagent.WithPersistence("postgres", "secret://DATABASE_URL"), // threads_sql + memory_sql + db_sql
-	eipagent.WithSandbox("docker"),                               // sandbox_docker + workspace_sandbox
-	eipagent.WithAudit("/var/log/eipagent/audit.jsonl"),          // audit_file
-	eipagent.WithTracing("http://otel-collector:4318"),           // trace_otlp
-	eipagent.WithMCP("github", "npx", "-y", "@modelcontextprotocol/server-github"), // tool_mcp
+agent, _ := kiln.New(
+	kiln.WithModel("anthropic:claude-sonnet-5-5"),            // model_anthropic
+	kiln.WithApprovals("issue_refund"),                       // hook_approval
+	kiln.WithPersistence("postgres", "secret://DATABASE_URL"), // threads_sql + memory_sql + db_sql
+	kiln.WithSandbox("docker"),                               // sandbox_docker + workspace_sandbox
+	kiln.WithAudit("/var/log/kiln/audit.log"),            // audit_file
+	kiln.WithTracing("http://otel-collector:4318"),           // trace_otlp
+	kiln.WithMCP("github", "npx", "-y", "@modelcontextprotocol/server-github"), // tool_mcp
 )
 ```
 
-**Writing one takes one function.** A plugin is a Go file with `Apply`, interpreted at runtime by [Yaegi](https://github.com/traefik/yaegi) (or a compiled `eipagent.Plugin` with the same `Apply`). Inside it, call what you need:
+**A module is one Go package.** It exports a descriptor and an `Apply` function. `Provides` and `Permissions` are enforced: `Provide` of a name that is not declared fails, and a broker call without the capability fails.
 
 | You want… | Call |
 |---|---|
 | the model to be able to do something | `p.AddTool` |
 | something to happen around every model or tool call | `p.WrapModel`, `p.WrapTool`, `p.OnRunStart` … |
-| other plugins to use something you provide | `p.Provide("model/acme", …)` |
-| background work, stopped on unload | `p.Effect`, `p.OnUnload` |
+| other modules to use something you provide | `p.Provide("model/acme", …)` |
+| background work, stopped on close | `p.Effect`, `p.OnUnload` |
+| the network, files, processes, env, the database | `p.HTTP`, `p.Listen`, `p.Dir`, `p.Exec`, `p.Env`, `p.DB` |
 
 ```go
-//go:build ignore
-
-package plugin
+package greeter
 
 import (
 	"context"
 
-	"eipagent/sdk"
+	"github.com/ganeshdipdumbare/kiln/engine"
+	"github.com/ganeshdipdumbare/kiln/sdk"
 )
 
-var Requires = []string{"?secrets"} // services needed first ("?x" optional, "model/*" any one)
-var Permissions = []string{"net"}   // net, exec, fs:read, fs:write, env, env:secrets, db
-
-func Apply(p *sdk.Plugin) error {
-	p.AddTool(sdk.Tool{
-		Name: "greet", Description: "Greet someone",
-		Schema: sdk.Object(map[string]any{"name": sdk.Str("who")}, "name"),
-		Run: func(c context.Context, args map[string]any) (string, error) {
-			return "Hello, " + sdk.ArgString(args, "name"), nil
-		},
-	})
-	return nil
+var Module = engine.Module{
+	Name:        "greeter",
+	Requires:    nil,          // "?secrets" if optional, "model/*" for any one
+	Provides:    nil,          // services Apply will register
+	Permissions: nil,          // net, exec, fs:read, fs:write, env, env:secrets, db
+	Apply: func(p *sdk.Module) error {
+		p.AddTool(sdk.Tool{
+			Name: "greet", Description: "Greet someone",
+			Schema: sdk.Object(map[string]any{"name": sdk.Str("who")}, "name"),
+			Run: func(c context.Context, args map[string]any) (string, error) {
+				return "Hello, " + sdk.ArgString(args, "name"), nil
+			},
+		})
+		return nil
+	},
 }
 ```
 
-You never have to decide what kind of plugin you're writing. `eip plugin init NAME` asks what it should do and writes a working one, and `eip plugin validate` says what yours does (`greet: adds 1 tool (greet) · permissions net`).
+Import the package and pass it: `kiln.WithModule(greeter.Module)`.
 
-The [docs' Plugins section](https://eipagent-docs.vercel.app/#plugins) has, for every kind: what it is, when to use it and when not, every built-in with its config, how to write your own (a full working file and a test), and the gotchas. It starts with [what to use when](https://eipagent-docs.vercel.app/#plugins-choose), a goal-first table. [PLUGINS.md](PLUGINS.md) is the short version.
+`kiln module list` prints every standard module with its services and capabilities, and `kiln module manifest` prints the same as JSON for a build manifest. `kiln module check [dir]` is the CI gate: it rejects a module that imports `os`, `os/exec`, `net` (except pure helpers), `syscall` or `database/sql` instead of the broker, uses a capability it did not declare, provides an undeclared service, or ships a descriptor that does not match its directory.
 
-### Standard plugins (embedded in the binary)
+A note on what this buys: compile-time inclusion is not a sandbox. A malicious module linked into your binary still runs with the process's privileges. The analyzer and the broker enforce the contract at build time and at the API boundary; run genuinely untrusted code in a sandbox (`WithRunIn`).
 
-Named by what they do. The prefix is a convention for the plugins we ship, not a rule for yours.
+### Standard modules (linked into the binary)
 
-| Kind | Plugins |
+Named by what they do. The prefix is a convention for the modules we ship, not a rule for yours.
+
+| Kind | Modules |
 |---|---|
-| [Tools](https://eipagent-docs.vercel.app/#kind-tools): the model can call them | `tool_shell`, `tool_fs`, `tool_fetch`, `tool_websearch`, `tool_search`, `tool_plan`, `tool_time`, `tool_memory`, `tool_mcp`, `tool_subagents`, `tool_skills`, `tool_sandbox` |
-| [Hooks](https://eipagent-docs.vercel.app/#kind-hooks): run around calls | `hook_retry`, `hook_fallback`, `hook_limits`, `hook_summarize`, `hook_thinking`, `hook_cache`, `hook_output_validate`, `hook_compact`, `hook_guardrails`, `hook_loop_detect`, `hook_tool_output_limit`, `hook_approval`, `hook_review`, `hook_pii`, `hook_tool_errors`, `hook_log`, `hook_guard`, `hook_stats` |
-| [Model providers](https://eipagent-docs.vercel.app/#kind-models) | `model_openai` (OpenAI, DeepSeek, Ollama, vLLM, OpenRouter, Groq), `model_anthropic`, `model_gemini`, `model_mock` |
-| [Threads and memory](https://eipagent-docs.vercel.app/#kind-threads-memory) | `threads_inmem` / `_file` / `_sql`, `memory_inmem` / `_file` / `_sql`, `db_sql` |
-| [Sandboxes and workspaces](https://eipagent-docs.vercel.app/#kind-sandboxes) | `sandbox_local`, `sandbox_docker`, `sandbox_microsandbox`, `workspace_local`, `workspace_sandbox` |
-| [Triggers](https://eipagent-docs.vercel.app/#kind-triggers) | `trigger_schedule`, `trigger_webhook` |
-| [Telemetry and audit](https://eipagent-docs.vercel.app/#kind-telemetry) | `trace_file`, `trace_otlp`, `audit_file`, `audit_http` |
-| [Secrets](https://eipagent-docs.vercel.app/#kind-secrets) | `secrets_env`, `secrets_vault` |
-| [Policy and the loop](https://eipagent-docs.vercel.app/#kind-policy) | `policy`, `loop` |
+| Tools: the model can call them | `tool_shell`, `tool_fs`, `tool_fetch`, `tool_websearch`, `tool_search`, `tool_plan`, `tool_time`, `tool_memory`, `tool_mcp`, `tool_subagents`, `tool_skills`, `tool_sandbox` |
+| Hooks: run around calls | `hook_retry`, `hook_fallback`, `hook_limits`, `hook_summarize`, `hook_thinking`, `hook_cache`, `hook_output_validate`, `hook_compact`, `hook_guardrails`, `hook_loop_detect`, `hook_tool_output_limit`, `hook_approval`, `hook_review`, `hook_pii`, `hook_tool_errors`, `hook_log`, `hook_guard`, `hook_stats` |
+| Model providers | `model_openai` (OpenAI, DeepSeek, Ollama, vLLM, OpenRouter, Groq), `model_anthropic`, `model_gemini`, `model_mock` |
+| Threads and memory | `threads_inmem` / `_file` / `_sql`, `memory_inmem` / `_file` / `_sql`, `db_sql` |
+| Sandboxes and workspaces | `sandbox_local`, `sandbox_docker`, `sandbox_microsandbox`, `workspace_local`, `workspace_sandbox` |
+| Triggers | `trigger_schedule`, `trigger_webhook` |
+| Telemetry and audit | `trace_file`, `trace_otlp`, `audit_file`, `audit_http` |
+| Secrets | `secrets_env`, `secrets_vault` |
+| Policy and the loop | `policy`, `loop` |
 
-Renamed in v0.4: `llm_*` → `model_*`, `mw_*` → `hook_*` (`mw_hitl` → `hook_approval`), `checkpoint_*` → `threads_*`, `store_*` → `memory_*`, `exec_*` → `workspace_*`, `jobs` → `trigger_schedule`, `audit_jsonl` → `audit_file`, `agents` → `tool_subagents`, `memory_store` → `tool_memory`. The old names keep working until v1.0 (see [CHANGELOG.md](CHANGELOG.md)).
+A model string `provider:model` enables the matching provider automatically. The prefixes are `openai`, `deepseek`, `anthropic`, `gemini`/`google`, `ollama`, `openrouter`, `groq` and `mock`.
 
-### Ship plugins: scaffold, validate, sign, install
+### From v0.4
 
-```bash
-eip plugin init weather                          # asks what it should do: tool, hook, model, memory, sandbox, trigger, mcp
-eip plugin validate weather                      # lint, and a one-line summary of what it does
-eip plugin fix weather                           # rewrite names renamed in v0.4
-eip plugin build -key signing.key weather        # signed, hashed weather-0.1.0.eip
-eip plugin install weather-0.1.0.eip             # verified and held (VALIDATED)
-eip plugin approve weather 0.1.0                 # APPROVED
-eip plugin enable weather                        # ACTIVE; update / rollback / quarantine / uninstall too
-```
-
-In Go, `eipagent.WithPluginStore(st)` attaches a `pluginpkg.Store` to a running agent, and enable, update and rollback swap plugins live. A version that fails to start never replaces the running one. Examples for every template are in [`examples/plugins`](examples/plugins), and [`examples/plugin-store`](examples/plugin-store) walks the whole lifecycle.
-
-A model string `provider:model` loads the matching provider automatically. The prefixes are `openai`, `deepseek`, `anthropic`, `gemini`/`google`, `ollama`, `openrouter`, `groq` and `mock`.
+v0.5 removed the runtime plugin system: interpreted plugins, the plugin store, signed packages, lock-file pins and hot reload. Every `*_test.go` suite was ported, and the standard modules were converted to Go packages under [`modules/`](modules). The old short names (`llm_*`, `mw_*`, `checkpoint_*`, `store_*`, `exec_*`, `jobs`, `audit_jsonl`, `agents`, `memory_store`) are **gone**; [CHANGELOG.md](CHANGELOG.md) lists old → new and the option renames.
 
 ## Sandboxes
 
@@ -654,10 +663,10 @@ There are two directions:
 - **The agent runs inside a sandbox:**
 
   ```go
-  eipagent.New(
-  	eipagent.WithModel("openai:gpt-4.1"),
-  	eipagent.WithPlugins("tool_shell", "tool_fs"),
-  	eipagent.WithRunIn(eipagent.RunIn{Provider: "docker", Binary: "./eip-linux"}), // GOOS=linux go build -o eip-linux ./cmd/eip
+  kiln.New(
+  	kiln.WithModel("openai:gpt-4.1"),
+  	kiln.WithModules("tool_shell", "tool_fs"),
+  	kiln.WithRunIn(kiln.RunIn{Provider: "docker", Binary: "./box-linux"}), // GOOS=linux go build -o box-linux ./your/box/program
   )
   ```
 
@@ -665,33 +674,31 @@ Providers: `sandbox_local` (no isolation, for development; `WithRunIn` refuses i
 
 ## Security
 
-`eipagent.New()` starts in the **secure** preset:
+`kiln.New()` composes with the **secure** policy:
 
-- File plugins must be pinned in `eip.lock` (`eip plugin pin`).
-- Hot reload is off.
-- Plugins get only the permissions they declare, narrowed further by the admin policy.
-- A file plugin can read only the secrets it declares with `var Secrets = []string{...}` or references with `secret://NAME`; literal credentials in config are still redacted.
+- A module gets exactly the capabilities it declares and nothing else; a policy file can narrow that further.
+- Broker calls fail closed, naming the missing capability.
+- A module can resolve only the secrets it declares (or that the application writes as `secret://NAME` in its config); literal credentials are still redacted.
 - Credential-bearing HTTP clients refuse redirects, and non-loopback plaintext endpoints need an explicit `allow_insecure: true`.
+- `kiln module check` refuses stdlib access that bypasses the broker.
 
 An admin `policy.json` adds:
 
-- locked `policy` and `audit_file` plugins;
+- locked `policy` and `audit_file` modules, which start first;
 - the approval mode: read-only, workspace-write or full-access;
 - tool and model allowlists, token budgets and per-role rules;
-- per-plugin secret grants.
+- per-module secret grants and capability grants.
 
 `WithRunIn` keeps the model and secret providers on the host, returns placeholders in the box, refuses redirects on proxied HTTP, blocks private/metadata egress by default, authenticates the box's run identity for `host.llm`/`host.tool`, and redacts persisted threads and memory. See [SECURITY.md](SECURITY.md).
 
-The threat model, and what isn't guaranteed, is in [SECURITY.md](SECURITY.md). Use `WithPreset("dev")` for local plugin development.
-
 ## Scaling and persistence
 
-The core engine is stateless and needs no database. All state lives behind plugin services: `threads`, `memory`, `audit` and `jobs`. For multiple replicas:
+The core engine is stateless and needs no database. All state lives behind module services: `threads`, `memory`, `audit` and `jobs`. For multiple replicas:
 
 ```go
-import _ "github.com/ganeshdipdumbare/eipagent/drivers/postgres"
+import _ "github.com/ganeshdipdumbare/kiln/drivers/postgres"
 
-eipagent.WithPersistence("postgres", "secret://EIP_DATABASE_URL") // db_sql + threads_sql + memory_sql
+kiln.WithPersistence("postgres", "secret://KILN_DATABASE_URL") // db_sql + threads_sql + memory_sql
 ```
 
 With this setup:
@@ -702,67 +709,51 @@ With this setup:
 
 ## CLI
 
-```bash
-go run ./cmd/eip -model openai:gpt-4.1 -use tool_time
-```
-
-Opens the REPL. It has `/plugins`, `/load`, `/unload` and `/reload`, and asks inline when a tool needs approval.
+The `kiln` command runs the **standard modules**. Application modules are compiled into your own program; pass them with `kiln.WithModule`.
 
 ```bash
-go run ./cmd/eip run -model mock:x "hello"
+go run ./cmd/kiln -model openai:gpt-4.1 -use tool_time      # REPL (/modules, /quit)
+go run ./cmd/kiln run -model mock:x "hello"                 # one prompt; -json, -thread ID
+go run ./cmd/kiln eval -model ... cases.json                # grade on a dataset
+go run ./cmd/kiln config dump -profile kiln.json             # policy + modules in start order
+go run ./cmd/kiln module list                               # every standard module
+go run ./cmd/kiln module check modules                      # static check (CI gate)
+go run ./cmd/kiln module manifest modules > manifest.json   # modules, services, capabilities
+go run ./cmd/kiln trace view .kiln/trace.jsonl > trace.html
+go run ./cmd/kiln audit verify .kiln/audit.jsonl
 ```
 
-Runs one prompt headless. Add `-json` or `-thread ID`.
-
-```bash
-go run ./cmd/eip plugin pin -plugins ./plugins -lock eip.lock
-```
-
-Pins plugin sources for the secure preset. `eip plugin help` lists the authoring commands (`init`, `validate`, `build`, `inspect`, `keygen`) and the store lifecycle (`install`, `approve`, `enable`, `disable`, `update`, `rollback`, `quarantine`, `uninstall`, `list`). Add `-store DIR` to `run`, `repl` or `serve` to load a store's enabled plugins.
-
-```bash
-go run ./cmd/eip trace view .eipagent/trace.jsonl > trace.html
-```
-
-Renders a trace as an HTML timeline.
-
-```bash
-go run ./cmd/eip config dump -profile eip.json
-```
-
-Shows the policy and every plugin's state.
-
-`go run ./cmd/eip serve --stdio` is what runs inside sandboxes. You don't start it yourself.
+`serve` (the box side) is started by `WithRunIn` itself: the box runs the same program with `KILN_BOX=1`; a program calls `kiln.ServeBox` when `kiln.InBox()` is true.
 
 ## Versioning
 
-eipagent follows [semantic versioning](https://semver.org) with git tags (`v0.4.0`). The Go module is `github.com/ganeshdipdumbare/eipagent`. `sdk.Version` holds the version the code reports, and plugin manifests state which versions they work with (`"eipagent": ">=0.4.0, <1.0.0"`).
+kiln follows [semantic versioning](https://semver.org) with git tags (`v0.5.0`). The Go module is `github.com/ganeshdipdumbare/kiln`. `sdk.Version` holds the version the code reports.
 
 While the major version is 0:
 
-- **Patch releases** (`v0.4.x`) fix bugs and security issues without breaking the public API.
+- **Patch releases** (`v0.5.x`) fix bugs and security issues without breaking the public API.
 - **Minor releases** (`v0.x.0`) may break it. Every break is listed under "Breaking changes" in [CHANGELOG.md](CHANGELOG.md), with what to change.
 
 The public API is:
 
-- the `eipagent` package (`New`, options, `Generate` / `Stream` / `Thread` ...);
-- `sdk`, which plugins are written against;
-- `pluginpkg`, `audit` and `engine`'s exported functions;
-- the `plugin.json` manifest schema, the `.eip` package format and the audit record format;
-- the `eip` CLI commands and flags;
-- the names and config keys of the standard plugins.
+- the `kiln` package (`New`, options, `Generate` / `Stream` / `Thread` ...);
+- `sdk`, which modules are written against;
+- `engine`'s exported types (`Module`, `ModuleSpec`, `Policy`, `Profile`, `Compose`, `Plan`);
+- `audit` and the audit record format;
+- the `kiln` CLI commands and flags;
+- the `module.json`/profile schema, the names and config keys of the standard modules.
 
-Interpreted plugins import the SDK as `"eipagent/sdk"`. That import is an alias the engine keeps stable across releases and module moves, so plugin files never need changing for it.
-
-To depend on a version, `go get github.com/ganeshdipdumbare/eipagent@vX.Y.Z`. To try unreleased work, `go get github.com/ganeshdipdumbare/eipagent@main`, or a local checkout with `replace github.com/ganeshdipdumbare/eipagent => ../eipagent`.
+To depend on a version, `go get github.com/ganeshdipdumbare/kiln@vX.Y.Z`. To try unreleased work, `go get github.com/ganeshdipdumbare/kiln@main`, or a local checkout with `replace github.com/ganeshdipdumbare/kiln => ../kiln`.
 
 ## Status
 
 **Done, with tests:**
 
-- the core engine and trust gate
-- the facade
-- four providers
+- the static composer: validation (unknown module, missing requirement, duplicate provider, cycle), deterministic order, all-or-nothing startup
+- the capability broker: HTTP with host allow-lists and SSRF checks, rooted directories, exec without a shell, env, database
+- the build-time analyzer (`internal/modulecheck`) and the `kiln module` commands
+- the facade (`New`, options, `Generate`, `Stream`, `Thread`)
+- four model providers
 - streaming and structured output
 - the middleware pack
 - threads (in-memory, file and Postgres)
@@ -775,18 +766,13 @@ To depend on a version, `go get github.com/ganeshdipdumbare/eipagent@vX.Y.Z`. To
 - tracing and the viewer
 - jobs and webhooks
 - the CLI
-- the lifecycle guarantees described above
-- plugin manifests, linting, signed packages, and the install / approve / enable / update / rollback / quarantine lifecycle
 - secret redaction, caller-bound secrets and `secret.access` auditing
 - `secrets_vault`, `audit_http`, `trace_otlp`
 
 **Not yet built:**
 
 - agent teams (a shared task board)
-- creator mode (the agent writes plugins into quarantine)
-- bundles (several plugins in one package) and a remote registry source
-- running a single untrusted plugin out of process, in its own sandbox
+- a first-class out-of-process module for genuinely untrusted code
 - a KMS-backed secrets provider (write one against `sdk.Secrets`)
-- runtime plugin management inside a `WithRunIn` box
 - `jobs_sql`
-- `eip serve --http`
+- `kiln serve --http`

@@ -11,8 +11,8 @@ import (
 	"log"
 	"os"
 
-	"github.com/ganeshdipdumbare/eipagent"
-	"github.com/ganeshdipdumbare/eipagent/sdk"
+	"github.com/ganeshdipdumbare/kiln"
+	"github.com/ganeshdipdumbare/kiln/sdk"
 )
 
 var ctx = context.Background()
@@ -24,16 +24,16 @@ func check(err error) {
 }
 
 // mock scripts the offline model so each example is deterministic.
-func mock(steps ...map[string]any) eipagent.Option {
+func mock(steps ...map[string]any) kiln.Option {
 	script := make([]any, len(steps))
 	for i, s := range steps {
 		script[i] = s
 	}
-	return eipagent.WithPlugin("model_mock", map[string]any{"script": script})
+	return kiln.WithModuleConfig("model_mock", map[string]any{"script": script})
 }
 
 func main() {
-	dir, err := os.MkdirTemp("", "eip-readme-")
+	dir, err := os.MkdirTemp("", "kiln-readme-")
 	check(err)
 	defer os.RemoveAll(dir)
 	for _, ex := range []struct {
@@ -47,7 +47,7 @@ func main() {
 		{"human in the loop", humanInTheLoop},
 		{"middleware", middleware},
 		{"custom middleware", customMiddleware},
-		{"runtime plugin management", runtimePlugins},
+		{"modules fixed at start", modulesAtStart},
 		{"subagents", subagents},
 		{"sandboxed tools", sandboxedTools},
 		{"lifecycle hooks", lifecycleHooks},
@@ -64,15 +64,15 @@ type WeatherIn struct {
 }
 
 func generateWithTool(string) {
-	weather := eipagent.Tool("weather", "Current weather for a city",
+	weather := kiln.Tool("weather", "Current weather for a city",
 		func(ctx context.Context, in WeatherIn) (string, error) {
 			return "18°C and light rain in " + in.City, nil
 		})
 
-	agent, err := eipagent.New(
-		eipagent.WithModel("mock:demo"), // e.g. "anthropic:claude-sonnet-5-5"
-		eipagent.WithInstructions("You are a concise travel assistant."),
-		eipagent.WithTools(weather),
+	agent, err := kiln.New(
+		kiln.WithModel("mock:demo"), // e.g. "anthropic:claude-sonnet-5-5"
+		kiln.WithInstructions("You are a concise travel assistant."),
+		kiln.WithTools(weather),
 		mock(map[string]any{"tool": "weather", "args": map[string]any{"city": "Lisbon"}},
 			map[string]any{"text": "Bring an umbrella: 18°C and rain."}),
 	)
@@ -90,7 +90,7 @@ func generateWithTool(string) {
 // ---- 2. Streaming ----
 
 func streaming(string) {
-	agent, err := eipagent.New(eipagent.WithModel("mock:demo"), mock(map[string]any{"text": "Rain on red roofs"}))
+	agent, err := kiln.New(kiln.WithModel("mock:demo"), mock(map[string]any{"text": "Rain on red roofs"}))
 	check(err)
 	defer agent.Close()
 
@@ -126,11 +126,11 @@ type Trip struct {
 }
 
 func structured(string) {
-	agent, err := eipagent.New(eipagent.WithModel("mock:demo"))
+	agent, err := kiln.New(kiln.WithModel("mock:demo"))
 	check(err)
 	defer agent.Close()
 
-	trip, err := eipagent.GenerateObject[Trip](ctx, agent, "Plan what to pack for Lisbon.")
+	trip, err := kiln.GenerateObject[Trip](ctx, agent, "Plan what to pack for Lisbon.")
 	check(err)
 	fmt.Printf("%+v\n", trip)
 }
@@ -138,9 +138,9 @@ func structured(string) {
 // ---- 4. Threads (durable conversations) ----
 
 func threads(dir string) {
-	agent, err := eipagent.New(
-		eipagent.WithModel("mock:demo"),
-		eipagent.WithPlugin("threads_file", map[string]any{"dir": dir + "/threads"}), // or threads_sql
+	agent, err := kiln.New(
+		kiln.WithModel("mock:demo"),
+		kiln.WithPersistence("file", dir), // threads_file + memory_file; or "postgres"
 	)
 	check(err)
 	defer agent.Close()
@@ -158,15 +158,15 @@ func threads(dir string) {
 // ---- 5. Human in the loop ----
 
 func humanInTheLoop(dir string) {
-	refund := eipagent.Tool("refund", "Refund an order", func(ctx context.Context, in struct {
+	refund := kiln.Tool("refund", "Refund an order", func(ctx context.Context, in struct {
 		Order string `json:"order"`
 	}) (string, error) {
 		return "refunded " + in.Order, nil
 	})
-	agent, err := eipagent.New(
-		eipagent.WithModel("mock:demo"),
-		eipagent.WithTools(refund),
-		eipagent.WithPlugin("hook_approval", map[string]any{"interrupt_on": map[string]any{"refund": true}}),
+	agent, err := kiln.New(
+		kiln.WithModel("mock:demo"),
+		kiln.WithTools(refund),
+		kiln.WithModuleConfig("hook_approval", map[string]any{"interrupt_on": map[string]any{"refund": true}}),
 		mock(map[string]any{"tool": "refund", "args": map[string]any{"order": "A-17"}},
 			map[string]any{"text": "Refund done."}),
 	)
@@ -179,22 +179,22 @@ func humanInTheLoop(dir string) {
 	for res.Interrupted() { // paused before the tool ran; state is saved
 		in := res.Interrupts[0]
 		fmt.Println("approve?", in.Message)
-		res, err = th.Resume(ctx, eipagent.Approve(in.ID)) // or Reject / Edit / Respond
+		res, err = th.Resume(ctx, kiln.Approve(in.ID)) // or Reject / Edit / Respond
 		check(err)
 	}
 	fmt.Println(res.Text)
 }
 
-// ---- 6. Middleware from the standard plugins ----
+// ---- 6. Middleware from the standard modules ----
 
 func middleware(string) {
-	agent, err := eipagent.New(
-		eipagent.WithModel("mock:demo"),
-		eipagent.WithPlugin("hook_retry", map[string]any{"max_retries": 3}),
-		eipagent.WithPlugin("hook_fallback", map[string]any{"models": []any{"mock:backup"}}),
-		eipagent.WithPlugin("hook_limits", map[string]any{"model_calls_run": 20, "tool_calls_run": 50}),
-		eipagent.WithPlugin("hook_pii", map[string]any{"types": []any{"email", "credit_card"}}),
-		eipagent.WithPlugin("hook_summarize", map[string]any{"trigger_messages": 40, "keep_messages": 10}),
+	agent, err := kiln.New(
+		kiln.WithModel("mock:demo"),
+		kiln.WithModuleConfig("hook_retry", map[string]any{"max_retries": 3}),
+		kiln.WithModuleConfig("hook_fallback", map[string]any{"models": []any{"mock:backup"}}),
+		kiln.WithModuleConfig("hook_limits", map[string]any{"model_calls_run": 20, "tool_calls_run": 50}),
+		kiln.WithModuleConfig("hook_pii", map[string]any{"types": []any{"email", "credit_card"}}),
+		kiln.WithModuleConfig("hook_summarize", map[string]any{"trigger_messages": 40, "keep_messages": 10}),
 	)
 	check(err)
 	defer agent.Close()
@@ -203,52 +203,59 @@ func middleware(string) {
 	fmt.Println(res.Text) // the model saw [REDACTED_EMAIL]
 }
 
-// ---- 7. Your own middleware (a compiled plugin) ----
+// ---- 7. Your own middleware (a compiled application module) ----
 
 func customMiddleware(string) {
-	timing := eipagent.Plugin{Name: "timing", Apply: func(p *sdk.Plugin) error {
-		p.WrapModel(func(c context.Context, req *eipagent.ModelRequest, next eipagent.ModelHandler) (*eipagent.ModelResponse, error) {
+	timing := kiln.Module{Name: "timing", Apply: func(p *sdk.Module) error {
+		p.WrapModel(func(c context.Context, req *kiln.ModelRequest, next kiln.ModelHandler) (*kiln.ModelResponse, error) {
 			resp, err := next(c, req) // call the model (and inner middleware)
 			if err == nil {
 				p.Logf("%s step %d used %d tokens", req.Model, req.Step, resp.Usage.TotalTokens)
 			}
 			return resp, err
 		})
-		p.WrapTool(func(c context.Context, req *eipagent.ToolRequest, next eipagent.ToolHandler) (*eipagent.ToolResult, error) {
+		p.WrapTool(func(c context.Context, req *kiln.ToolRequest, next kiln.ToolHandler) (*kiln.ToolResult, error) {
 			if req.Call.Name == "drop_database" {
-				return &eipagent.ToolResult{Content: "not allowed", IsError: true}, nil
+				return &kiln.ToolResult{Content: "not allowed", IsError: true}, nil
 			}
 			return next(c, req)
 		})
 		return nil
 	}}
-	agent, err := eipagent.New(eipagent.WithModel("mock:demo"), eipagent.WithCompiledPlugin(timing),
-		eipagent.WithLogger(func(scope, msg string) { fmt.Printf("[%s] %s\n", scope, msg) }))
+	agent, err := kiln.New(kiln.WithModel("mock:demo"), kiln.WithModule(timing),
+		kiln.WithLogger(func(scope, msg string) { fmt.Printf("[%s] %s\n", scope, msg) }))
 	check(err)
 	defer agent.Close()
 	_, err = agent.Generate(ctx, "hi")
 	check(err)
 }
 
-// ---- 8. Add, update and remove plugins at runtime ----
+// ---- 8. Modules are fixed when New runs ----
 
-func runtimePlugins(string) {
-	agent, err := eipagent.New(eipagent.WithModel("mock:demo"))
+// There is no runtime load, unload or reload, no module directory and no
+// lock file: the module set is composed once. A requirement nobody provides
+// is filled by a default module, or New refuses it by name. Application
+// code is compiled in with WithModule.
+func modulesAtStart(string) {
+	// Without defaults, nothing provides "memory": New refuses tool_memory.
+	_, err := kiln.New(kiln.WithModel("mock:demo"), kiln.WithoutDefaults(),
+		kiln.WithModules("tool_memory"))
+	fmt.Println("refused without memory:", err)
+
+	// With defaults, New adds memory_inmem for tool_memory.
+	greeter := kiln.Module{Name: "greeter", Apply: func(p *sdk.Module) error {
+		p.AddTool(kiln.Tool("greet", "Say hello", func(ctx context.Context, in struct{}) (string, error) {
+			return "hello", nil
+		}))
+		return nil
+	}}
+	agent, err := kiln.New(
+		kiln.WithModel("mock:demo"),
+		kiln.WithModules("tool_memory"),
+		kiln.WithModule(greeter),
+	)
 	check(err)
 	defer agent.Close()
-	eng := agent.Engine()
-
-	check(eng.Load(eipagent.PluginSpec{Use: "tool_memory"})) // needs "memory": waits
-	fmt.Println(eng.State("tool_memory"))                    // PENDING
-	check(eng.Load(eipagent.PluginSpec{Use: "memory_inmem"}))
-	fmt.Println(eng.State("tool_memory")) // ACTIVE: its dependency arrived
-
-	check(eng.Load(eipagent.PluginSpec{Use: "hook_pii", Config: map[string]any{"strategy": "mask"}}))
-	check(eng.Load(eipagent.PluginSpec{Use: "hook_pii", Config: map[string]any{"strategy": "hash"}})) // update config
-	check(eng.Reload("hook_pii"))                                                                     // update code from source
-	check(eng.Unload("memory_inmem"))
-	fmt.Println(eng.State("tool_memory")) // PENDING again; its tools are gone
-
 	for _, s := range agent.Status() {
 		fmt.Println(s.String())
 	}
@@ -257,10 +264,10 @@ func runtimePlugins(string) {
 // ---- 9. Subagents ----
 
 func subagents(string) {
-	agent, err := eipagent.New(
-		eipagent.WithModel("mock:demo"),
-		eipagent.WithPlugins("tool_time"),
-		eipagent.WithPlugin("tool_subagents", map[string]any{"agents": []any{
+	agent, err := kiln.New(
+		kiln.WithModel("mock:demo"),
+		kiln.WithModules("tool_time"),
+		kiln.WithModuleConfig("tool_subagents", map[string]any{"agents": []any{
 			map[string]any{"name": "researcher", "description": "Finds facts",
 				"instructions": "Research carefully.", "tools": []any{"current_time"}},
 			map[string]any{"name": "billing", "description": "Invoices and refunds",
@@ -277,21 +284,21 @@ func subagents(string) {
 	check(err)
 	fmt.Println(res.Text)
 
-	// A whole agent (own plugins, model, policy) can be a tool too:
-	expert, err := eipagent.New(eipagent.WithModel("mock:demo"))
+	// A whole agent (own modules, model, policy) can be a tool too:
+	expert, err := kiln.New(kiln.WithModel("mock:demo"))
 	check(err)
 	defer expert.Close()
-	_ = eipagent.WithTools(expert.AsTool("legal_expert", "Answers legal questions"))
+	_ = kiln.WithTools(expert.AsTool("legal_expert", "Answers legal questions"))
 }
 
 // ---- 10. Shell and file tools in a sandbox ----
 
 func sandboxedTools(dir string) {
-	agent, err := eipagent.New(
-		eipagent.WithModel("mock:demo"),
-		eipagent.WithPlugin("sandbox_local", map[string]any{"root": dir + "/boxes"}),  // or sandbox_docker
-		eipagent.WithPlugin("workspace_sandbox", map[string]any{"provider": "local"}), // one box per thread
-		eipagent.WithPlugins("tool_shell", "tool_fs"),
+	agent, err := kiln.New(
+		kiln.WithModel("mock:demo"),
+		kiln.WithModuleConfig("sandbox_local", map[string]any{"root": dir + "/boxes"}),  // or sandbox_docker
+		kiln.WithModuleConfig("workspace_sandbox", map[string]any{"provider": "local"}), // one box per thread
+		kiln.WithModules("tool_shell", "tool_fs"),
 		mock(map[string]any{"tool": "write_file", "args": map[string]any{"path": "notes.md", "content": "hello\n"}},
 			map[string]any{"tool": "bash", "args": map[string]any{"command": "wc -l notes.md"}},
 			map[string]any{"text": "Wrote notes.md."}),
@@ -309,16 +316,16 @@ func sandboxedTools(dir string) {
 // ---- 11. Lifecycle hooks ----
 
 func lifecycleHooks(string) {
-	observer := eipagent.Plugin{Name: "observer", Apply: func(p *sdk.Plugin) error {
-		p.OnAgentStart(func(c context.Context, st *sdk.RunState) error {
+	observer := kiln.Module{Name: "observer", Apply: func(p *sdk.Module) error {
+		p.OnRunStart(func(c context.Context, st *sdk.RunState) error {
 			fmt.Println("run start, user:", st.User)
 			return nil // returning an error refuses the run
 		})
-		p.OnStepPrepare(func(c context.Context, sc *sdk.StepContext) error {
+		p.BeforeStep(func(c context.Context, sc *sdk.StepContext) error {
 			sc.Request.System += "\nToday is a holiday." // rewrite the next model request
 			return nil
 		})
-		p.OnModelAfter(func(c context.Context, sc *sdk.StepContext, resp *sdk.ModelResponse) error {
+		p.AfterModel(func(c context.Context, sc *sdk.StepContext, resp *sdk.ModelResponse) error {
 			if len(resp.Message.ToolCalls) > 3 {
 				sc.Jump = "end" // stop the run here
 			}
@@ -329,21 +336,21 @@ func lifecycleHooks(string) {
 				fmt.Println("run failed:", e.Text)
 			}
 		})
-		p.OnAgentEnd(func(c context.Context, st *sdk.RunState, res *sdk.RunResult) error {
+		p.OnRunEnd(func(c context.Context, st *sdk.RunState, res *sdk.RunResult) error {
 			fmt.Println("run end:", res.FinishReason) // stop | max_steps | interrupted | tool:x | error
 			return nil
 		})
 		p.Effect(func() func() {
 			fmt.Println("observer loaded")
-			return func() { fmt.Println("observer unloaded") } // on Unload / Close / reload
+			return func() { fmt.Println("observer unloaded") } // on Close
 		})
 		return nil
 	}}
-	boom := eipagent.Tool("boom", "fails hard", func(ctx context.Context, in struct{}) (string, error) {
+	boom := kiln.Tool("boom", "fails hard", func(ctx context.Context, in struct{}) (string, error) {
 		return "", sdk.Fatal(errors.New("disk on fire")) // sdk.Fatal aborts the run; plain errors go to the model
 	})
-	agent, err := eipagent.New(eipagent.WithModel("mock:demo"), eipagent.WithUser("ada"),
-		eipagent.WithCompiledPlugin(observer), eipagent.WithTools(boom),
+	agent, err := kiln.New(kiln.WithModel("mock:demo"), kiln.WithUser("ada"),
+		kiln.WithModule(observer), kiln.WithTools(boom),
 		mock(map[string]any{"text": "hello"}, map[string]any{"tool": "boom"}))
 	check(err)
 	_, err = agent.Generate(ctx, "hi")

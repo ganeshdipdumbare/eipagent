@@ -7,17 +7,17 @@ import (
 	"strings"
 )
 
-// Command is the safe command handle handed to interpreted plugins that
-// hold exec. It has no exported Env field, so a plugin cannot reset the
+// Command is the safe command handle handed to interpreted modules that
+// hold exec. It has no exported Env field, so a module cannot reset the
 // environment to nil and make the child inherit the agent's credentials.
 type Command struct {
 	cmd          *exec.Cmd
 	allowSecrets bool
 }
 
-// NewCommand wraps a command for an interpreted plugin. env is the
+// NewCommand wraps a command for an interpreted module. env is the
 // already-filtered base environment; allowSecrets is true only when the
-// plugin declared env:secrets.
+// module declared env:secrets.
 func NewCommand(cmd *exec.Cmd, env []string, allowSecrets bool) *Command {
 	cmd.Env = append([]string(nil), env...)
 	return &Command{cmd: cmd, allowSecrets: allowSecrets}
@@ -35,7 +35,7 @@ func (c *Command) SetStdout(w io.Writer)           { c.cmd.Stdout = w }
 func (c *Command) SetStderr(w io.Writer)           { c.cmd.Stderr = w }
 
 // SetEnv replaces the child environment. Credential-looking names are
-// dropped unless the plugin declared env:secrets.
+// dropped unless the module declared env:secrets.
 func (c *Command) SetEnv(env []string) {
 	c.cmd.Env = c.filter(env)
 }

@@ -1,4 +1,4 @@
-module github.com/ganeshdipdumbare/eipagent
+module github.com/ganeshdipdumbare/kiln
 
 go 1.27
 
@@ -7,7 +7,6 @@ toolchain go1.27.3
 require (
 	github.com/jackc/pgx/v5 v5.12.0
 	github.com/sixt/tensorlake-go v0.3.1
-	github.com/traefik/yaegi v0.16.1
 )
 
 require (

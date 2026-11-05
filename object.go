@@ -1,4 +1,4 @@
-package eipagent
+package kiln
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-var ErrNoObject = errors.New("eipagent: model did not produce a valid object")
+var ErrNoObject = errors.New("kiln: model did not produce a valid object")
 
 // GenerateObject runs the agent and decodes its final answer into T,
 // using the provider's native structured output where available. One
@@ -19,7 +19,7 @@ var ErrNoObject = errors.New("eipagent: model did not produce a valid object")
 //		Name        string   `json:"name"`
 //		Ingredients []string `json:"ingredients"`
 //	}
-//	r, err := eipagent.GenerateObject[Recipe](ctx, agent, "A pancake recipe")
+//	r, err := kiln.GenerateObject[Recipe](ctx, agent, "A pancake recipe")
 func GenerateObject[T any](ctx context.Context, a *Agent, prompt string, opts ...RunOption) (T, error) {
 	var zero T
 	name := strings.ToLower(reflect.TypeOf(zero).Name())

@@ -8,16 +8,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ganeshdipdumbare/eipagent"
-	"github.com/ganeshdipdumbare/eipagent/sdk"
+	"github.com/ganeshdipdumbare/kiln"
+	"github.com/ganeshdipdumbare/kiln/sdk"
 )
 
 // DemoModel is a deterministic stand-in for an LLM, provided as
 // "model/demo" (model string "demo:support"). It makes the same tool calls a
 // real model would for the demo's flows, so the app and the website replay
 // work offline. Swap in a real model with -model ollama:qwen3.5:4b.
-func DemoModel() eipagent.Plugin {
-	return eipagent.Plugin{Name: "llm_demo", Apply: func(p *sdk.Plugin) error {
+func DemoModel() kiln.Module {
+	return kiln.Module{Name: "llm_demo", Provides: []string{"model/*"}, Apply: func(p *sdk.Module) error {
 		return p.Provide("model/demo", &sdk.Provider{
 			Name:         "demo",
 			Capabilities: map[string]bool{"tools": true, "streaming": true},
@@ -74,18 +74,18 @@ func say(format string, a ...any) sdk.Message {
 	return sdk.Message{Role: sdk.RoleAssistant, Content: fmt.Sprintf(format, a...)}
 }
 
-// demoTools are the app's own tools; any other tool came from a plugin
-// added at runtime (the Plugins tab).
+// demoTools are the app's own tools; any other tool came from a module
+// added at runtime (the Modules tab).
 var demoTools = map[string]bool{"lookup_order": true, "search_help_center": true, "issue_refund": true, "send_email": true}
 
 var cityRe = regexp.MustCompile(`\b(?:to|in|for)\s+([A-Z][a-zA-Z]+(?:\s[A-Z][a-zA-Z]+)?)`)
 
-// pluginTool finds a tool from a runtime plugin that fits the message,
+// moduleTool finds a tool from a runtime module that fits the message,
 // the way a real model would pick a newly available tool: the message
 // names it ("shipping estimate" or "shipping_estimate"), or, when it
 // isn't about an order, uses a word from the tool's name or description
 // ("How long does shipping to Paris take?").
-func pluginTool(text string, tools []sdk.Tool) *sdk.Tool {
+func moduleTool(text string, tools []sdk.Tool) *sdk.Tool {
 	t := strings.ToLower(text)
 	words := map[string]bool{}
 	for _, w := range strings.FieldsFunc(t, func(r rune) bool { return !(r >= 'a' && r <= 'z') }) {
@@ -112,7 +112,7 @@ func pluginTool(text string, tools []sdk.Tool) *sdk.Tool {
 	return nil
 }
 
-// argsFor fills a plugin tool's arguments from the message: a city for
+// argsFor fills a module tool's arguments from the message: a city for
 // city-like fields, the order number for order fields, else the text.
 func argsFor(tool sdk.Tool, text, orderID string) map[string]any {
 	args := map[string]any{}
@@ -160,10 +160,10 @@ func decide(msgs []sdk.Message, tools []sdk.Tool) sdk.Message {
 			results[m.ToolName] = m
 		}
 	}
-	if t := pluginTool(user, tools); t != nil {
+	if t := moduleTool(user, tools); t != nil {
 		if r, ok := results[t.Name]; ok {
 			if r.IsError {
-				return say("The %s plugin couldn't answer: %s", t.Name, r.Content)
+				return say("The %s module couldn't answer: %s", t.Name, r.Content)
 			}
 			return say("%s", r.Content)
 		}

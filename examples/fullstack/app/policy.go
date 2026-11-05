@@ -4,16 +4,16 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ganeshdipdumbare/eipagent"
-	"github.com/ganeshdipdumbare/eipagent/sdk"
+	"github.com/ganeshdipdumbare/kiln"
+	"github.com/ganeshdipdumbare/kiln/sdk"
 )
 
-// RefundPolicy is a business rule written as a plugin: agents may refund
+// RefundPolicy is a business rule written as a module: agents may refund
 // up to limit on their own; anything above pauses the run until a
 // supervisor approves, edits or rejects it. The pause is durable: it is
 // stored with the thread and survives a server restart.
-func RefundPolicy(limit float64) eipagent.Plugin {
-	return eipagent.Plugin{Name: "refund_policy", Apply: func(p *sdk.Plugin) error {
+func RefundPolicy(limit float64) kiln.Module {
+	return kiln.Module{Name: "refund_policy", Apply: func(p *sdk.Module) error {
 		p.WrapTool(func(c context.Context, req *sdk.ToolRequest, next sdk.ToolHandler) (*sdk.ToolResult, error) {
 			if req.Call.Name != "issue_refund" || req.Decision != nil {
 				return next(c, req) // other tools, or a supervisor already decided
@@ -39,8 +39,8 @@ func RefundPolicy(limit float64) eipagent.Plugin {
 // Inspector shows what the model actually received after every other
 // middleware ran (for example, card numbers already masked by hook_pii).
 // It runs innermost and reports through the run's event stream.
-func Inspector() eipagent.Plugin {
-	return eipagent.Plugin{Name: "inspector", Apply: func(p *sdk.Plugin) error {
+func Inspector() kiln.Module {
+	return kiln.Module{Name: "inspector", Apply: func(p *sdk.Module) error {
 		p.SetPriority(-100)
 		p.WrapModel(func(c context.Context, req *sdk.ModelRequest, next sdk.ModelHandler) (*sdk.ModelResponse, error) {
 			if req.Run != nil && req.Run.Emit != nil {

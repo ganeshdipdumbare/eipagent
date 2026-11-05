@@ -3,7 +3,6 @@ package app
 import (
 	"bufio"
 	"context"
-	"crypto/ed25519"
 	"crypto/rand"
 	"embed"
 	"encoding/hex"
@@ -16,10 +15,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/ganeshdipdumbare/eipagent"
-	"github.com/ganeshdipdumbare/eipagent/audit"
-	"github.com/ganeshdipdumbare/eipagent/pluginpkg"
-	"github.com/ganeshdipdumbare/eipagent/sdk"
+	"github.com/ganeshdipdumbare/kiln"
+	"github.com/ganeshdipdumbare/kiln/audit"
+	"github.com/ganeshdipdumbare/kiln/sdk"
 )
 
 //go:embed ui
@@ -31,23 +29,16 @@ type Config struct {
 	DataDir     string  // threads and the audit log live here
 	RefundLimit float64 // refunds above this need a supervisor
 	RatePerMin  int     // agent runs per client per minute (default 20)
-	// AllowPluginCode lets the Plugins tab install any code (without
-	// permissions). Off: only the bundled sample plugins. Never turn it on
-	// for a public deployment: the code runs in this server.
-	AllowPluginCode bool
-	MaxRuns         int  // agent runs in flight at once (default 8)
-	TrustProxy      bool // use X-Forwarded-For as the client address
+	MaxRuns     int     // agent runs in flight at once (default 8)
+	TrustProxy  bool    // use X-Forwarded-For as the client address
 }
 
 type Server struct {
-	agent *eipagent.Agent
+	agent *kiln.Agent
 	shop  *Shop
 	cfg   Config
 	mux   *http.ServeMux
 	limit *limiter
-
-	plugins *pluginpkg.Store   // plugins added from the UI
-	signer  ed25519.PrivateKey // signs them
 }
 
 // User identities. A real app takes these from its login session.
@@ -78,44 +69,42 @@ func New(cfg Config) (*Server, error) {
 	if os.Getenv("MAIL_RELAY_TOKEN") == "" {
 		os.Setenv("MAIL_RELAY_TOKEN", "demo-relay-token-5f2c9a") // a stand-in; production reads it from Vault
 	}
-	pstore, signer, err := openPluginStore(cfg.DataDir)
-	if err != nil {
+	// File-backed modules work inside directories they are given; the
+	// application creates them before the agent starts.
+	if err := os.MkdirAll(filepath.Join(cfg.DataDir, "threads"), 0o700); err != nil {
 		return nil, err
 	}
-	opts := []eipagent.Option{
-		eipagent.WithModel(cfg.Model),
-		eipagent.WithInstructions(instructions),
-		eipagent.WithMaxSteps(8),
-		eipagent.WithTools(Tools(shop)...),
+	opts := []kiln.Option{
+		kiln.WithModel(cfg.Model),
+		kiln.WithInstructions(instructions),
+		kiln.WithMaxSteps(8),
+		kiln.WithTools(Tools(shop)...),
 		// Business rule: refunds above the limit wait for a supervisor.
-		eipagent.WithCompiledPlugin(RefundPolicy(cfg.RefundLimit)),
-		// Email goes out through a plugin that alone may read the relay token.
-		eipagent.WithPlugin("secrets_env", map[string]any{"allow": []any{"MAIL_RELAY_TOKEN"}, "grants": map[string]any{"mailer": []any{"MAIL_RELAY_TOKEN"}}}),
-		eipagent.WithCompiledPlugin(Mailer(shop)),
+		kiln.WithModule(RefundPolicy(cfg.RefundLimit)),
+		// Email goes out through a module that alone may read the relay token.
+		kiln.WithModuleConfig("secrets_env", map[string]any{"allow": []any{"MAIL_RELAY_TOKEN"}, "grants": map[string]any{"mailer": []any{"MAIL_RELAY_TOKEN"}}}),
+		kiln.WithModule(Mailer(shop)),
 		// Every outgoing email needs a human OK.
-		eipagent.WithPlugin("hook_approval", map[string]any{"interrupt_on": map[string]any{
+		kiln.WithModuleConfig("hook_approval", map[string]any{"interrupt_on": map[string]any{
 			"send_email": map[string]any{"allowed": []any{"approve", "edit", "reject"}, "description": "Send this email to the customer?"},
 		}}),
 		// Card numbers never reach the model.
-		eipagent.WithPlugin("hook_pii", map[string]any{"types": []any{"credit_card"}, "strategy": "mask"}),
-		eipagent.WithPlugin("hook_limits", map[string]any{"tool_calls_run": 12}),
+		kiln.WithModuleConfig("hook_pii", map[string]any{"types": []any{"credit_card"}, "strategy": "mask"}),
+		kiln.WithModuleConfig("hook_limits", map[string]any{"tool_calls_run": 12}),
 		// Durable threads (pauses survive restarts) and a tamper-evident log.
-		eipagent.WithPlugin("threads_file", map[string]any{"dir": filepath.Join(cfg.DataDir, "threads")}),
-		eipagent.WithPlugin("audit_file", map[string]any{"path": filepath.Join(cfg.DataDir, "audit.jsonl")}),
-		eipagent.WithCompiledPlugin(Inspector()),
-		// Plugins added in the Plugins tab, live in this agent.
-		eipagent.WithPluginStore(pstore),
-		eipagent.WithLogger(func(scope, msg string) {}),
+		kiln.WithModuleConfig("threads_file", map[string]any{"dir": filepath.Join(cfg.DataDir, "threads")}),
+		kiln.WithModuleConfig("audit_file", map[string]any{"path": filepath.Join(cfg.DataDir, "audit.jsonl")}),
+		kiln.WithModule(Inspector()),
+		kiln.WithLogger(func(scope, msg string) {}),
 	}
 	if strings.HasPrefix(cfg.Model, "demo:") {
-		opts = append(opts, eipagent.WithCompiledPlugin(DemoModel()))
+		opts = append(opts, kiln.WithModule(DemoModel()))
 	}
-	agent, err := eipagent.New(opts...)
+	agent, err := kiln.New(opts...)
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{agent: agent, shop: shop, cfg: cfg, mux: http.NewServeMux(), limit: newLimiter(cfg.RatePerMin, cfg.MaxRuns, cfg.TrustProxy),
-		plugins: pstore, signer: signer}
+	s := &Server{agent: agent, shop: shop, cfg: cfg, mux: http.NewServeMux(), limit: newLimiter(cfg.RatePerMin, cfg.MaxRuns, cfg.TrustProxy)}
 	s.routes()
 	return s, nil
 }
@@ -133,9 +122,6 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/threads/{id}/messages", s.guard(s.postMessage))
 	s.mux.HandleFunc("POST /api/threads/{id}/decisions", s.guard(s.postDecisions))
 	s.mux.HandleFunc("GET /api/approvals", s.approvals)
-	s.mux.HandleFunc("GET /api/plugins", s.listPlugins)
-	s.mux.HandleFunc("POST /api/plugins", s.guard(s.submitPlugin))
-	s.mux.HandleFunc("POST /api/plugins/{name}", s.guard(s.pluginAction))
 	s.mux.HandleFunc("GET /api/audit", s.auditLog)
 	s.mux.HandleFunc("GET /api/orders", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"orders": s.shop.Orders(), "outbox": s.shop.Outbox()})
@@ -275,7 +261,7 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 401, errors.New("unknown user"))
 		return
 	}
-	stream := s.agent.Thread(r.PathValue("id")).Stream(r.Context(), body.Text, eipagent.AsUser(body.User, u.Role))
+	stream := s.agent.Thread(r.PathValue("id")).Stream(r.Context(), body.Text, kiln.AsUser(body.User, u.Role))
 	sendSSE(w, stream)
 }
 
@@ -299,12 +285,12 @@ func (s *Server) postDecisions(w http.ResponseWriter, r *http.Request) {
 	for i := range body.Decisions {
 		body.Decisions[i].By = body.User // recorded in the audit log
 	}
-	stream := s.agent.Thread(r.PathValue("id")).ResumeStream(r.Context(), body.Decisions, eipagent.AsUser(body.User, u.Role))
+	stream := s.agent.Thread(r.PathValue("id")).ResumeStream(r.Context(), body.Decisions, kiln.AsUser(body.User, u.Role))
 	sendSSE(w, stream)
 }
 
 // sendSSE forwards every agent event to the browser, then the result.
-func sendSSE(w http.ResponseWriter, stream *eipagent.Stream) {
+func sendSSE(w http.ResponseWriter, stream *kiln.Stream) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	flusher, _ := w.(http.Flusher)
@@ -320,7 +306,7 @@ func sendSSE(w http.ResponseWriter, stream *eipagent.Stream) {
 	}
 	res, err := stream.Result()
 	switch {
-	case errors.Is(err, eipagent.ErrThreadBusy):
+	case errors.Is(err, kiln.ErrThreadBusy):
 		send(map[string]any{"Type": "error", "Text": "Someone else updated this conversation. Reload and try again."})
 	case err != nil:
 		send(map[string]any{"Type": "error", "Text": err.Error()})

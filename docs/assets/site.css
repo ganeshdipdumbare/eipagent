@@ -1,4 +1,4 @@
-/* eipagent docs — Swiss editorial shell.
+/* kiln docs — Swiss editorial shell.
    Paper canvas, ink type, hairline grid, one cobalt signal colour.
    Light-first; dark is an "ink" theme. */
 
@@ -296,7 +296,7 @@ body[data-page="introduction"] main { padding-left: clamp(16px, 2vw, 32px); padd
 .bento-card:hover .glyph { color: var(--accent); }
 .bento-card .glyph svg { width: 22px; height: 22px; }
 
-/* ---- plugin lab ---- */
+/* ---- module lab ---- */
 .lab { margin-top: 6px; border: 1px solid var(--line-2); border-radius: 3px; background: var(--bg-2); overflow: clip; box-shadow: var(--shadow); }
 .lab-top { border-bottom: 1px solid var(--line); background: var(--surface); }
 .lab-topline { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 18px; padding: 13px 16px; }
@@ -369,24 +369,24 @@ body[data-page="introduction"] main { padding-left: clamp(16px, 2vw, 32px); padd
 .lab-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
 .lab-panel-head h4 { margin: 0; font: 500 10.5px var(--f-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--fg-3); }
 .lab-panel-head .count { font: 500 10.5px var(--f-mono); color: var(--fg-3); }
-.lab-plugins { padding: 8px; }
+.lab-modules { padding: 8px; }
 .lab-group { margin-bottom: 12px; }
 .lab-group h5 { margin: 10px 8px 6px; font: 500 9.5px var(--f-mono); letter-spacing: .14em; text-transform: uppercase; color: var(--fg-3); }
-.lab-plugin {
+.lab-module {
   display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center;
   width: 100%; padding: 9px 8px; border: 1px solid transparent; border-radius: 2px;
   background: none; text-align: left; cursor: pointer;
 }
-.lab-plugin:hover { background: var(--hover); }
-.lab-plugin[aria-checked="true"] { border-color: color-mix(in srgb, var(--accent) 32%, var(--line)); background: var(--accent-soft); }
-.lab-plugin b { display: block; font: 500 12.5px var(--f-mono); color: var(--fg); letter-spacing: -.01em; }
-.lab-plugin small { display: block; margin-top: 2px; font-size: 11.5px; line-height: 1.35; color: var(--fg-2); }
-.lab-plugin .chips { margin-top: 5px; gap: 4px; }
-.lab-plugin .chip { font-size: 9.5px; padding: 2px 5px; border-radius: 2px; }
+.lab-module:hover { background: var(--hover); }
+.lab-module[aria-checked="true"] { border-color: color-mix(in srgb, var(--accent) 32%, var(--line)); background: var(--accent-soft); }
+.lab-module b { display: block; font: 500 12.5px var(--f-mono); color: var(--fg); letter-spacing: -.01em; }
+.lab-module small { display: block; margin-top: 2px; font-size: 11.5px; line-height: 1.35; color: var(--fg-2); }
+.lab-module .chips { margin-top: 5px; gap: 4px; }
+.lab-module .chip { font-size: 9.5px; padding: 2px 5px; border-radius: 2px; }
 .lab-switch { position: relative; width: 28px; height: 16px; border: 1px solid var(--line-2); border-radius: 999px; background: var(--bg); flex: none; transition: background .18s var(--ease), border-color .18s var(--ease); }
 .lab-switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 10px; height: 10px; border-radius: 50%; background: var(--fg-3); transition: transform .18s var(--ease), background .18s var(--ease); }
-.lab-plugin[aria-checked="true"] .lab-switch { background: var(--accent); border-color: var(--accent); }
-.lab-plugin[aria-checked="true"] .lab-switch::after { background: #fff; transform: translateX(12px); }
+.lab-module[aria-checked="true"] .lab-switch { background: var(--accent); border-color: var(--accent); }
+.lab-module[aria-checked="true"] .lab-switch::after { background: #fff; transform: translateX(12px); }
 .lab-run { display: flex; flex-direction: column; min-height: 0; align-self: start; background: var(--bg-2); }
 .lab-scenario { padding: 14px 18px; border-bottom: 1px solid var(--line); }
 .lab-scenario .prompt { font: 500 12px var(--f-mono); color: var(--fg); margin: 0; }
@@ -414,7 +414,7 @@ body[data-page="introduction"] main { padding-left: clamp(16px, 2vw, 32px); padd
 .trace-event.acc .trace-dot { background: var(--accent); }
 .trace-event .line { min-width: 0; }
 .trace-event .type { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; font: 500 11px/1.4 var(--f-mono); color: var(--fg); }
-.trace-event .plugin { font: 500 9px var(--f-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--accent-ink); background: var(--accent-soft); border-radius: 2px; padding: 1px 5px; }
+.trace-event .module { font: 500 9px var(--f-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--accent-ink); background: var(--accent-soft); border-radius: 2px; padding: 1px 5px; }
 .trace-event .plane { font: 500 9px var(--f-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--fg-3); border: 1px solid var(--line-2); border-radius: 2px; padding: 0 4px; }
 .trace-event .plane.host { color: var(--fg-2); border-color: color-mix(in srgb, var(--fg) 20%, var(--line)); }
 .trace-event .plane.sandbox { color: var(--accent-ink); border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
@@ -602,7 +602,7 @@ th { font: 500 10px var(--f-mono); letter-spacing: .1em; text-transform: upperca
 tr:last-child td { border-bottom: 0; }
 .page td code { white-space: normal; overflow-wrap: anywhere; }
 
-/* plugin reference */
+/* module reference */
 .states { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 14px 0 22px; }
 .perm { display: inline-block; font: 500 10.5px var(--f-mono); padding: 3px 7px; border-radius: 2px; border: 1px solid var(--line-2); color: var(--fg); margin: 0 4px 6px 0; background: var(--bg); }
 .hero-actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 32px; }
@@ -671,7 +671,7 @@ tr:last-child td { border-bottom: 0; }
 .palette .hint { display: flex; gap: 14px; padding: 8px 14px; border-top: 1px solid var(--line); font: 10.5px var(--f-mono); color: var(--fg-3); }
 .palette .hint kbd { margin-right: 3px; }
 
-/* generated plugin reference */
+/* generated module reference */
 .builtins { display: grid; gap: 10px; margin: 14px 0 20px; min-width: 0; }
 .builtin { border: 1px solid var(--line); border-radius: 2px; padding: 13px 15px; background: var(--bg-2); min-width: 0; overflow-wrap: anywhere; }
 .builtin .bhead { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: baseline; }

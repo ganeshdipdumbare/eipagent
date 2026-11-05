@@ -1,723 +1,203 @@
-// Package engine is the eipagent core: plugin sources, the trust gate,
-// lifecycle and dependency reconcile, hot reload. It knows nothing about
-// models, tools, loops or memory; those are all plugins.
 package engine
 
 import (
-	"errors"
 	"fmt"
-	"go/ast"
-	"go/parser"
-	"go/token"
-	"io/fs"
-	"os"
-	"path/filepath"
-	"sort"
-	"strconv"
 	"strings"
 	"sync"
-	"time"
 
-	"github.com/ganeshdipdumbare/eipagent/sdk"
+	"github.com/ganeshdipdumbare/kiln/sdk"
 )
 
-// Plugin lifecycle (Cordis):
-//
-//	PENDING -> LOADING -> ACTIVE -> (dependency lost) -> PENDING
-//	                  \-> FAILED
-type State string
-
-const (
-	Pending State = "PENDING"
-	Loading State = "LOADING"
-	Active  State = "ACTIVE"
-	Failed  State = "FAILED"
-)
-
+// trustKey is claimed once, at init, so only this package can set a
+// module's contract (its Provides, capabilities and secret names).
 var trustKey = sdk.ClaimTrustKey()
 
-// Plugin is a compiled (native Go) plugin. It goes through the same
-// lifecycle as interpreted ones.
-type Plugin struct {
-	Name        string
-	Requires    []string // services needed first ("?x" optional, "x/*" any)
-	Inject      []string // Deprecated: the pre-v0.4 name of Requires (both are read)
-	Permissions []string // informational for compiled plugins
-	Apply       func(*sdk.Plugin) error
-}
-
-type record struct {
-	spec    PluginSpec
-	name    string
-	kind    string // compiled | file | embedded
-	path    string
-	hash    string
-	mod     time.Time
-	inject  []string
-	perms   []string
-	secrets []string
-	config  map[string]any
-	apply   func(*sdk.Plugin) error
-	ctx     *sdk.Plugin
-	state   State
-	err     error
-	order   int
-	locked  bool
-	optSeen string
-}
-
-type Options struct {
-	Dirs     []string // user plugin directories, searched in order
-	Embedded fs.FS    // stdlib plugins (plugins.FS)
-	Policy   *Policy  // nil = DevPolicy
-	Lock     *Lock
-	Logger   func(scope, msg string)
-	// WriteDeny lists files and directories fs:write plugins may not
-	// modify (the agent's configuration and plugin store).
-	WriteDeny []string
-}
-
+// Engine is a started composition. It is returned only when every module
+// applied successfully.
 type Engine struct {
-	mu       sync.Mutex
-	opts     Options
-	pol      *Policy
-	root     *sdk.Plugin
-	compiled map[string]Plugin
-	recs     map[string]*record
-	nextOrd  int
-	warned   map[string]bool // old plugin names already logged
+	mu      sync.Mutex
+	pol     *Policy
+	root    *sdk.Module
+	started []started
+	closed  bool
 }
 
-func New(opts Options) *Engine {
-	pol := opts.Policy
-	if pol == nil {
-		pol = DevPolicy()
-	}
-	if opts.Lock == nil {
-		opts.Lock = &Lock{Plugins: map[string]string{}}
-	}
+type started struct {
+	info ModuleInfo
+	ctx  *sdk.Module
+	err  error
+}
+
+// Start applies the plan's modules in order. If one fails, the modules
+// already started are disposed (last first) and no engine is returned.
+func (p *Plan) Start() (*Engine, error) {
 	root := sdk.NewRoot()
-	if opts.Logger != nil {
-		root.SetLogger(opts.Logger)
+	if p.logger != nil {
+		root.SetLogger(p.logger)
 	}
-	return &Engine{opts: opts, pol: pol, root: root, compiled: map[string]Plugin{}, recs: map[string]*record{}, warned: map[string]bool{}}
+	e := &Engine{pol: p.pol, root: root}
+	for i, n := range p.nodes {
+		info := ModuleInfo{Name: n.name, Module: n.mod.Name, Auto: n.spec.Auto, Order: i, Requires: n.mod.Requires, Provides: n.mod.Provides, Declared: n.mod.Permissions, Permissions: n.granted, Secrets: secretNames(n), Locked: n.locked}
+		ctx := root.Fork(n.name)
+		ctx.Trust(trustKey, i, n.locked)
+		ctx.SetContract(trustKey, n.mod.Provides, n.granted, secretNames(n))
+		if n.spec.Priority != nil {
+			ctx.SetPriority(*n.spec.Priority)
+		}
+		cfg, err := configFor(n)
+		if err != nil {
+			e.rollback()
+			return nil, fmt.Errorf("module %s: %w", n.name, err)
+		}
+		ctx.Config = cfg
+		if err := applyModule(n.mod, ctx); err != nil {
+			ctx.Dispose() // roll back whatever it registered
+			e.rollback()
+			return nil, fmt.Errorf("module %s: %w", n.name, err)
+		}
+		e.started = append(e.started, started{info: info, ctx: ctx})
+		e.audit("module.active", n.name, nil)
+	}
+	return e, nil
 }
 
-func (e *Engine) Root() *sdk.Plugin { return e.root }
-func (e *Engine) Policy() *Policy   { return e.pol }
-
-func (e *Engine) logf(format string, args ...any) {
-	e.root.Logf(format, args...)
+// applyModule runs Apply, turning a panic into an error.
+func applyModule(m Module, ctx *sdk.Module) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic: %v", r)
+		}
+	}()
+	return m.Apply(ctx)
 }
 
-// audit reports lifecycle events to the "audit" service, if any.
-func (e *Engine) audit(kind string, r *record, err error) {
+// secretNames is what a module may resolve: the names it declared, plus any
+// secret:// reference the application wrote into its own configuration.
+// Writing a reference is the grant, so config can't reach other secrets.
+func secretNames(n node) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(name string) {
+		if !seen[name] {
+			seen[name] = true
+			out = append(out, name)
+		}
+	}
+	for _, s := range n.mod.Secrets {
+		add(s)
+	}
+	for _, s := range configSecretRefs(n.spec.Config) {
+		add(s)
+	}
+	return out
+}
+
+// configFor returns the module's config with ${ENV} expanded. Expansion
+// needs the env capability.
+func configFor(n node) (map[string]any, error) {
+	cfg := map[string]any{}
+	if n.spec.Config != nil {
+		v, err := interpolate(n.spec.Config, n.granted)
+		if err != nil {
+			return nil, err
+		}
+		cfg = v.(map[string]any)
+	}
+	return cfg, nil
+}
+
+// rollback disposes the started modules, last first. Caller holds no lock:
+// Start owns the engine until it returns.
+func (e *Engine) rollback() {
+	for i := len(e.started) - 1; i >= 0; i-- {
+		if c := e.started[i].ctx; c != nil {
+			c.Dispose()
+		}
+	}
+	e.started = nil
+	e.root.Dispose()
+}
+
+func (e *Engine) audit(kind, module string, err error) {
 	a, ok := e.root.Service("audit").(*sdk.Audit)
-	if !ok || r == nil {
+	if !ok || a == nil || a.Record == nil {
 		return
 	}
-	data := map[string]any{"plugin": r.name, "source": r.spec.Use, "kind": r.kind, "sha256": r.hash, "perms": r.perms, "locked": r.locked, "writer": "core"}
+	data := map[string]any{"module": module, "writer": "engine"}
 	if err != nil {
 		data["error"] = err.Error()
 	}
 	a.Record(kind, data)
 }
 
-// Register adds a compiled plugin source. It wins over files of the same name.
-func (e *Engine) Register(p Plugin) {
-	e.mu.Lock()
-	e.compiled[p.Name] = p
-	e.mu.Unlock()
-}
+// Root returns the root context. Applications read the services modules
+// provide through it.
+func (e *Engine) Root() *sdk.Module { return e.root }
 
-// ---- Sources and the trust gate ----
+// Policy returns the admin policy the engine was started with.
+func (e *Engine) Policy() *Policy { return e.pol }
 
-type source struct {
-	kind string
-	path string
-	src  []byte
-	mod  time.Time
-}
-
-// validName accepts plugin names and sources: letters, digits, '_' and
-// '-', so a name can never point outside the plugin directories.
-func validName(s string) bool {
-	if s == "" || len(s) > 64 {
-		return false
-	}
-	for _, r := range s {
-		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-') {
-			return false
-		}
-	}
-	return true
-}
-
-func (e *Engine) find(use string) (*source, error) {
-	if !validName(use) {
-		return nil, fmt.Errorf("plugin %q: invalid name (letters, digits, '_' and '-' only)", use)
-	}
-	for _, dir := range e.opts.Dirs {
-		path := filepath.Join(dir, use+".go")
-		if b, err := os.ReadFile(path); err == nil {
-			st, _ := os.Stat(path)
-			return &source{kind: "file", path: path, src: b, mod: st.ModTime()}, nil
-		}
-	}
-	if e.opts.Embedded != nil {
-		name := use
-		if n := sdk.CanonicalPlugin(use); n != use {
-			name = n // a built-in renamed in v0.4
-			if !e.warned[use] {
-				e.warned[use] = true
-				e.logf("plugin %s is now called %s; the old name works until v1.0", use, n)
-			}
-		}
-		if b, err := fs.ReadFile(e.opts.Embedded, name+".go"); err == nil {
-			return &source{kind: "embedded", path: "embedded:" + name, src: b}, nil
-		}
-	}
-	return nil, fmt.Errorf("plugin %q not found", use)
-}
-
-// meta is what the engine learns from a plugin's source before running it.
-type meta struct {
-	imports     []string
-	inject      []string
-	permissions []string
-	secrets     []string
-}
-
-func parseMeta(name string, src []byte) (*meta, error) {
-	f, err := parser.ParseFile(token.NewFileSet(), name+".go", src, parser.ParseComments)
-	if err != nil {
-		return nil, fmt.Errorf("parse %s: %w", name, err)
-	}
-	if f.Name.Name != "plugin" {
-		return nil, fmt.Errorf("%s: package must be \"plugin\", got %q", name, f.Name.Name)
-	}
-	m := &meta{}
-	for _, imp := range f.Imports {
-		p, _ := strconv.Unquote(imp.Path.Value)
-		m.imports = append(m.imports, p)
-	}
-	// Secret names the source declares or references with secret://. File
-	// plugins may only resolve these (the core enforces it in boundSecrets).
-	seen := map[string]bool{}
-	addSecret := func(name string) {
-		name = strings.TrimSpace(name)
-		if name == "" || seen[name] {
-			return
-		}
-		seen[name] = true
-		m.secrets = append(m.secrets, name)
-	}
-	ast.Inspect(f, func(n ast.Node) bool {
-		if bl, ok := n.(*ast.BasicLit); ok && bl.Kind == token.STRING {
-			v, _ := strconv.Unquote(bl.Value)
-			for _, name := range secretRefs(v) {
-				addSecret(name)
-			}
-		}
-		return true
-	})
-	for _, d := range f.Decls {
-		gd, ok := d.(*ast.GenDecl)
-		if !ok || gd.Tok != token.VAR {
-			continue
-		}
-		for _, sp := range gd.Specs {
-			vs := sp.(*ast.ValueSpec)
-			for i, id := range vs.Names {
-				if i >= len(vs.Values) || (id.Name != "Requires" && id.Name != "Inject" && id.Name != "Permissions" && id.Name != "Secrets") {
-					continue
-				}
-				lit, ok := vs.Values[i].(*ast.CompositeLit)
-				if !ok {
-					return nil, fmt.Errorf("%s: %s must be a []string literal", name, id.Name)
-				}
-				var vals []string
-				for _, el := range lit.Elts {
-					bl, ok := el.(*ast.BasicLit)
-					if !ok || bl.Kind != token.STRING {
-						return nil, fmt.Errorf("%s: %s must contain string literals", name, id.Name)
-					}
-					s, _ := strconv.Unquote(bl.Value)
-					vals = append(vals, s)
-				}
-				switch id.Name {
-				case "Requires", "Inject": // Inject: the pre-v0.4 name
-					m.inject = append(m.inject, vals...)
-				case "Secrets":
-					for _, v := range vals {
-						addSecret(v)
-					}
-				default:
-					m.permissions = vals
-				}
-			}
-		}
-	}
-	return m, nil
-}
-
-// SecretRefs extracts NAME from every "secret://NAME" in s. Lint and
-// the runtime grant scanner share it so they cannot disagree.
-func SecretRefs(s string) []string { return secretRefs(s) }
-
-func secretRefs(s string) []string {
-	var out []string
-	for {
-		i := strings.Index(s, "secret://")
-		if i < 0 {
-			return out
-		}
-		s = s[i+len("secret://"):]
-		j := 0
-		for j < len(s) {
-			c := s[j]
-			if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-' || c == '.') {
-				break
-			}
-			j++
-		}
-		if j > 0 {
-			out = append(out, s[:j])
-		}
-		s = s[j:]
-	}
-}
-
-func (e *Engine) compile(spec PluginSpec) (*record, error) {
-	name, use := spec.Name(), spec.Use
-	if !validName(name) {
-		return nil, fmt.Errorf("plugin %q: invalid name (letters, digits, '_' and '-' only)", name)
-	}
-	if !e.pol.allowed(use) {
-		return nil, fmt.Errorf("plugin %s: not allowed by policy", use)
-	}
-	rec := &record{spec: spec, name: name, state: Pending, locked: e.pol.locked(name)}
-	// Config is expanded once the plugin's permissions are known: ${ENV}
-	// with a secret-looking name needs env:secrets.
-	config := func() error {
-		cfg := map[string]any{}
-		if spec.Config != nil {
-			v, err := interpolate(spec.Config, rec.perms)
-			if err != nil {
-				return fmt.Errorf("plugin %s: %w", name, err)
-			}
-			cfg = v.(map[string]any)
-		}
-		if rec.locked {
-			if rules := e.pol.Rules; rules != nil && use == "policy" {
-				cfg["rules"] = rules
-			}
-		}
-		rec.config = cfg
-		return nil
-	}
-	if p, ok := e.compiled[use]; ok {
-		rec.kind, rec.path, rec.inject, rec.perms, rec.apply = "compiled", "compiled:"+use, append(append([]string(nil), p.Requires...), p.Inject...), p.Permissions, p.Apply
-		if err := config(); err != nil {
-			return nil, err
-		}
-		return rec, nil
-	}
-	src, err := e.find(use)
-	if err != nil {
-		return nil, err
-	}
-	rec.kind, rec.path, rec.mod, rec.hash = src.kind, src.path, src.mod, Hash(src.src)
-	// Embedded plugins ship inside the binary, so they're trusted like code.
-	if src.kind == "file" && e.pol.RequirePins {
-		want, ok := e.opts.Lock.Plugins[use]
-		if !ok {
-			return nil, fmt.Errorf("plugin %s: not pinned in eip.lock (policy requires pins)", use)
-		}
-		if want != rec.hash {
-			return nil, fmt.Errorf("plugin %s: sha256 %s does not match eip.lock pin %s", use, rec.hash[:12], short(want))
-		}
-	}
-	m, err := parseMeta(use, src.src)
-	if err != nil {
-		return nil, err
-	}
-	rec.inject = m.inject
-	rec.secrets = m.secrets
-	rec.perms = e.pol.grant(name, m.permissions)
-	if err := checkImports(use, m.imports, rec.perms); err != nil {
-		if len(rec.perms) < len(m.permissions) {
-			err = fmt.Errorf("%w (policy granted %v of declared %v)", err, rec.perms, m.permissions)
-		}
-		return nil, err
-	}
-	if err := config(); err != nil {
-		return nil, err
-	}
-	i := newInterp(pluginEnv(rec.perms))
-	if err := i.Use(buildSymbols(rec.perms, src.kind == "embedded", e.opts.WriteDeny)); err != nil {
-		return nil, err
-	}
-	if _, err := i.Eval(string(src.src)); err != nil {
-		return nil, fmt.Errorf("compile %s: %w", use, err)
-	}
-	v, err := i.Eval("plugin.Apply")
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", use, err)
-	}
-	apply, ok := v.Interface().(func(*sdk.Plugin) error)
-	if !ok {
-		return nil, fmt.Errorf("%s: Apply must be func(*sdk.Plugin) error", use)
-	}
-	rec.apply = apply
-	return rec, nil
-}
-
-func short(h string) string {
-	if len(h) > 12 {
-		return h[:12]
-	}
-	return h
-}
-
-// ---- Lifecycle ----
-
-var ErrLocked = errors.New("plugin is locked by policy")
-
-// Load loads (or replaces) a plugin instance. Dependents cascade.
-func (e *Engine) Load(spec PluginSpec) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.loadLocked(spec, false)
-}
-
-func (e *Engine) loadLocked(spec PluginSpec, admin bool) error {
-	name := spec.Name()
-	old := e.recs[name]
-	if old != nil && old.locked && !admin {
-		e.audit("plugin.refused", &record{name: name, spec: spec}, ErrLocked)
-		return fmt.Errorf("%s: %w", name, ErrLocked)
-	}
-	rec, err := e.compile(spec)
-	if err != nil {
-		e.audit("plugin.refused", &record{name: name, spec: spec}, err)
-		if old != nil && old.kind == "file" {
-			if st, e2 := os.Stat(old.path); e2 == nil {
-				old.mod = st.ModTime() // don't retry a broken file until it changes
-			}
-		}
-		return err // a broken edit never takes down the running version
-	}
-	wasActive := old != nil && old.state == Active
-	if old != nil {
-		rec.order = old.order
-		e.disposeLocked(old)
-	} else {
-		rec.order = e.nextOrd
-		e.nextOrd++
-	}
-	e.recs[name] = rec
-	e.reconcileLocked()
-	if rec.state != Active && wasActive {
-		// Safe replacement: a version that fails to start, or is left
-		// waiting on a missing dependency, never takes down the one that
-		// was running. Bring the old one back.
-		failed := rec.err
-		if failed == nil {
-			failed = fmt.Errorf("left %s: missing %v", rec.state, e.missing(rec))
-		}
-		e.disposeLocked(rec)
-		old.mod = rec.mod
-		old.state, old.err = Pending, nil
-		e.recs[name] = old
-		e.reconcileLocked()
-		e.logf("%s: new version failed, previous version restored", name)
-		return fmt.Errorf("%s: new version failed (previous version kept): %w", name, failed)
-	}
-	return rec.err
-}
-
-// Reload recompiles a loaded plugin from its source with the same config.
-func (e *Engine) Reload(name string) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	old := e.recs[name]
-	if old == nil {
-		return fmt.Errorf("plugin %q not loaded", name)
-	}
-	return e.loadLocked(old.spec, false)
-}
-
-func (e *Engine) Unload(name string) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	old, ok := e.recs[name]
-	if !ok {
-		return fmt.Errorf("plugin %q not loaded", name)
-	}
-	if old.locked {
-		e.audit("plugin.refused", old, ErrLocked)
-		return fmt.Errorf("%s: %w", name, ErrLocked)
-	}
-	e.disposeLocked(old)
-	delete(e.recs, name)
-	e.reconcileLocked()
-	return nil
-}
-
-// Close disposes every plugin, last loaded first.
+// Close disposes every module, last started first. It is safe to call
+// more than once.
 func (e *Engine) Close() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	recs := e.sortedLocked()
-	for i := len(recs) - 1; i >= 0; i-- {
-		e.disposeLocked(recs[i])
+	if e.closed {
+		return
 	}
-	e.recs = map[string]*record{}
+	e.closed = true
+	for i := len(e.started) - 1; i >= 0; i-- {
+		if c := e.started[i].ctx; c != nil {
+			c.Dispose()
+			e.audit("module.disposed", e.started[i].info.Name, nil)
+		}
+	}
 	e.root.Dispose()
 }
 
-func (e *Engine) disposeLocked(r *record) {
-	if r != nil && r.ctx != nil {
-		e.audit("plugin.disposed", r, nil)
-		r.ctx.Dispose()
-		r.ctx = nil
-	}
+// ModuleStatus is one row of an engine's status.
+type ModuleStatus struct {
+	ModuleInfo
+	State string // "ACTIVE" for a running module; "FAILED" or "CLOSED" otherwise
+	Err   error  // why the module failed, if it did
 }
 
-// missing returns required dependencies that are not provided.
-func (e *Engine) missing(r *record) []string {
-	var m []string
-	for _, dep := range r.inject {
-		if strings.HasPrefix(dep, "?") {
-			continue
-		}
-		if strings.HasSuffix(dep, "*") {
-			if len(e.root.Services(strings.TrimSuffix(dep, "*"))) == 0 {
-				m = append(m, dep)
-			}
-			continue
-		}
-		if !e.root.HasService(dep) {
-			m = append(m, dep)
-		}
-	}
-	return m
-}
-
-// optional fingerprints which optional deps currently exist.
-func (e *Engine) optional(r *record) string {
-	var b strings.Builder
-	for _, dep := range r.inject {
-		if strings.HasPrefix(dep, "?") {
-			fmt.Fprintf(&b, "%s=%v;", dep, e.root.HasService(dep[1:]))
-		}
-	}
-	return b.String()
-}
-
-// reconcileLocked moves every plugin toward its desired state until
-// stable: ACTIVE plugins that lost a dependency go back to PENDING,
-// PENDING plugins whose dependencies exist are applied, ACTIVE plugins
-// whose optional deps changed restart.
-func (e *Engine) reconcileLocked() {
-	for guard := 0; guard < 100; guard++ {
-		changed := false
-		for _, r := range e.sortedLocked() {
-			switch {
-			case r.state == Active && len(e.missing(r)) > 0:
-				e.disposeLocked(r)
-				r.state = Pending
-				e.logf("%s: dependency lost -> PENDING", r.name)
-				changed = true
-			case r.state == Active && r.optSeen != e.optional(r):
-				e.disposeLocked(r)
-				r.state = Pending
-				changed = true
-			case r.state == Pending && len(e.missing(r)) == 0:
-				e.startLocked(r)
-				changed = true
-			}
-		}
-		if !changed {
-			return
-		}
-	}
-	e.logf("reconcile did not settle (dependency cycle?)")
-}
-
-func (e *Engine) startLocked(r *record) {
-	r.state, r.err = Loading, nil
-	r.optSeen = e.optional(r)
-	ctx := e.root.Fork(r.name)
-	ctx.Trust(trustKey, r.order, r.locked)
-	ctx.SetBuiltin(trustKey, r.kind == "embedded")
-	ctx.SetSecretPolicy(trustKey, r.secrets, r.kind == "file")
-	ctx.Config = r.config
-	if r.spec.Priority != nil {
-		ctx.SetPriority(*r.spec.Priority)
-	}
-	err := func() (err error) {
-		defer func() {
-			if p := recover(); p != nil {
-				err = fmt.Errorf("panic: %v", p)
-			}
-		}()
-		return r.apply(ctx)
-	}()
-	if err != nil {
-		ctx.Dispose() // roll back whatever it registered
-		r.state, r.err = Failed, err
-		e.logf("%s: FAILED: %v", r.name, err)
-		e.audit("plugin.failed", r, err)
-		return
-	}
-	r.ctx, r.state = ctx, Active
-	e.audit("plugin.active", r, nil)
-}
-
-func (e *Engine) sortedLocked() []*record {
-	out := make([]*record, 0, len(e.recs))
-	for _, r := range e.recs {
-		out = append(out, r)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].order < out[j].order })
-	return out
-}
-
-// ---- Profiles ----
-
-// LoadProfile loads every enabled row plus the policy's required
-// plugins. It returns one error per plugin that failed to load.
-func (e *Engine) LoadProfile(p *Profile) []error {
+// Status lists the running modules in start order.
+func (e *Engine) Status() []ModuleStatus {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	var errs []error
-	// Policy-required plugins load first (audit sees everything after them)
-	// and replace any profile row with the same name.
-	specs := append([]PluginSpec{}, e.pol.Require...)
-	required := len(specs) // only these act with admin rights (may replace locked plugins)
-	for _, s := range p.Plugins {
-		dup := false
-		for _, req := range e.pol.Require {
-			if req.Name() == s.Name() {
-				dup = true
-			}
+	out := make([]ModuleStatus, 0, len(e.started))
+	for _, s := range e.started {
+		state := "ACTIVE"
+		if e.closed {
+			state = "CLOSED"
 		}
-		if !dup {
-			specs = append(specs, s)
-		}
-	}
-	for i, s := range specs {
-		if s.Disabled && !e.pol.locked(s.Name()) {
-			continue
-		}
-		if err := e.loadLocked(s, i < required); err != nil {
-			errs = append(errs, err)
-		}
-	}
-	return errs
-}
-
-// ---- Introspection ----
-
-type PluginStatus struct {
-	Name, Source, Kind, Hash string
-	Auto                     bool // loaded because something needed it
-	State                    State
-	Missing                  []string
-	Perms                    []string
-	Locked                   bool
-	Err                      error
-}
-
-func (e *Engine) Status() []PluginStatus {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	var out []PluginStatus
-	for _, r := range e.sortedLocked() {
-		st := PluginStatus{Name: r.name, Source: r.spec.Use, Kind: r.kind, Hash: r.hash, State: r.state, Perms: r.perms, Locked: r.locked, Err: r.err, Auto: r.spec.Auto}
-		if r.state == Pending {
-			st.Missing = e.missing(r)
-		}
-		out = append(out, st)
+		out = append(out, ModuleStatus{ModuleInfo: s.info, State: state})
 	}
 	return out
 }
 
-func (s PluginStatus) String() string {
-	row := fmt.Sprintf("%-18s %-8s %-8s", s.Name, s.State, s.Kind)
+// String renders one status row.
+func (s ModuleStatus) String() string {
+	row := fmt.Sprintf("%-22s %-7s", s.Name, s.State)
 	if s.Auto {
 		row += " auto"
-	}
-	if s.Locked {
-		row += " locked"
-	}
-	if len(s.Perms) > 0 {
-		row += " perms=" + strings.Join(s.Perms, ",")
-	}
-	if len(s.Missing) > 0 {
-		row += "  waiting for: " + strings.Join(s.Missing, ", ")
 	}
 	if s.Err != nil {
 		row += "  " + s.Err.Error()
 	}
+	if s.Locked {
+		row += " locked"
+	}
+	if len(s.Permissions) > 0 {
+		row += " perms=" + strings.Join(s.Permissions, ",")
+	}
 	return row
 }
 
-func (e *Engine) State(name string) State {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if r := e.recs[name]; r != nil {
-		return r.state
-	}
-	return ""
-}
-
-// Pin computes sha256 pins for every loaded file/embedded plugin.
-func (e *Engine) Pins() map[string]string {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	out := map[string]string{}
-	for _, r := range e.recs {
-		if r.hash != "" {
-			out[r.spec.Use] = r.hash
-		}
-	}
-	return out
-}
-
-// Watch hot-reloads file plugins whose source changed. It does nothing
-// unless the policy enables hot reload; locked plugins never reload.
-func (e *Engine) Watch(stop <-chan struct{}, say func(string)) {
-	if !e.pol.HotReload {
-		return
-	}
-	t := time.NewTicker(700 * time.Millisecond)
-	defer t.Stop()
-	for {
-		select {
-		case <-stop:
-			return
-		case <-t.C:
-			e.mu.Lock()
-			var changed []string
-			for _, r := range e.recs {
-				if r.kind != "file" || r.locked {
-					continue
-				}
-				if st, err := os.Stat(r.path); err == nil && !st.ModTime().Equal(r.mod) {
-					changed = append(changed, r.name)
-				}
-			}
-			e.mu.Unlock()
-			for _, n := range changed {
-				if err := e.Reload(n); err != nil {
-					say(fmt.Sprintf("hot-reload %s failed (old version kept): %v", n, err))
-				} else {
-					say("hot-reloaded " + n)
-				}
-			}
-		}
-	}
+// SecretNames returns the secret names a module may resolve, given its
+// config: the names it declares plus any secret:// reference in the config.
+// The host uses it to set the grants it enforces for a sandboxed box.
+func SecretNames(m Module, cfg map[string]any) []string {
+	return secretNames(node{mod: m, spec: ModuleSpec{Config: cfg}})
 }

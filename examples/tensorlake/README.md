@@ -2,7 +2,7 @@
 
 This example runs the agent inside a real [Tensorlake](https://docs.tensorlake.ai/sandboxes/introduction)
 cloud sandbox. The host process stays on your machine (the model provider,
-secrets, broker and audit); Tensorlake runs the VM, and eipagent connects to it
+secrets, broker and audit); Tensorlake runs the VM, and kiln connects to it
 through Tensorlake's process API.
 
 ## Requirements
@@ -18,9 +18,9 @@ export TENSORLAKE_API_KEY="..."
 go run ./examples/tensorlake
 ```
 
-The host builds `eip` for `linux/amd64` (the default Tensorlake Ubuntu image is
-x86_64), creates an ephemeral cloud sandbox, uploads the agent and plugins,
-starts `eip serve --stdio`, and deletes the sandbox on exit.
+The host builds `kiln` for `linux/amd64` (the default Tensorlake Ubuntu image is
+x86_64), creates an ephemeral cloud sandbox, uploads the box program (with its compiled modules),
+starts `kiln serve --stdio`, and deletes the sandbox on exit.
 
 If your Tensorlake image is arm64, set `TL_GUEST_ARCH=arm64`.
 
@@ -28,9 +28,9 @@ If your Tensorlake image is arm64, set `TL_GUEST_ARCH=arm64`.
 
 ```
 your machine / server (the host)
-  ├── eipagent host process: model provider, secrets, broker, audit
+  ├── kiln host process: model provider, secrets, broker, audit
   └── Tensorlake cloud sandbox
-        └── eip serve --stdio + plugins + tools
+        └── the box program (ServeBox) + modules + tools
 ```
 
 The host knows the sandbox through the Tensorlake API. The sandbox does not
@@ -48,7 +48,7 @@ real secret never enters Tensorlake.
 | `TL_WORKDIR` | `/home/tl-user` |
 | `TL_TIMEOUT_SECS` | `900` |
 
-The `sandbox_tensorlake` plugin also accepts `image`, `workdir`,
+The `sandbox_tensorlake` module also accepts `image`, `workdir`,
 `timeout_secs`, `api_key`, `sandbox_api` and `sandbox_proxy` config keys.
 
 The example maps `RunIn.Spec.Network.Mode` to Tensorlake network settings:

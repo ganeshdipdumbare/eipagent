@@ -47,7 +47,7 @@ func RunStateFrom(ctx context.Context) *RunState {
 func UserFrom(ctx context.Context) string   { return RunInfoFrom(ctx).User }
 func ThreadFrom(ctx context.Context) string { return RunInfoFrom(ctx).Thread }
 
-// ---- JSON Schema shorthands for plugin authors ----
+// ---- JSON Schema shorthands for module authors ----
 
 func Object(props map[string]any, required ...string) map[string]any {
 	s := map[string]any{"type": "object", "properties": props}
@@ -129,7 +129,7 @@ func LastText(msgs []Message) string {
 
 // Secret resolves a config value: "secret://NAME" goes through the
 // "secrets" service; anything else is returned as is.
-func (c *Plugin) Secret(ref string) (string, error) {
+func (c *Module) Secret(ref string) (string, error) {
 	if !strings.HasPrefix(ref, "secret://") {
 		return ref, nil
 	}
@@ -144,7 +144,7 @@ func (c *Plugin) Secret(ref string) (string, error) {
 // Unlike Secret it also registers a literal (non-secret://) value for
 // redaction, so a key written directly in config can't appear in logs,
 // traces or audit records.
-func (c *Plugin) SecretValue(ref string) (string, error) {
+func (c *Module) SecretValue(ref string) (string, error) {
 	v, err := c.Secret(ref)
 	if err == nil && v != "" {
 		AddRedaction(v)

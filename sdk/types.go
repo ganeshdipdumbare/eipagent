@@ -1,7 +1,7 @@
-// Package sdk is the plugin-facing API of the eipagent core engine.
+// Package sdk is the module-facing API of the kiln core engine.
 //
 // Everything here is plain structs and func types (no interfaces to
-// implement, no generics) so interpreted Yaegi plugins can provide and
+// implement, no generics) so interpreted Yaegi modules can provide and
 // consume every type.
 package sdk
 
@@ -74,8 +74,8 @@ type Tool struct {
 	Run         func(ctx context.Context, args map[string]any) (string, error)
 	// Meta carries hints for middleware/policy: "readonly", "risk", "sandbox"...
 	Meta map[string]any
-	// Plugin is the plugin that registered the tool (set by AddTool).
-	Plugin string
+	// Module is the module that registered the tool (set by AddTool).
+	Module string
 }
 
 type ToolRequest struct {
@@ -144,7 +144,7 @@ type Provider struct {
 	Capabilities map[string]bool
 }
 
-// PolicyCheck is provided by the policy plugin as the "policy" service so
+// PolicyCheck is provided by the policy module as the "policy" service so
 // middleware that makes an extra model call (for example a fallback) can
 // apply the admin model allowlist before choosing another model.
 type PolicyCheck struct {
@@ -170,7 +170,7 @@ type Decision struct {
 	By          string         // who decided (audit)
 }
 
-// ---- Run state, shared by the facade and the loop plugin ----
+// ---- Run state, shared by the facade and the loop module ----
 
 type Event struct {
 	Type     string // text | reasoning | tool_call | tool_result | step_start | step_end | interrupt | finish | error
@@ -232,8 +232,8 @@ type Loop struct {
 // ---- Persistence services ----
 
 var (
-	ErrVersionConflict = errors.New("eipagent: thread version conflict")
-	ErrNotFound        = errors.New("eipagent: not found")
+	ErrVersionConflict = errors.New("kiln: thread version conflict")
+	ErrNotFound        = errors.New("kiln: not found")
 )
 
 type ThreadState struct {
@@ -279,7 +279,7 @@ type Skill struct {
 
 // Secrets resolves secret references, provided as "secrets". It is the
 // secret provider interface: env, Vault, KMS or a custom store each
-// provide one. caller is the requesting plugin: plugins that look the
+// provide one. caller is the requesting module: modules that look the
 // service up get a copy bound to their own identity, so the caller they
 // pass is ignored, every resolved value is redacted from audit / trace
 // output, and each access is recorded as a "secret.access" audit event.
@@ -335,7 +335,7 @@ type Approver struct {
 }
 
 // Audit records security-relevant events, provided as "audit". The core
-// engine also reports plugin lifecycle (load, fail, unload) to it.
+// engine also reports module lifecycle (load, fail, unload) to it.
 type Audit struct {
 	Record func(kind string, data map[string]any)
 }
@@ -347,7 +347,7 @@ type AuditSink struct {
 	Send func(line []byte)
 }
 
-// AgentService lets plugins start runs (jobs, webhooks, teams), provided
+// AgentService lets modules start runs (jobs, webhooks, teams), provided
 // as "agent" by the facade. Thread runs are checkpointed like any other.
 type AgentService struct {
 	Run func(ctx context.Context, thread, user, prompt string) (*RunResult, error)

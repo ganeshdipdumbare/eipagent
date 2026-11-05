@@ -29,7 +29,7 @@ printf '%s\n' "$notes" | sed -e '/./,$!d' > release-notes.md
 
 V=$v DATE=$(date -u +%F) perl -0pi -e 's/^## Unreleased\n/## Unreleased\n\n## $ENV{V} — $ENV{DATE}\n/m' CHANGELOG.md
 V=${v#v} perl -pi -e 's/^const Version = ".*"/const Version = "$ENV{V}"/' sdk/secrets.go
-V=$v perl -pi -e 's{(eipagent(?:/cmd/eip)?\@)v\d+\.\d+\.\d+}{$1$ENV{V}}g' README.md docs/site.html
+V=$v perl -pi -e 's{(kiln(?:/cmd/kiln)?\@)v\d+\.\d+\.\d+}{$1$ENV{V}}g' README.md docs/site.html
 V=$v perl -pi -e 's{<b>v\d+\.\d+\.\d+</b>}{<b>$ENV{V}</b>}g' docs/site.html
 
 echo "prepared $v"

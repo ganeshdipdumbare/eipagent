@@ -1,6 +1,6 @@
-package eipagent
+package kiln
 
-import "github.com/ganeshdipdumbare/eipagent/sdk"
+import "github.com/ganeshdipdumbare/kiln/sdk"
 
 // JSON shapes exchanged between a host and an agent inside a sandbox.
 

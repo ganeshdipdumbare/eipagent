@@ -1,11 +1,11 @@
-package eipagent
+package kiln
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
 
-	"github.com/ganeshdipdumbare/eipagent/sdk"
+	"github.com/ganeshdipdumbare/kiln/sdk"
 )
 
 // Tool defines a tool from a typed Go function. The argument schema is
@@ -15,7 +15,7 @@ import (
 //	type WeatherIn struct {
 //		City string `json:"city" desc:"city name"`
 //	}
-//	weather := eipagent.Tool("weather", "Get the weather", func(ctx context.Context, in WeatherIn) (string, error) {
+//	weather := kiln.Tool("weather", "Get the weather", func(ctx context.Context, in WeatherIn) (string, error) {
 //		return "sunny in " + in.City, nil
 //	})
 func Tool[In, Out any](name, description string, fn func(ctx context.Context, in In) (Out, error)) sdk.Tool {

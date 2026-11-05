@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://eipagent-docs.vercel.app/sitemap.xml
+Sitemap: https://kiln-docs.vercel.app/sitemap.xml

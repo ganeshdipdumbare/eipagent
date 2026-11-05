@@ -10,7 +10,7 @@
 //	sudo examples/firecracker/setup.sh
 //	go run ./examples/firecracker
 //
-// The example keeps the real token on the host. A plugin in the microVM gets
+// The example keeps the real token on the host. A module in the microVM gets
 // a placeholder, the host swaps it only for GET /orders, the echoed token is
 // redacted, and the host records every request as sandbox.egress.
 package main
@@ -29,54 +29,10 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/ganeshdipdumbare/eipagent"
-	"github.com/ganeshdipdumbare/eipagent/engine"
-	"github.com/ganeshdipdumbare/eipagent/sdk"
+	"github.com/ganeshdipdumbare/kiln"
+	"github.com/ganeshdipdumbare/kiln/examples/firecracker/callapi"
+	"github.com/ganeshdipdumbare/kiln/sdk"
 )
-
-const callAPI = `//go:build ignore
-
-package plugin
-
-import (
-	"context"
-	"io"
-	"net/http"
-
-	"eipagent/sdk"
-)
-
-var Permissions = []string{"net"}
-
-func Apply(p *sdk.Plugin) error {
-	p.AddTool(sdk.Tool{
-		Name:        "call_api",
-		Description: "Call the Acme API with the Acme token",
-		Schema:      sdk.Object(map[string]any{"url": sdk.Str("URL to call"), "method": sdk.Str("HTTP method (default GET)")}, "url"),
-		Run: func(c context.Context, args map[string]any) (string, error) {
-			token, err := p.Secret("secret://ACME_API_TOKEN")
-			if err != nil {
-				return "", err
-			}
-			out := "token in the sandbox: " + token + "\n"
-			method := sdk.ArgString(args, "method")
-			if method == "" {
-				method = "GET"
-			}
-			req, _ := http.NewRequestWithContext(c, method, sdk.ArgString(args, "url"), nil)
-			req.Header.Set("Authorization", "Bearer "+token)
-			resp, err := http.DefaultClient.Do(req)
-			if err != nil {
-				return out + "request failed: " + err.Error(), nil
-			}
-			defer resp.Body.Close()
-			b, _ := io.ReadAll(resp.Body)
-			return out + "API replied: " + string(b), nil
-		},
-	})
-	return nil
-}
-`
 
 func main() {
 	remote := os.Getenv("FC_HOST") != ""
@@ -89,11 +45,11 @@ func main() {
 				log.Fatal("firecracker is not installed: run sudo examples/firecracker/setup.sh")
 			}
 		}
-		if _, err := os.Stat(envOr("FC_KERNEL", ".eipagent/firecracker/vmlinux")); err != nil {
+		if _, err := os.Stat(envOr("FC_KERNEL", ".kiln/firecracker/vmlinux")); err != nil {
 			log.Fatal("kernel not found: run sudo examples/firecracker/setup.sh")
 		}
 	}
-	tmp, err := os.MkdirTemp("", "eip-firecracker-example-*")
+	tmp, err := os.MkdirTemp("", "kiln-firecracker-example-*")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -118,17 +74,12 @@ func main() {
 	// as the Firecracker VM (aarch64 in Lima on Apple Silicon). Set
 	// FC_GUEST_ARCH when the Firecracker host has a different arch.
 	guestArch := envOr("FC_GUEST_ARCH", runtime.GOARCH)
-	bin := filepath.Join(tmp, "eip")
-	build := exec.Command("go", "build", "-o", bin, "./cmd/eip")
+	bin := filepath.Join(tmp, "kiln")
+	build := exec.Command("go", "build", "-o", bin, "./examples/firecracker/guest")
 	build.Env = append(os.Environ(), "GOOS=linux", "GOARCH="+guestArch, "CGO_ENABLED=0")
 	if out, err := build.CombinedOutput(); err != nil {
-		log.Fatalf("build eip for linux/%s (run from the repo root): %v\n%s", guestArch, err, out)
+		log.Fatalf("build kiln for linux/%s (run from the repo root): %v\n%s", guestArch, err, out)
 	}
-	dir := filepath.Join(tmp, "plugins")
-	os.MkdirAll(dir, 0o755)
-	os.WriteFile(filepath.Join(dir, "call_api.go"), []byte(callAPI), 0o644)
-	lock := filepath.Join(tmp, "eip.lock")
-	os.WriteFile(lock, []byte(`{"plugins": {"call_api": "`+engine.Hash([]byte(callAPI))+`"}}`), 0o644)
 
 	step := func(tool string, args map[string]any) map[string]any {
 		return map[string]any{"tool": tool, "args": args}
@@ -139,19 +90,19 @@ func main() {
 		fmt.Printf("Firecracker host: %s (VMM and microVM live there)\n", os.Getenv("FC_HOST"))
 	}
 	fmt.Println("Booting a self-hosted Firecracker microVM and starting the agent in it...")
-	a, err := eipagent.New(
-		eipagent.WithModel("mock:demo"),
-		eipagent.WithPlugin("model_mock", map[string]any{"script": []any{
+	a, err := kiln.New(
+		kiln.WithModel("mock:demo"),
+		kiln.WithModuleConfig("model_mock", map[string]any{"script": []any{
 			step("bash", map[string]any{"command": "echo \"machine: $(uname -m) $(uname -sr)\"; echo \"workspace: $(pwd)\"; echo 'environment:'; env | sort | sed 's/^/  /'"}),
 			step("call_api", map[string]any{"url": api.URL + "/orders"}),
 			step("call_api", map[string]any{"url": api.URL + "/orders", "method": "DELETE"}),
 			step("call_api", map[string]any{"url": other + "/steal"}),
 			map[string]any{"text": "done"},
 		}}),
-		eipagent.WithPlugins("tool_shell"),
-		eipagent.WithCompiledPlugin(firecracker()),
-		eipagent.WithPluginDir(dir), eipagent.WithLockFile(lock), eipagent.WithPlugins("call_api"),
-		eipagent.WithLogger(func(scope, msg string) {
+		kiln.WithModules("tool_shell"),
+		kiln.WithModule(firecracker()),
+		kiln.WithModule(callapi.CallAPI),
+		kiln.WithLogger(func(scope, msg string) {
 			switch {
 			case strings.HasPrefix(msg, "sandbox egress"):
 				mu.Lock()
@@ -163,7 +114,7 @@ func main() {
 				mu.Unlock()
 			}
 		}),
-		eipagent.WithRunIn(eipagent.RunIn{
+		kiln.WithRunIn(kiln.RunIn{
 			Provider: "firecracker",
 			Binary:   bin,
 			Spec:     sdk.SandboxSpec{CPUs: 1, MemoryMB: 512, Network: sdk.NetworkPolicy{Mode: "none"}},
@@ -182,7 +133,7 @@ func main() {
 	}
 	titles := []string{
 		"1. Inside the Firecracker microVM: no secret env vars",
-		"2. A plugin in the microVM calls the API (GET /orders is allowed for the token)",
+		"2. A module in the microVM calls the API (GET /orders is allowed for the token)",
 		"3. The same token on a DELETE (only GET is allowed)",
 		"4. The same token sent to a host that isn't listed",
 	}

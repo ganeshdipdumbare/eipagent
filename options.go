@@ -1,35 +1,32 @@
-package eipagent
+package kiln
 
 import (
 	"context"
 
-	"github.com/ganeshdipdumbare/eipagent/engine"
-	"github.com/ganeshdipdumbare/eipagent/pluginpkg"
-	"github.com/ganeshdipdumbare/eipagent/sdk"
+	"github.com/ganeshdipdumbare/kiln/engine"
+	"github.com/ganeshdipdumbare/kiln/sdk"
 )
 
+// config is what New is given. Nothing in it is interpreted at run time:
+// every module named here must be in the registry (std or WithModule).
 type config struct {
 	model, instructions string
 	maxSteps            int
-	preset              string
 	profiles            []string
 	policyPath          string
 	policyObj           *engine.Policy
-	lockPath            string
-	dirs                []string
-	specs               []engine.PluginSpec
-	compiled            []engine.Plugin
+	specs               []engine.ModuleSpec
+	modules             []engine.Module // application modules, compiled in
 	tools               []sdk.Tool
-	hotReload           *bool
 	logger              func(scope, msg string)
 	user                string
 	roles               []string
 	noDefaults          bool
-	noProviderAuto      bool
 	runIn               *RunIn
-	bridgedSecrets      *engine.Plugin // in a RunIn box: replaces every secrets_* plugin
-	store               *pluginpkg.Store
 	saveEachStep        bool
+	// prepare runs before composition: directories that file-backed modules
+	// need (modules themselves cannot create host directories).
+	prepare []func() error
 }
 
 // Option configures New.
@@ -53,35 +50,38 @@ func WithMaxSteps(n int) Option { return func(c *config) { c.maxSteps = n } }
 // WithTools registers tools defined in Go (see Tool).
 func WithTools(ts ...sdk.Tool) Option { return func(c *config) { c.tools = append(c.tools, ts...) } }
 
-// WithPlugins loads plugins by name (standard or from WithPluginDir).
-func WithPlugins(names ...string) Option {
+// WithModules runs standard modules by name (see modules/std), with no
+// configuration. Use WithModuleConfig to configure one.
+func WithModules(names ...string) Option {
 	return func(c *config) {
 		for _, n := range names {
-			c.specs = append(c.specs, engine.PluginSpec{Use: n})
+			c.specs = append(c.specs, engine.ModuleSpec{Use: n})
 		}
 	}
 }
 
-// WithPlugin loads one plugin with config.
-func WithPlugin(use string, cfg map[string]any) Option {
-	return func(c *config) { c.specs = append(c.specs, engine.PluginSpec{Use: use, Config: cfg}) }
-}
-
-// WithPluginSpec loads a full profile row (instance name, priority...).
-func WithPluginSpec(s engine.PluginSpec) Option {
-	return func(c *config) { c.specs = append(c.specs, s) }
-}
-
-// WithCompiledPlugin registers and loads a native Go plugin.
-func WithCompiledPlugin(p engine.Plugin) Option {
+// WithModule compiles an application module into the agent. Build the
+// descriptor in your own package and pass it here; it is registered for
+// this agent only.
+//
+//	WithModule(engine.Module{Name: "orders", Requires: []string{"db"}, Permissions: []string{"net"}, Apply: applyOrders})
+func WithModule(m engine.Module) Option {
 	return func(c *config) {
-		c.compiled = append(c.compiled, p)
-		c.specs = append(c.specs, engine.PluginSpec{Use: p.Name})
+		c.modules = append(c.modules, m)
+		c.specs = append(c.specs, engine.ModuleSpec{Use: m.Name})
 	}
 }
 
-// WithPluginDir adds a directory of interpreted plugins (<name>.go).
-func WithPluginDir(dir string) Option { return func(c *config) { c.dirs = append(c.dirs, dir) } }
+// WithModuleConfig runs a module (standard or compiled) with configuration.
+func WithModuleConfig(name string, cfg map[string]any) Option {
+	return func(c *config) { c.specs = append(c.specs, engine.ModuleSpec{Use: name, Config: cfg}) }
+}
+
+// WithModuleSpec adds a full row: instance name (As), priority, disabled.
+// Use As to load one module twice, e.g. two model providers.
+func WithModuleSpec(s engine.ModuleSpec) Option {
+	return func(c *config) { c.specs = append(c.specs, s) }
+}
 
 // WithProfile layers a profile JSON file (later ones win).
 func WithProfile(path string) Option {
@@ -91,20 +91,11 @@ func WithProfile(path string) Option {
 // WithPolicyFile loads the admin policy; nothing else can override it.
 func WithPolicyFile(path string) Option { return func(c *config) { c.policyPath = path } }
 
-// WithPolicy sets the admin policy directly.
+// WithPolicy sets the admin policy directly. The default is SecurePolicy:
+// every module gets exactly the capabilities it declares.
 func WithPolicy(p *engine.Policy) Option { return func(c *config) { c.policyObj = p } }
 
-// WithLockFile sets the eip.lock with plugin sha256 pins.
-func WithLockFile(path string) Option { return func(c *config) { c.lockPath = path } }
-
-// WithPreset picks "secure" (default: pinned plugins, no hot reload) or
-// "dev" (no pins, hot reload). Ignored when a policy is given.
-func WithPreset(name string) Option { return func(c *config) { c.preset = name } }
-
-// WithHotReload overrides the policy's hot-reload switch.
-func WithHotReload(on bool) Option { return func(c *config) { c.hotReload = &on } }
-
-// WithLogger receives plugin log lines.
+// WithLogger receives module log lines.
 func WithLogger(fn func(scope, msg string)) Option { return func(c *config) { c.logger = fn } }
 
 // WithUser sets the default user identity for runs (audit, policy, memory).
@@ -113,7 +104,7 @@ func WithUser(id string, roles ...string) Option {
 }
 
 // WithoutDefaults loads only what you ask for: no default loop,
-// secrets, thread storage or provider.
+// secrets, thread storage or provider row.
 func WithoutDefaults() Option { return func(c *config) { c.noDefaults = true } }
 
 // ---- Per-run options ----
@@ -175,7 +166,7 @@ func CaptureResult(dst **Result) RunOption { return func(r *runOptions) { r.resu
 // WithApprover decides human-in-the-loop interrupts synchronously (for
 // example by prompting in a CLI). Return nil to leave one pending.
 func WithApprover(fn func(ctx context.Context, in Interrupt) (*Decision, error)) Option {
-	return WithCompiledPlugin(engine.Plugin{Name: "approver_inline", Apply: func(ctx *sdk.Plugin) error {
-		return ctx.Provide("approver", &sdk.Approver{Decide: fn})
+	return WithModule(engine.Module{Name: "approver_inline", Provides: []string{"approver"}, Apply: func(m *sdk.Module) error {
+		return m.Provide("approver", &sdk.Approver{Decide: fn})
 	}})
 }

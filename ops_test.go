@@ -1,4 +1,4 @@
-package eipagent_test
+package kiln_test
 
 import (
 	"bytes"
@@ -16,12 +16,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ganeshdipdumbare/eipagent"
+	"github.com/ganeshdipdumbare/kiln"
 )
 
 func TestTraceAndViewer(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "trace.jsonl")
-	a := mockAgent(t, nil, eipagent.WithPlugins("tool_time"), eipagent.WithPlugin("trace_file", map[string]any{"path": path}))
+	a := mockAgent(t, nil, kiln.WithModules("tool_time"), kiln.WithModuleConfig("trace_file", map[string]any{"path": path}))
 	if _, err := a.Generate(bg, "what time is it"); err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +30,7 @@ func TestTraceAndViewer(t *testing.T) {
 	if c := strings.Count(string(raw), "\n"); c != 4 { // run + 2 model + 1 tool
 		t.Fatalf("expected 4 spans, got %d: %s", c, raw)
 	}
-	out, err := exec.Command("go", "run", "./cmd/eip", "trace", "view", path).CombinedOutput()
+	out, err := exec.Command("go", "run", "./cmd/kiln", "trace", "view", path).CombinedOutput()
 	if err != nil || !bytes.Contains(out, []byte("current_time")) || !bytes.Contains(out, []byte("<title>Agent trace</title>")) {
 		t.Fatalf("viewer: %v %.300s", err, out)
 	}
@@ -49,11 +49,11 @@ func waitFor(t *testing.T, cond func() bool) {
 
 func TestScheduledJob(t *testing.T) {
 	when := time.Now().Add(3 * time.Second).UTC().Format(time.RFC3339Nano)
-	a := mockAgent(t, []any{map[string]any{"text": "report sent"}}, eipagent.WithPlugin("trigger_schedule", map[string]any{
+	a := mockAgent(t, []any{map[string]any{"text": "report sent"}}, kiln.WithModuleConfig("trigger_schedule", map[string]any{
 		"tick_seconds": 1, "jobs": []any{map[string]any{"name": "report", "schedule": "once " + when, "prompt": "send the report", "user": "ops"}},
 	}))
 	waitFor(t, func() bool {
-		ids, _ := a.Engine().Root().Snapshot().Services["threads"].(*eipagent.Checkpointer).List(bg, "job-")
+		ids, _ := a.Engine().Root().Snapshot().Services["threads"].(*kiln.Checkpointer).List(bg, "job-")
 		return len(ids) == 1
 	})
 }
@@ -64,11 +64,11 @@ func TestWebhook(t *testing.T) {
 	ln.Close()
 	t.Setenv("HOOK_TOKEN", "s3cret")
 	got := make(chan string, 1)
-	tool := eipagent.Tool("noop", "n", func(ctx context.Context, in struct{}) (string, error) { return "", nil })
-	a := mockAgent(t, nil, eipagent.WithTools(tool), eipagent.WithPlugin("trigger_webhook", map[string]any{
+	tool := kiln.Tool("noop", "n", func(ctx context.Context, in struct{}) (string, error) { return "", nil })
+	a := mockAgent(t, nil, kiln.WithTools(tool), kiln.WithModuleConfig("trigger_webhook", map[string]any{
 		"addr": addr, "routes": []any{map[string]any{"path": "/gh", "secret": "secret://HOOK_TOKEN", "user": "bot", "thread": "gh-{repo.name}", "prompt": "event {action}"}},
 	}))
-	body := []byte(`{"action":"opened","repo":{"name":"eip"}}`)
+	body := []byte(`{"action":"opened","repo":{"name":"kiln"}}`)
 	ts := strconv.FormatInt(time.Now().Unix(), 10)
 	post := func(sig string) int {
 		req, _ := http.NewRequest("POST", "http://"+addr+"/gh", bytes.NewReader(body))
@@ -91,7 +91,7 @@ func TestWebhook(t *testing.T) {
 		t.Fatalf("signed: %d", code)
 	}
 	waitFor(t, func() bool {
-		msgs, _ := a.Thread("gh-eip").Messages(bg)
+		msgs, _ := a.Thread("gh-kiln").Messages(bg)
 		if len(msgs) > 0 {
 			select {
 			case got <- msgs[0].Content:
