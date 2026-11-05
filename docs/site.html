@@ -53,6 +53,7 @@
       <a href="#introduction" data-top="docs" aria-current="page">Docs</a>
       <a href="#providers" data-top="providers">Providers</a>
       <a href="#reference-options" data-top="reference">Reference</a>
+      <a href="#composition" data-top="lab">Lab</a>
     </nav>
     <span class="grow"></span>
     <button class="searchbtn" id="searchbtn" aria-label="Search docs">
@@ -71,7 +72,7 @@
 <div class="scrim" id="scrim" aria-hidden="true"></div>
 <div class="shell">
 <aside class="side" id="side" aria-label="Documentation">
-  <a class="version" href="https://github.com/ganeshdipdumbare/eipagent/blob/main/CHANGELOG.md" aria-label="Release notes">
+  <a class="version" href="https://github.com/ganeshdipdumbare/kiln/blob/main/CHANGELOG.md" aria-label="Release notes">
     <span class="logo"><svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8.5" fill="var(--fg)"/><rect x="6.00" y="6.00" width="3.36" height="3.36" rx="0.8" fill="var(--bg)"/><rect x="6.00" y="10.16" width="3.36" height="3.36" rx="0.8" fill="var(--bg)"/><rect x="6.00" y="14.32" width="3.36" height="3.36" rx="0.8" fill="var(--bg)"/><rect x="6.00" y="18.48" width="3.36" height="3.36" rx="0.8" fill="var(--bg)"/><rect x="6.00" y="22.64" width="3.36" height="3.36" rx="0.8" fill="var(--bg)"/><rect x="18.48" y="6.00" width="3.36" height="3.36" rx="0.8" fill="var(--bg)"/><rect x="14.32" y="10.16" width="3.36" height="3.36" rx="0.8" fill="var(--bg)"/><rect x="14.32" y="18.48" width="3.36" height="3.36" rx="0.8" fill="var(--bg)"/><rect x="18.48" y="22.64" width="3.36" height="3.36" rx="0.8" fill="var(--bg)"/><rect x="10.16" y="14.32" width="3.36" height="3.36" rx="0.8" fill="var(--accent)"/></svg></span>
     <span><b>v0.5.0</b><small>latest</small></span>
   </a>
@@ -136,8 +137,8 @@
   </div>
 
   <div class="section" id="composition">
-    <div class="section-head reveal"><span class="section-label">02 / Composition</span><h2 data-toc="Composition">Compose at build time.<br>Validate before execution.</h2></div>
-    <p class="section-lede reveal">Modules are compiled Go packages. <code>kiln.New</code> checks the plan before anything runs: every required service has a provider, no two modules claim one name, the graph has no cycle, and each module holds only the capabilities the policy grants.</p>
+    <div class="section-head reveal"><span class="section-label">02 / Composition lab</span><h2 data-toc="Composition lab">Compose modules.<br>Watch the plan run.</h2></div>
+    <p class="section-lede reveal">Toggle a module and the build config, the capability summary and the run trace update. <strong>Illustrative:</strong> in a real app the module set is fixed at compile time, so a change means rebuild and redeploy. The host keeps the keys; the sandbox gets placeholders.</p>
     <div class="code" data-title="go"><pre><code class="language-go">agent, err := kiln.New(
 	kiln.WithModel("openai:gpt-4.1"),                 // model_openai
 	kiln.WithModuleConfig("hook_retry", nil),          // a standard module, configured
@@ -148,6 +149,91 @@ if err != nil {
 	// (add one of: db_sql, memory_sql, threads_sql)
 	log.Fatal(err)
 }</code></pre></div>
+
+    <div class="lab reveal" data-lab>
+      <div class="lab-top">
+        <div class="lab-topline">
+          <span class="tag">Illustrative cloud run</span><span class="lab-cloud">Tensorlake sandbox</span>
+          <span class="lab-run-status" data-lab-status style="font:500 10.5px var(--f-mono);color:var(--fg-3);letter-spacing:.08em;text-transform:uppercase">Ready</span>
+          <div class="lab-presets" role="group" aria-label="Module presets">
+            <button type="button" data-preset="prototype" aria-pressed="false">Prototype</button>
+            <button type="button" data-preset="team" aria-pressed="true">Team</button>
+            <button type="button" data-preset="production" aria-pressed="false">Production</button>
+          </div>
+        </div>
+        <div class="lab-livebar" data-lab-livebar>
+          <span class="live-dot" aria-hidden="true"></span>
+          <span data-lab-live>Ready · toggle a module</span>
+          <span class="live-progress" aria-hidden="true"><i data-lab-progress></i></span>
+          <div class="lab-controls">
+            <div class="lab-mode" role="group" aria-label="Playback mode">
+              <button type="button" data-lab-mode="auto" aria-pressed="true">Auto</button>
+              <button type="button" data-lab-mode="step" aria-pressed="false">Step</button>
+            </div>
+            <button class="lab-btn mini" type="button" data-lab-run>Run</button>
+            <button class="lab-btn mini" type="button" data-lab-step hidden>Next</button>
+            <button class="lab-btn mini" type="button" data-lab-reset>Reset</button>
+          </div>
+        </div>
+      </div>
+      <div class="lab-mobile-tabs" role="tablist" aria-label="Lab view">
+        <button type="button" role="tab" data-lab-view="modules" aria-selected="false">Modules</button>
+        <button type="button" role="tab" data-lab-view="run" aria-selected="true">Run</button>
+      </div>
+      <div class="lab-grid">
+        <div class="lab-panel" data-lab-view-panel="modules">
+          <div class="lab-panel-head"><h4>Compose</h4><span class="count" data-lab-count>0 selected</span></div>
+          <div class="lab-modules" data-lab-modules></div>
+        </div>
+        <div class="lab-panel lab-run" data-lab-view-panel="run">
+          <div class="lab-run-body">
+            <div class="lab-map" data-lab-map aria-label="Where the agent and modules run">
+              <div class="map-node host" data-plane-node="host">
+                <span class="map-kicker">Host</span>
+                <b>Your process</b>
+                <small>model · secrets</small>
+              </div>
+              <div class="map-link" data-plane-node="boundary">
+                <span class="map-line"></span><span class="map-pulse" aria-hidden="true"></span>
+                <small>TLS</small>
+              </div>
+              <div class="map-node cloud" data-plane-node="cloud">
+                <span class="map-kicker">Cloud</span>
+                <b>Tensorlake</b>
+                <div class="map-node sandbox" data-plane-node="sandbox">
+                  <span class="map-kicker">Sandbox</span>
+                  <b>agent · tools</b>
+                </div>
+              </div>
+            </div>
+            <div class="lab-run-main">
+              <div class="lab-scenario"><div class="who"><i></i> Scenario / cloud sandbox run</div><p class="prompt">“Run the tests, read the log, open a PR.”</p></div>
+              <div class="lab-trace" data-lab-trace aria-live="polite"></div>
+              <div class="lab-side" data-lab-view-panel="config">
+                <div class="lab-tabs" role="tablist" aria-label="Lab details">
+                  <button type="button" role="tab" aria-selected="true" data-lab-tab="config">Config</button>
+                  <button type="button" role="tab" aria-selected="false" data-lab-tab="diff">Diff</button>
+                </div>
+                <div class="lab-side-body">
+                  <div class="lab-pane" data-lab-pane="config">
+                    <div class="lab-summary" data-lab-summary></div>
+                    <div class="lab-config" data-lab-config></div>
+                  </div>
+                  <div class="lab-pane" data-lab-pane="diff" hidden>
+                    <div class="lab-diff" data-lab-diff></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="lab-foot">
+        <button class="lab-btn" type="button" data-lab-copy>Copy config</button>
+        <a class="lab-btn" href="#modules">Module reference</a>
+        <span class="note-mini">Simulated cloud run; a real build fixes the module set. <a href="https://github.com/ganeshdipdumbare/kiln/blob/main/examples/tensorlake/main.go">See the real Tensorlake example</a>.</span>
+      </div>
+    </div>
   </div>
 
   <div class="cta-band">
@@ -167,7 +253,7 @@ gh auth setup-git        # or use an SSH key for github.com</code></pre></div>
   <p>The CLI installs the same way:</p>
   <div class="code" data-title="terminal"><pre><code class="language-bash">go install github.com/ganeshdipdumbare/kiln/cmd/kiln@v0.5.0</code></pre></div>
   <h2>Versions</h2>
-  <p>Releases are git tags that follow semantic versioning. While the major version is 0, patch releases (<code>v0.4.x</code>) only fix bugs and security issues, and minor releases (<code>v0.x.0</code>) may break the API. Each break is listed with what to change in <a href="https://github.com/ganeshdipdumbare/eipagent/blob/main/CHANGELOG.md">CHANGELOG.md</a>. Modules import the SDK from <code>github.com/ganeshdipdumbare/kiln/sdk</code>.</p>
+  <p>Releases are git tags that follow semantic versioning. While the major version is 0, patch releases (<code>v0.4.x</code>) only fix bugs and security issues, and minor releases (<code>v0.x.0</code>) may break the API. Each break is listed with what to change in <a href="https://github.com/ganeshdipdumbare/kiln/blob/main/CHANGELOG.md">CHANGELOG.md</a>. Modules import the SDK from <code>github.com/ganeshdipdumbare/kiln/sdk</code>.</p>
   <p>Check that everything works from a checkout. The test suite runs offline, using a mock model that needs no API key.</p>
   <div class="code" data-title="terminal"><pre><code class="language-bash">git clone https://github.com/ganeshdipdumbare/kiln
 cd kiln && go test ./...</code></pre></div>
@@ -290,7 +376,7 @@ func main() {
       <tr><td><b>Workspace</b> and <b>sandbox</b></td><td>Where shell and file tools act: the host folder (<code>workspace_local</code>) or a container or microVM per thread (<code>workspace_sandbox</code> with a <code>sandbox_*</code> module). <a href="#kind-sandboxes">Sandboxes</a></td></tr>
     </tbody>
   </table></div>
-  <div class="note"><b>From v0.4</b><div><p>v0.5 removed the runtime system. Old short names (<code>llm_*</code>, <code>mw_*</code>, <code>checkpoint_*</code>, <code>store_*</code>, <code>exec_*</code>, <code>jobs</code>, <code>audit_jsonl</code>) are gone, not aliased. The <a href="https://github.com/ganeshdipdumbare/eipagent/blob/main/CHANGELOG.md">CHANGELOG</a> lists every old-to-new rename.</p></div></div>
+  <div class="note"><b>From v0.4</b><div><p>v0.5 removed the runtime system. Old short names (<code>llm_*</code>, <code>mw_*</code>, <code>checkpoint_*</code>, <code>store_*</code>, <code>exec_*</code>, <code>jobs</code>, <code>audit_jsonl</code>) are gone, not aliased. The <a href="https://github.com/ganeshdipdumbare/kiln/blob/main/CHANGELOG.md">CHANGELOG</a> lists every old-to-new rename.</p></div></div>
 </section>
 
 <section id="ollama" class="page">
@@ -349,7 +435,7 @@ go run ./examples/ollama                 # every demo</code></pre></div>
     <tbody>
       <tr><td>Composition fails</td><td>The error names the module and the reason. Run <code>kiln module check</code> for capability and descriptor mistakes; for a missing service, add the module it suggests or provide the service yourself.</td></tr>
       <tr><td>A module needs a service that is missing</td><td>Load the provider of that service first, for example <code>db_sql</code> before <code>threads_sql</code>, or <code>sandbox_docker</code> before <code>workspace_sandbox</code>.</td></tr>
-      <tr><td>Old names stop working after an upgrade</td><td>v0.5 renamed them without aliases. Use the table in the <a href="https://github.com/ganeshdipdumbare/eipagent/blob/main/CHANGELOG.md">CHANGELOG</a>.</td></tr>
+      <tr><td>Old names stop working after an upgrade</td><td>v0.5 renamed them without aliases. Use the table in the <a href="https://github.com/ganeshdipdumbare/kiln/blob/main/CHANGELOG.md">CHANGELOG</a>.</td></tr>
     </tbody>
   </table></div>
 
@@ -690,7 +776,7 @@ if len(ap.Approvals) != 1 {
    audit: secret.access  billing -&gt; STRIPE_API_KEY (granted)
    audit: tool.call      charge result="charged $42.00 (debug: used key [REDACTED])"
    any key in the logs or audit log? false</code></pre></div>
-  <p>A <code>billing</code> module is granted <code>STRIPE_API_KEY</code> in <code>secrets_vault</code>. An <code>analytics</code> module looks up the service and asks as <code>billing</code>, and is refused, because the core supplies the caller. The key is rotated in Vault mid-run and the next call picks it up. Its tool leaks the key on purpose. The model and the app see it, but the logs and audit log only ever contain <code>[REDACTED]</code>. <a href="https://github.com/ganeshdipdumbare/eipagent/blob/main/examples/secrets/main.go">Source</a></p>
+  <p>A <code>billing</code> module is granted <code>STRIPE_API_KEY</code> in <code>secrets_vault</code>. An <code>analytics</code> module looks up the service and asks as <code>billing</code>, and is refused, because the core supplies the caller. The key is rotated in Vault mid-run and the next call picks it up. Its tool leaks the key on purpose. The model and the app see it, but the logs and audit log only ever contain <code>[REDACTED]</code>. <a href="https://github.com/ganeshdipdumbare/kiln/blob/main/examples/secrets/main.go">Source</a></p>
 
   <h2>Secrets stay outside a microVM</h2>
   <div class="code" data-title="terminal"><pre><code class="language-bash">go run ./examples/microsandbox   # needs msb (microsandbox) on an arm64 Mac or Linux with KVM</code></pre></div>
@@ -765,7 +851,7 @@ The host's record of every request from the microVM (sandbox.egress):
   allowed GET 127.0.0.1/orders -&gt; 200 secrets=[ACME_API_TOKEN]
   denied DELETE 127.0.0.1/orders secrets=[ACME_API_TOKEN] (... may not be sent to DELETE 127.0.0.1/orders ...)
   denied GET localhost/steal secrets=[ACME_API_TOKEN] (... may not be sent to GET localhost/steal ...)</code></pre></div>
-  <p>The provider creates a tap device, boots an Ubuntu rootfs with the Firecracker API, and connects to the guest over SSH. It is a self-hosted version of the hosted-service path: the agent, modules and tools run in the microVM, while the model provider and every secret stay on the host. With <code>FC_HOST</code> the host process runs on macOS and Firecracker runs in Lima, so the host-to-sandbox link crosses a real machine boundary. The same placeholder, host-swap, redaction and <code>sandbox.egress</code> rules apply, and <code>Close</code> destroys the VM and its rootfs copy. <a href="https://github.com/ganeshdipdumbare/eipagent/blob/main/examples/firecracker/main.go">Source</a></p>
+  <p>The provider creates a tap device, boots an Ubuntu rootfs with the Firecracker API, and connects to the guest over SSH. It is a self-hosted version of the hosted-service path: the agent, modules and tools run in the microVM, while the model provider and every secret stay on the host. With <code>FC_HOST</code> the host process runs on macOS and Firecracker runs in Lima, so the host-to-sandbox link crosses a real machine boundary. The same placeholder, host-swap, redaction and <code>sandbox.egress</code> rules apply, and <code>Close</code> destroys the VM and its rootfs copy. <a href="https://github.com/ganeshdipdumbare/kiln/blob/main/examples/firecracker/main.go">Source</a></p>
 
   <h2>Run the agent in a real Tensorlake cloud sandbox</h2>
   <div class="code" data-title="terminal"><pre><code class="language-bash">TENSORLAKE_API_KEY=... go run ./examples/tensorlake</code></pre></div>
@@ -794,7 +880,7 @@ The host's record of every request from the sandbox (sandbox.egress):
   allowed GET 127.0.0.1/orders -&gt; 200 secrets=[ACME_API_TOKEN]
   denied DELETE 127.0.0.1/orders secrets=[ACME_API_TOKEN] (...)
   denied GET localhost/steal secrets=[ACME_API_TOKEN] (...)</code></pre></div>
-  <p>The host process runs on your machine; Tensorlake runs the cloud sandbox. kiln creates an ephemeral sandbox, uploads <code>kiln</code> and the modules, starts <code>kiln serve --stdio</code> through Tensorlake's process API, and deletes the sandbox when the run finishes. The host holds the model provider, secrets and broker; the sandbox only sees <code>eipsec_...</code> placeholders. <a href="https://github.com/ganeshdipdumbare/eipagent/blob/main/examples/tensorlake/main.go">Source</a></p>
+  <p>The host process runs on your machine; Tensorlake runs the cloud sandbox. kiln creates an ephemeral sandbox, uploads <code>kiln</code> and the modules, starts <code>kiln serve --stdio</code> through Tensorlake's process API, and deletes the sandbox when the run finishes. The host holds the model provider, secrets and broker; the sandbox only sees <code>eipsec_...</code> placeholders. <a href="https://github.com/ganeshdipdumbare/kiln/blob/main/examples/tensorlake/main.go">Source</a></p>
 
   <h2>Audit to a SIEM, traces to OpenTelemetry</h2>
   <div class="code" data-title="terminal"><pre><code class="language-bash">go run ./examples/observability</code></pre></div>
@@ -809,7 +895,7 @@ Collector received 4 spans:
     └─ chat demo  trace=f9a69cfa…
     └─ execute_tool weather  trace=f9a69cfa…
     └─ chat demo  trace=f9a69cfa…</code></pre></div>
-  <p><code>audit_file</code> keeps no local file (<code>"path": "-"</code>) and hands every record to <code>audit_http</code>. The fake SIEM checks each batch's HMAC signature and that every record links to the one before. <code>trace_otlp</code> sends one trace per run. The run id is the same in both, so the two systems can be joined. <a href="https://github.com/ganeshdipdumbare/eipagent/blob/main/examples/observability/main.go">Source</a></p>
+  <p><code>audit_file</code> keeps no local file (<code>"path": "-"</code>) and hands every record to <code>audit_http</code>. The fake SIEM checks each batch's HMAC signature and that every record links to the one before. <code>trace_otlp</code> sends one trace per run. The run id is the same in both, so the two systems can be joined. <a href="https://github.com/ganeshdipdumbare/kiln/blob/main/examples/observability/main.go">Source</a></p>
 
   <h2>What the build-time check catches</h2>
   <div class="code" data-title="terminal"><pre><code class="language-bash">$ kiln module check modules</code></pre></div>
@@ -1208,7 +1294,7 @@ var Module = engine.Module{
       <tr><td><code>policy</code>, <code>loop</code></td><td>company rules; the agent loop itself</td><td><a href="#kind-policy">Policy and the loop</a></td></tr>
     </tbody>
   </table></div>
-  <div class="note"><b>From v0.4</b><div><p>v0.5 removed the runtime module system. Interpreted modules, the module store, signed packages, lock files and hot reload are gone; old short names are not aliased. The full old-to-new table is in the <a href="https://github.com/ganeshdipdumbare/eipagent/blob/main/CHANGELOG.md">CHANGELOG</a>, and <a href="https://github.com/ganeshdipdumbare/eipagent/blob/main/MODULES.md">MODULES.md</a> is the short guide.</p></div></div>
+  <div class="note"><b>From v0.4</b><div><p>v0.5 removed the runtime module system. Interpreted modules, the module store, signed packages, lock files and hot reload are gone; old short names are not aliased. The full old-to-new table is in the <a href="https://github.com/ganeshdipdumbare/kiln/blob/main/CHANGELOG.md">CHANGELOG</a>, and <a href="https://github.com/ganeshdipdumbare/kiln/blob/main/MODULES.md">MODULES.md</a> is the short guide.</p></div></div>
 </section>
 
 <section id="modules-choose" class="page" data-nav="What to use when">
@@ -2422,7 +2508,7 @@ func Apply(p *sdk.Module) error {
   <p>To see it end to end in a microVM, run <code>go run ./examples/microsandbox</code> (<a href="#production-examples">output</a>): the agent runs in a <code>sandbox_microsandbox</code> VM with no network, the VM holds only a placeholder, and the API on the host receives the real token.</p>
   <div class="note warn"><b>What it doesn't cover</b><div><p>Placeholders are swapped only in HTTP sent through Go's default transport. A module that needs the raw value in its own process (a database DSN, env for a stdio MCP server), or dials with its own transport like <code>tool_fetch</code>, can't use a secret inside the box: load it on the host with <code>RunIn.HostModules</code>. The host takes the box's word for which of its modules is asking, so grants between modules in the same box are only as strong as the box; a placeholder is still useless outside its <code>SecretHosts</code>. On the host without a sandbox, the agent already has the host's access, so none of this applies.</p></div></div>
   <h3>Run it on a self-hosted microVM</h3>
-  <p><a href="https://firecracker-microvm.github.io/">Firecracker</a> is the microVM monitor behind AWS Lambda. <a href="https://github.com/ganeshdipdumbare/eipagent/blob/main/examples/firecracker"><code>examples/firecracker</code></a> is a complete <code>sdk.SandboxProvider</code> that creates a tap device, boots a local microVM through the Firecracker API, connects to it over SSH, and runs the agent inside it. It is the same provider shape a hosted service would use, but self-hosted and free:</p>
+  <p><a href="https://firecracker-microvm.github.io/">Firecracker</a> is the microVM monitor behind AWS Lambda. <a href="https://github.com/ganeshdipdumbare/kiln/blob/main/examples/firecracker"><code>examples/firecracker</code></a> is a complete <code>sdk.SandboxProvider</code> that creates a tap device, boots a local microVM through the Firecracker API, connects to it over SSH, and runs the agent inside it. It is the same provider shape a hosted service would use, but self-hosted and free:</p>
   <div class="code" data-title="go"><pre><code class="language-go">agent, _ := kiln.New(
 	kiln.WithModule(firecracker()), // examples/firecracker/provider.go
 	kiln.WithModules("tool_shell"),
@@ -3377,8 +3463,8 @@ go run ./cmd/kiln audit verify .kiln/audit.jsonl</code></pre></div>
         <p>The Go SDK for AI agents where everything is a module. Built for teams that need to ship safely.</p>
       </div>
       <div><h6>Docs</h6><a href="#quickstart">Quickstart</a><a href="#concepts">Concepts</a><a href="#lifecycles">Lifecycles</a><a href="#reference-options">Reference</a></div>
-      <div><h6>Project</h6><a href="https://github.com/ganeshdipdumbare/kiln">GitHub</a><a href="https://github.com/ganeshdipdumbare/eipagent/releases">Releases</a><a href="https://github.com/ganeshdipdumbare/eipagent/blob/main/CHANGELOG.md">Changelog</a><a href="https://github.com/ganeshdipdumbare/eipagent/blob/main/SECURITY.md">Security</a></div>
-      <div><h6>Help</h6><a href="#troubleshooting">Troubleshooting</a><a href="#production-checklist">Production checklist</a><a href="https://github.com/ganeshdipdumbare/eipagent/issues">Report an issue</a><a href="https://github.com/ganeshdipdumbare/eipagent/edit/main/docs/site.html">Edit this page</a></div>
+      <div><h6>Project</h6><a href="https://github.com/ganeshdipdumbare/kiln">GitHub</a><a href="https://github.com/ganeshdipdumbare/kiln/releases">Releases</a><a href="https://github.com/ganeshdipdumbare/kiln/blob/main/CHANGELOG.md">Changelog</a><a href="https://github.com/ganeshdipdumbare/kiln/blob/main/SECURITY.md">Security</a></div>
+      <div><h6>Help</h6><a href="#troubleshooting">Troubleshooting</a><a href="#production-checklist">Production checklist</a><a href="https://github.com/ganeshdipdumbare/kiln/issues">Report an issue</a><a href="https://github.com/ganeshdipdumbare/kiln/edit/main/docs/site.html">Edit this page</a></div>
     </div>
     <div class="bottom"><span>© 2026 kiln · docs</span><span>Built with Go · <a href="#introduction">Back to top</a></span></div>
   </footer>
@@ -3390,7 +3476,7 @@ go run ./cmd/kiln audit verify .kiln/audit.jsonl</code></pre></div>
   <div id="toc"></div>
   <div class="extra">
     <button type="button" id="totop"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m8 13 4-4 4 4"/></svg>Scroll to top</button>
-    <a href="https://github.com/ganeshdipdumbare/eipagent/issues"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>Give feedback</a>
+    <a href="https://github.com/ganeshdipdumbare/kiln/issues"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>Give feedback</a>
   </div>
   <div class="promo">
     <b>Try it in one minute</b>
