@@ -4,6 +4,13 @@ All notable changes to kiln. Versions follow [semantic versioning](https://semve
 
 ## Unreleased
 
+### Added
+
+- The composition lab is back on the docs site (`#composition`): toggle modules and see the build config, the capability summary/diff and a simulated run. It notes that a real build fixes the module set, so this is illustrative rather than runtime toggling.
+
+### Changed
+
+- The project repository is now `github.com/ganeshdipdumbare/kiln`; docs and repository links were updated. The docs site still deploys to `eipagent-docs.vercel.app`, because `kiln-docs.vercel.app` belongs to another project.
 
 ## v0.5.0 — 2026-11-05
 
