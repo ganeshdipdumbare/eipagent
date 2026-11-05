@@ -4,7 +4,7 @@
     { title: "Getting Started", pages: ["installation", "quickstart", "concepts", "ollama", "troubleshooting"] },
     { title: "Foundations", pages: ["providers", "generating-text", "streaming", "tools", "structured-output", "threads", "human-in-the-loop"] },
     { title: "Agents", pages: ["agent-loop", "multi-agent", "evals", "lifecycles"] },
-    { title: "Modules", pages: ["modules", "modules-choose", "kind-tools", "kind-hooks", "kind-models", "kind-threads-memory", "kind-sandboxes", "kind-triggers", "kind-telemetry", "kind-secrets", "kind-policy", "module-permissions", "module-permissions", "module-api"] },
+    { title: "Modules", pages: ["modules", "custom-modules", "modules-choose", "kind-tools", "kind-hooks", "kind-models", "kind-threads-memory", "kind-sandboxes", "kind-triggers", "kind-telemetry", "kind-secrets", "kind-policy", "module-permissions", "module-api"] },
     { title: "Security", pages: ["security", "production-checklist"] },
     { title: "Reference", pages: ["reference-options", "reference-run", "reference-result", "cli"] }
   ];
@@ -437,7 +437,7 @@
     }
     add("host", "run", "run.start", "host process · builds the RunIn spec", "ok");
     add("cloud", "cloud", "sandbox.create", "tensorlake/ubuntu-minimal · x86_64 Linux · network none", "ok");
-    add("sandbox", "agent", "agent.start", "kiln serve --stdio · no secret env vars", "ok");
+    add("sandbox", "agent", "agent.start", "box program · ServeBox · no secret env vars", "ok");
     if (sel.tool_shell) add("sandbox", "tool", "tool.call bash", "go test ./... · 12,480 chars of output", "ok", "tool_shell");
     if (sel.tool_fs) add("sandbox", "tool", "tool.call read_file", "logs/test.log · 41 lines", "ok", "tool_fs");
     add("host", "secret", "host.model", "model key stays on the host · sandbox holds none", "ok");

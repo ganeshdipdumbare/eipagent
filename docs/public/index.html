@@ -27,11 +27,11 @@
 <link rel="icon" href="assets/img/favicon.ico" sizes="any">
 <link rel="apple-touch-icon" href="assets/img/apple-touch-icon.png">
 <link rel="manifest" href="site.webmanifest">
-<link rel="stylesheet" href="assets/fonts/fonts.css?v=3530183657">
+<link rel="stylesheet" href="assets/fonts/fonts.css?v=3981130387">
 <link rel="preload" href="assets/fonts/geist-400-normal-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="assets/fonts/geist-500-normal-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="assets/fonts/instrument-serif-400-italic-latin.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="assets/site.css?v=3530183657">
+<link rel="stylesheet" href="assets/site.css?v=3981130387">
 <script type="application/ld+json">
 {"@context":"https://schema.org","@type":"WebSite","name":"kiln Docs","url":"https://kilnai-docs.vercel.app/","description":"The statically composed, capability-secured agent SDK for Go.","publisher":{"@type":"Organization","name":"kiln"}}
 </script>
@@ -361,8 +361,8 @@ func main() {
       <tr><td><b>Step</b></td><td>One model call inside a run, plus the tool calls it asked for. A run takes up to <code>MaxSteps</code> steps. <a href="#agent-loop">The agent loop</a></td></tr>
       <tr><td><b>Thread</b></td><td>A conversation saved across runs under an ID (<code>agent.Thread(id)</code>), including runs paused for approval. Stored by the <code>threads</code> service. <a href="#threads">Threads</a></td></tr>
       <tr><td><b>Model string</b></td><td><code>provider:model</code>, for example <code>anthropic:claude-sonnet-5-5</code>. The part before the colon picks the provider module, which loads by itself. <a href="#providers">Providers</a></td></tr>
-      <tr><td><b>Module</b></td><td>A unit of behaviour: a Go file with <code>func Apply(p *sdk.Module) error</code>, either interpreted from source or compiled in. The loop, providers, tools, memory, sandboxes and policy are all modules. <a href="#modules">Modules</a></td></tr>
-      <tr><td><b><code>*sdk.Module</code></b></td><td>The handle every <code>Apply</code> receives, compiled or interpreted. Through it a module adds tools and hooks, provides and uses services, reads its config and secrets. (<code>kiln.ModuleAPI</code>, <code>kiln.ModuleContext</code> and <code>sdk.Context</code> are older names for the same type.) <a href="#module-api">Module API</a></td></tr>
+      <tr><td><b>Module</b></td><td>A unit of behaviour: a compiled Go package that exports a descriptor and <code>func Apply(p *sdk.Module) error</code>. The loop, providers, tools, memory, sandboxes and policy are all modules. <a href="#modules">Modules</a></td></tr>
+      <tr><td><b><code>*sdk.Module</code></b></td><td>The handle every <code>Apply</code> receives. Through it a module adds tools and hooks, provides and uses services, reads its config and secrets. <a href="#module-api">Module API</a></td></tr>
       <tr><td><b>Service</b></td><td>A named value one module provides (<code>p.Provide</code>) and others use (<code>p.Service</code>): <code>loop</code>, <code>model/&lt;name&gt;</code>, <code>threads</code>, <code>memory</code>, <code>secrets</code>, <code>workspace</code> … A module lists the services it needs in its descriptor's <code>Requires</code>; that is how modules depend on each other without knowing each other.</td></tr>
       <tr><td><b>Hook</b></td><td>Code a module runs at a fixed point of every run: before a step, around a model call, after a model reply, around a tool call, at start and end. Retries, approvals, redaction and limits are hooks. <a href="#kind-hooks">Hooks</a></td></tr>
       <tr><td><b>Tool</b></td><td>A function the model can call: a name, a JSON Schema for its arguments and a <code>Run</code> func. Pass your own with <code>WithTools</code>, or load tool modules. <a href="#tools">Tools</a></td></tr>
@@ -385,7 +385,7 @@ func main() {
   <div class="code" data-title="terminal"><pre><code class="language-bash">ollama pull lfm3
 go run ./examples/ollama -demo text      # one prompt, one answer
 go run ./examples/ollama -demo stream    # tokens as they arrive
-go run ./examples/ollama -demo modules   # add, update and remove modules while it runs
+go run ./examples/ollama -demo modules   # add tools with modules compiled into the program
 go run ./examples/ollama                 # every demo</code></pre></div>
   <p>Use any model with <code>-model qwen3.5:4b</code>. Set <code>OLLAMA_HOST</code> to use Ollama on another machine. Demos that use tools work best with a tool-capable model of 4B parameters or more.</p>
 </section>
@@ -717,15 +717,8 @@ for (;;) {
 }</code></pre></div>
   <p>Approve an email and open the Activity tab: you'll see <code>Secret MAIL_RELAY_TOKEN · granted to mailer</code>, and the <code>send_email</code> row names <code>mailer</code> as the module that ran it. Every row carries the run id, so you can group a run's model calls, tool calls and secret reads. The token's value is never written. If it ever showed up in a tool result, a model reply or an error, the audit log, traces and logs would show <code>[REDACTED]</code> instead.</p>
 
-  <h3>Add, update and remove modules while it runs</h3>
-  <p>The <b>Modules</b> tab adds code to the running agent through the same lifecycle a platform team would use. The public demo offers a sample <code>shipping_estimate</code> module and two updates to it; the second update is broken on purpose. Each submission gets the next version number. Locally, <code>go run ./examples/fullstack -allow-module-code</code> lets you write your own (without permissions: the code runs in the server). The replay on this site records the first two steps, so you can add the module, approve it and ask its question without a backend.</p>
-  <ol class="timeline" aria-label="Module flow"><li class=""><span class="n">01</span><span class="h">submit</span><span class="d">Sam submits v0.1.0. The server lints it without running it, says what it does (“adds 1 tool (shipping_estimate)”), signs it with its own key and installs it as VALIDATED. Nothing runs yet.</span></li><li class=""><span class="n">02</span><span class="h">approve</span><span class="d">Ada approves it. <code>Enable</code> loads it into the running agent, and the chat suggests a new question: “What's the shipping estimate to Berlin?” The model calls the new tool, also for questions that don't name it, like “How long does shipping to Paris take?”</span></li><li class=""><span class="n">03</span><span class="h">update</span><span class="d">v0.1.1 adds express shipping. Approving it swaps it in; the next run uses it, and v0.1.0 becomes the rollback target.</span></li><li class="loop"><span class="n">04</span><span class="h">broken update</span><span class="d">v0.1.2 fails to start. It's marked FAILED, and v0.1.1 keeps answering: a bad version never replaces a running one.</span></li><li class="end"><span class="n">05</span><span class="h">roll back, remove</span><span class="d">One click goes back to the previous version, or removes the module and every version. Every step is in the audit trail.</span></li></ol>
-  <div class="code" data-title="go"><pre><code class="language-go">// The store the agent was built with (kiln.WithModuleStore(pstore)).
-v, report, err := pstore.InstallSource(name, code, signingKey, user) // lint, sign, hold as VALIDATED
-// later, a supervisor:
-pstore.Approve(name, v.Version, "ada")
-pstore.Enable(name, v.Version) // live in this agent; a failure keeps the old version
-pstore.Rollback(name)          // or Uninstall(name)</code></pre></div>
+  <h3>Add a module</h3>
+  <p>Modules are compiled in. To add one, write a Go package that exports <code>engine.Module</code>, import it, pass it with <code>kiln.WithModule</code>, and rebuild the server. The app's own <code>RefundPolicy</code> and <code>Mailer</code> are examples of this. See <a href="#custom-modules">Custom modules</a>.</p>
 
   <h3>What the SDK handles for you</h3>
   <div class="table"><table>
@@ -736,7 +729,7 @@ pstore.Rollback(name)          // or Uninstall(name)</code></pre></div>
     <tr><td>Approve, edit or reject a call</td><td>Rewrite messages by hand so the model understands</td><td><code>Approve</code>, <code>Edit</code>, <code>Reject</code> decisions; the loop feeds the outcome back to the model</td></tr>
     <tr><td>Know who approved what</td><td>Ad-hoc logging</td><td><code>Decision.By</code> plus <code>audit_file</code>, hash-chained and verifiable</td></tr>
     <tr><td>Keep card numbers away from the model</td><td>Scrub every prompt path</td><td><code>hook_pii</code> masks them before every model call</td></tr>
-    <tr><td>Add or change behaviour without a redeploy</td><td>Ship a new build</td><td><code>Store.InstallSource</code>, approval, <code>Enable</code>; a failed update keeps the running version, and rollback is one call</td></tr>
+    <tr><td>Add or change behaviour</td><td>Ship a rebuild and redeploy</td><td>Write a Go module, pass it to <code>WithModule</code>, then rebuild; <a href="#custom-modules">Custom modules</a></td></tr>
     <tr><td>Give one component an API key, and only that one</td><td>Environment variables every package can read</td><td>Per-module grants in <code>secrets_env</code> or <code>secrets_vault</code>; every read audited; values redacted from logs, traces and audit</td></tr>
     <tr><td>Stream tokens and tool activity to a UI</td><td>Provider-specific streaming code</td><td>One <code>Events()</code> iterator, the same for every provider</td></tr>
     <tr><td>Two supervisors clicking at once</td><td>Locks around your storage</td><td>Versioned saves return <code>ErrThreadBusy</code> to the second writer</td></tr>
@@ -880,7 +873,7 @@ The host's record of every request from the sandbox (sandbox.egress):
   allowed GET 127.0.0.1/orders -&gt; 200 secrets=[ACME_API_TOKEN]
   denied DELETE 127.0.0.1/orders secrets=[ACME_API_TOKEN] (...)
   denied GET localhost/steal secrets=[ACME_API_TOKEN] (...)</code></pre></div>
-  <p>The host process runs on your machine; Tensorlake runs the cloud sandbox. kiln creates an ephemeral sandbox, uploads <code>kiln</code> and the modules, starts <code>kiln serve --stdio</code> through Tensorlake's process API, and deletes the sandbox when the run finishes. The host holds the model provider, secrets and broker; the sandbox only sees <code>eipsec_...</code> placeholders. <a href="https://github.com/ganeshdipdumbare/kiln/blob/main/examples/tensorlake/main.go">Source</a></p>
+  <p>The host process runs on your machine; Tensorlake runs the cloud sandbox. kiln creates an ephemeral sandbox, uploads your program with its modules compiled in, starts it with <code>KILN_BOX=1</code> (the program calls <code>kiln.ServeBox</code>) through Tensorlake's process API, and deletes the sandbox when the run finishes. The host holds the model provider, secrets and broker; the sandbox only sees <code>eipsec_...</code> placeholders. <a href="https://github.com/ganeshdipdumbare/kiln/blob/main/examples/tensorlake/main.go">Source</a></p>
 
   <h2>Audit to a SIEM, traces to OpenTelemetry</h2>
   <div class="code" data-title="terminal"><pre><code class="language-bash">go run ./examples/observability</code></pre></div>
@@ -1268,7 +1261,7 @@ var Module = engine.Module{
     <li><b><code>Provides</code></b> lists the services <code>Apply</code> will register. <code>Provide</code> of anything else is refused.</li>
     <li><b><code>Permissions</code></b> lists the capabilities it uses: <span class="perm">net</span><span class="perm">exec</span><span class="perm">fs:read</span><span class="perm">fs:write</span><span class="perm">env</span><span class="perm">env:secrets</span><span class="perm">db</span>. See <a href="#module-permissions">Capabilities</a>.</li>
     <li><b><code>Secrets</code></b> lists the only secret names it may resolve.</li>
-    <li><b>Register it</b> with <code>kiln.WithModule(m)</code>.</li>
+    <li><b>Register it</b> with <code>kiln.WithModule(m)</code>. See <a href="#custom-modules">Custom modules</a> for packages in other Go modules and for wrapping an existing library.</li>
   </ul>
   <p>Composition happens in four steps, and <code>New</code> never returns a half-built agent:</p>
   <div class="states" aria-label="Composition steps">
@@ -1295,6 +1288,132 @@ var Module = engine.Module{
     </tbody>
   </table></div>
   <div class="note"><b>From v0.4</b><div><p>v0.5 removed the runtime module system. Interpreted modules, the module store, signed packages, lock files and hot reload are gone; old short names are not aliased. The full old-to-new table is in the <a href="https://github.com/ganeshdipdumbare/kiln/blob/main/CHANGELOG.md">CHANGELOG</a>, and <a href="https://github.com/ganeshdipdumbare/kiln/blob/main/MODULES.md">MODULES.md</a> is the short guide.</p></div></div>
+</section>
+
+<section id="custom-modules" class="page" data-nav="Custom modules">
+  <h1>Custom modules</h1>
+  <p class="lede">A custom module is an ordinary Go package that exports one descriptor. Import it like any Go library, pass it to <code>kiln.WithModule</code>, and it is compiled into your program and validated with everything else.</p>
+
+  <h2>Write the package</h2>
+  <p>The package exports <code>var Module = engine.Module{...}</code>. <code>Name</code> must be unique, and match the package directory when you run <code>kiln module check</code>.</p>
+  <div class="code" data-title="weather/weather.go"><pre><code class="language-go">package weather
+
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	"github.com/ganeshdipdumbare/kiln/engine"
+	"github.com/ganeshdipdumbare/kiln/sdk"
+)
+
+var Module = engine.Module{
+	Name: "weather",
+	Apply: func(p *sdk.Module) error {
+		unit := p.ConfigString("unit", "celsius")
+		p.AddTool(sdk.Tool{
+			Name:        "weather",
+			Description: "Current weather for a city.",
+			Schema:      sdk.Object(map[string]any{"city": sdk.Str("city name")}, "city"),
+			Run: func(c context.Context, args map[string]any) (string, error) {
+				city := strings.TrimSpace(sdk.ArgString(args, "city"))
+				if city == "" {
+					return "", fmt.Errorf("city is required")
+				}
+				return "18 degrees " + unit + " in " + city, nil
+			},
+		})
+		return nil
+	},
+}</code></pre></div>
+
+  <h2>Import and register it</h2>
+  <p>Import the package and pass the descriptor. <code>WithModuleConfig</code> configures the row it registered; there is no separate loading step.</p>
+  <div class="code" data-title="main.go"><pre><code class="language-go">import (
+	"github.com/ganeshdipdumbare/kiln"
+	"github.com/acme/agent/weather"
+)
+
+agent, err := kiln.New(
+	kiln.WithModel("openai:gpt-4.1"),
+	kiln.WithModule(weather.Module),
+	kiln.WithModuleConfig("weather", map[string]any{"unit": "fahrenheit"}),
+)</code></pre></div>
+
+  <p>The package can live in another Go module. Fetch it like any library; no registry or lock file is involved:</p>
+  <div class="code" data-title="terminal"><pre><code class="language-bash">go get github.com/acme/kiln-weather@v1.2.0
+# or work locally:
+# go mod edit -replace github.com/acme/kiln-weather=../kiln-weather</code></pre></div>
+
+  <h2>WithModule, WithModuleConfig, WithModules</h2>
+  <div class="table"><table>
+    <thead><tr><th>Call</th><th>Use it to</th></tr></thead>
+    <tbody>
+      <tr><td><code>WithModule(m)</code></td><td>register and enable a compiled module descriptor</td></tr>
+      <tr><td><code>WithModuleConfig(name, cfg)</code></td><td>configure the enabled row; it replaces the row <code>WithModule</code> added</td></tr>
+      <tr><td><code>WithModuleSpec(spec)</code></td><td>full row: <code>Use</code>, <code>As</code> (instance name), <code>Config</code>, <code>Priority</code>, <code>Disabled</code></td></tr>
+      <tr><td><code>WithModules(names...)</code></td><td>enable modules already in the compiled registry; it does not import anything</td></tr>
+    </tbody>
+  </table></div>
+  <p>Use <code>WithModuleSpec</code> to add another instance of the same module with different config:</p>
+  <div class="code" data-title="go"><pre><code class="language-go">kiln.WithModule(weather.Module),
+kiln.WithModuleSpec(kiln.ModuleSpec{Use: "weather", As: "weather_us", Config: map[string]any{"unit": "fahrenheit"}}),</code></pre></div>
+
+  <h2>Wrapping an existing Go library</h2>
+  <p><code>engine.Module</code> is a struct, not an interface, so a library cannot satisfy it directly. Write one small adapter that exposes the parts you want the model to use:</p>
+  <div class="code" data-title="rates/rates.go"><pre><code class="language-go">package rates
+
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	"github.com/ganeshdipdumbare/kiln/engine"
+	"github.com/ganeshdipdumbare/kiln/sdk"
+	"github.com/acme/fxlib"
+)
+
+var Module = engine.Module{Name: "rates", Apply: func(p *sdk.Module) error {
+	client := fxlib.NewClient()
+	p.AddTool(sdk.Tool{
+		Name:        "fx_rate",
+		Description: "Convert an amount between two currencies.",
+		Schema: sdk.Object(map[string]any{
+			"from":   sdk.Str("source currency"),
+			"to":     sdk.Str("target currency"),
+			"amount": sdk.Int("amount"),
+		}, "from", "to", "amount"),
+		Run: func(c context.Context, args map[string]any) (string, error) {
+			out, err := client.Convert(c, strings.ToUpper(sdk.ArgString(args, "from")),
+				strings.ToUpper(sdk.ArgString(args, "to")), sdk.ArgInt(args, "amount", 0))
+			if err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("%.2f", out), nil
+		},
+	})
+	return nil
+}}</code></pre></div>
+  <p>If the library needs the network, files or a database, route it through <code>p.HTTP</code>, <code>p.Dir</code>, <code>p.Exec</code> or <code>p.DB</code> and declare the matching permissions. See <a href="#module-permissions">Capabilities</a>.</p>
+
+  <h2>Publish and share</h2>
+  <p>A module ships as a Go module. Tag it, let consumers <code>go get</code> it, and the usual <code>go.sum</code> and <code>go version -m</code> supply-chain checks apply. There is no module store, signed package, lock file or hot reload.</p>
+
+  <h2>What is not supported</h2>
+  <ul>
+    <li><b>Runtime loading.</b> There is no <code>WithModuleDir</code>, module store, <code>Load</code>, <code>Reload</code>, <code>Unload</code> or <code>.so</code> loading.</li>
+    <li><b>Importing by string.</b> <code>WithModules("github.com/acme/weather")</code> is not a thing; import the package in Go and pass its descriptor.</li>
+    <li><b>Hot reload.</b> Change the module, rebuild, redeploy. A box started by <code>WithRunIn</code> gets its modules compiled into the uploaded program.</li>
+  </ul>
+
+  <h2>Check it</h2>
+  <p>Run the same analyzer CI uses from the directory that contains your module packages (not from the package directory itself). It rejects stdlib access that bypasses the broker, undeclared capabilities and services, and a descriptor whose name does not match its directory:</p>
+  <div class="code" data-title="terminal"><pre><code class="language-bash"># from the parent of weather/
+kiln module check .
+kiln module manifest .
+# this repo's example:
+kiln module check ./examples/custom-module</code></pre></div>
+  <div class="note"><b>Example</b><div><p><a href="https://github.com/ganeshdipdumbare/kiln/blob/main/examples/custom-module">examples/custom-module</a> is a runnable module package with a test.</p></div></div>
 </section>
 
 <section id="modules-choose" class="page" data-nav="What to use when">
@@ -1338,6 +1457,7 @@ var Module = engine.Module{
       <tr><td>see traces in Grafana, Honeycomb, Datadog …</td><td><code>WithTracing(endpoint)</code></td><td><code>trace_otlp</code></td><td><a href="#kind-telemetry">Telemetry and audit</a></td></tr>
       <tr><td>keep API keys out of config and code</td><td></td><td><code>secrets_env</code>, <code>secrets_vault</code></td><td><a href="#kind-secrets">Secrets</a></td></tr>
       <tr><td>enforce company rules (read-only mode, allowed models, budgets)</td><td><code>WithPolicyFile(…)</code></td><td><code>policy</code></td><td><a href="#kind-policy">Policy</a></td></tr>
+      <tr><td>write my own module</td><td><code>WithModule(m)</code></td><td>(your Go package)</td><td><a href="#custom-modules">Custom modules</a></td></tr>
     </tbody>
   </table></div>
 </section>
@@ -1349,7 +1469,7 @@ var Module = engine.Module{
   <ul>
     <li><b>Use a tool</b> when the <i>model</i> should decide whether and when something happens: look up an order, search, run a query, send an email.</li>
     <li><b>Use a <a href="#kind-hooks">hook</a> instead</b> when it must happen on every call regardless of what the model wants: logging, approval, redaction, limits.</li>
-    <li><b>In your own app</b>, <code>kiln.Tool(name, description, func)</code> is the shortest path: typed input, schema derived for you (<a href="#tools">Tools</a>). Write a tool <i>module</i> when the tool should be shared, configured from a profile, loaded at runtime or shipped as a package.</li>
+    <li><b>In your own app</b>, <code>kiln.Tool(name, description, func)</code> is the shortest path: typed input, schema derived for you (<a href="#tools">Tools</a>). Write a tool <i>module</i> when the tool should be shared, configured from a profile or shipped as a package; see <a href="#custom-modules">Custom modules</a>.</li>
   </ul>
   <h2>Built-in tool modules</h2>
   <!-- gen:builtins tools -->
@@ -1519,9 +1639,7 @@ func Apply(p *sdk.Module) error {
 			map[string]any{"tool": "weather", "args": map[string]any{"name": "Oslo"}},
 			map[string]any{"text": "done"},
 		}}),
-		kiln.WithPreset("dev"),
-		kiln.WithModuleDir("."),
-		kiln.WithModules("weather"),
+		kiln.WithModule(Module),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -2178,7 +2296,7 @@ func Apply(p *sdk.Module) error {
   <h2>Gotchas</h2>
   <ul>
     <li><b>Only one provider per service.</b> <code>threads_file</code> replaces the in-memory default; loading two thread stores is an error.</li>
-    <li><b>Database modules need the <code>db</code> permission</b> and a driver imported by the host program; interpreted code can't import drivers itself.</li>
+    <li><b>Database modules need the <code>db</code> permission</b> and a driver imported by the host program; a module cannot import a database driver itself, so use <code>db_sql</code>.</li>
   </ul>
 </section>
 
@@ -2229,7 +2347,7 @@ func Apply(p *sdk.Module) error {
 
       <rect class="box" x="22" y="92" width="190" height="66" rx="9"/>
       <text class="t" x="36" y="116">Agent</text>
-      <text class="m" x="36" y="134">kiln serve --stdio</text>
+      <text class="m" x="36" y="134">box program · ServeBox</text>
       <text class="s" x="36" y="150">loop · modules · tools</text>
 
       <rect class="box" x="22" y="178" width="190" height="66" rx="9"/>
@@ -2305,12 +2423,12 @@ func Apply(p *sdk.Module) error {
   <ul>
     <li><b>Env is checked.</b> <code>RunIn.Spec</code> and every sandbox a module creates or runs a command in are refused if an env value holds a resolved secret, or a credential-looking name (<code>*_TOKEN</code>, <code>*_API_KEY</code>, <code>*PASSWORD*</code> …) has a value that isn't a placeholder.</li>
     <li><b>No way out to the host.</b> Mounts of <code>/</code> or a docker, podman or containerd socket are refused, so a box can't start containers outside these rules.</li>
-    <li><b>Fails closed.</b> <code>kiln serve --stdio</code> refuses to start if its environment holds a credential.</li>
+    <li><b>Fails closed.</b> <code>ServeBox</code> refuses to start if its environment holds a credential.</li>
     <li><b>Nested sandboxes</b> created inside the box get placeholders too; only the host turns them back into values.</li>
     <li><b>A box that exits is replaced.</b> The run waiting on it fails with an error that says so, and the next run starts a new sandbox. Threads kept in the old box go with it, so put them in a store outside the box (<code>threads_sql</code>) if they must survive.</li>
   </ul>
   <h3>How the host knows it's talking to its own box</h3>
-  <p>There is no network channel to fake. The host starts the sandbox through its sandbox module, uploads <code>kiln</code>, and runs <code>kiln serve --stdio</code> in it. Every request from the box (model calls, secret lookups, HTTP, host tools) arrives on that process's stdout, and every answer goes back on its stdin. The host opens no port and listens on nothing, so no other process, and no fake sandbox, can reach the bridge: only the process the host itself started can send to it.</p>
+  <p>There is no network channel to fake. The host starts the sandbox through its sandbox module, uploads your program with its compiled modules, and runs it with <code>KILN_BOX=1</code>; the program calls <code>ServeBox</code>. Every request from the box (model calls, secret lookups, HTTP, host tools) arrives on that process's stdout, and every answer goes back on its stdin. The host opens no port and listens on nothing, so no other process, and no fake sandbox, can reach the bridge: only the process the host itself started can send to it.</p>
   <p>That settles <em>who</em> is asking, not whether to believe it. The code in the box may be compromised (a bad module, a prompt-injected tool), so the host treats every request as untrusted and decides on its own side:</p>
   <div class="table"><table>
     <thead><tr><th>Request from the box</th><th>What the host does</th></tr></thead>
@@ -2322,11 +2440,11 @@ func Apply(p *sdk.Module) error {
     </tbody>
   </table></div>
   <h3>Sequence: host and sandbox</h3>
-  <p>The host knows the sandbox through its provider (the Firecracker API and the guest IP, or the hosted service's endpoint). The sandbox does not know the host: the host connects out, starts <code>kiln serve --stdio</code>, and all <code>host.*</code> calls ride that stream.</p>
+  <p>The host knows the sandbox through its provider (the Firecracker API and the guest IP, or the hosted service's endpoint). The sandbox does not know the host: the host connects out, starts the box program (<code>ServeBox</code>), and all <code>host.*</code> calls ride that stream.</p>
   <figure class="diagram">
     <div class="dg-scroll"><svg class="dg" viewBox="0 0 900 780" role="img" aria-labelledby="seq-t seq-d">
       <title id="seq-t">Host and Firecracker sandbox sequence</title>
-      <desc id="seq-d">The host process on macOS creates a Firecracker VM on a separate Linux host, connects out over SSH, uploads kiln and starts kiln serve --stdio in the guest. Model, secret and HTTP requests travel back to the host on that stream; the sandbox never dials the host.</desc>
+      <desc id="seq-d">The host process on macOS creates a Firecracker VM on a separate Linux host, connects out over SSH, uploads the program and starts it with KILN_BOX=1 in the guest. Model, secret and HTTP requests travel back to the host on that stream; the sandbox never dials the host.</desc>
       <defs>
         <marker id="sq-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="mk" d="M0 0 10 5 0 10z"/></marker>
         <marker id="sq-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="mk-acc" d="M0 0 10 5 0 10z"/></marker>
@@ -2359,7 +2477,7 @@ func Apply(p *sdk.Module) error {
       <path class="ln" d="M375 140H615" marker-end="url(#sq-a)"/>
 
       <text class="n" x="8" y="176">2</text>
-      <text class="m" x="370" y="172" text-anchor="middle">connect out: upload kiln, start kiln serve --stdio</text>
+      <text class="m" x="370" y="172" text-anchor="middle">connect out: upload program, start ServeBox</text>
       <path class="ln l-acc" d="M125 180H615" marker-end="url(#sq-acc)"/>
 
       <text class="n" x="8" y="216">3</text>
@@ -2416,7 +2534,7 @@ func Apply(p *sdk.Module) error {
       <text class="m" x="240" y="732" text-anchor="middle">kill VM, remove tap + rootfs copy</text>
       <path class="ln l-bad" d="M125 740H355" marker-end="url(#sq-bad)"/>
     </svg></div>
-    <figcaption>The host process runs on your machine or server; the Firecracker host is a separate Linux machine. The host creates the VM, connects out over SSH, and holds the <code>kiln serve --stdio</code> stream. Every <code>host.*</code> call rides that stream; the guest never dials the host. Real values stay on the host, the guest sees only placeholders, and the host records <span class="key c-wait">placeholder</span> / <span class="key c-ok">real value</span> flows as <code>sandbox.egress</code>.</figcaption>
+    <figcaption>The host process runs on your machine or server; the Firecracker host is a separate Linux machine. The host creates the VM, connects out over SSH, and holds the <code>ServeBox</code> stdio stream. Every <code>host.*</code> call rides that stream; the guest never dials the host. Real values stay on the host, the guest sees only placeholders, and the host records <span class="key c-wait">placeholder</span> / <span class="key c-ok">real value</span> flows as <code>sandbox.egress</code>.</figcaption>
   </figure>
   <p>The connection is host to sandbox, not sandbox to host. The guest is never given a host address and the host opens no inbound port. With a hosted provider, only the provider module changes; the <code>host.secret</code> and <code>host.http</code> flow is the same.</p>
   <h3>A sandbox run by a third party</h3>
@@ -2446,7 +2564,7 @@ func Apply(p *sdk.Module) error {
 
       <text class="n" x="12" y="100">0</text>
       <text class="m" x="235" y="76" text-anchor="middle">connect out: TLS, host's own key</text>
-      <text class="m" x="235" y="90" text-anchor="middle">start kiln serve --stdio, open stdio</text>
+      <text class="m" x="235" y="90" text-anchor="middle">start ServeBox, open stdio</text>
       <path class="ln l-acc" d="M360 100H114" marker-end="url(#dg2-acc)"/>
       <text class="s" x="235" y="118" text-anchor="middle">nothing connects in to the host</text>
       <g transform="translate(0 58)">
@@ -2934,7 +3052,7 @@ func Apply(p *sdk.Module) error {
   <ul>
     <li><b>Event text is untrusted.</b> Fence it off as data in the prompt, and run triggered work as a user with only the tools it needs.</li>
     <li><b>Authenticate and bound it:</b> verify signatures, refuse replays, cap concurrent runs. A trigger turns outside traffic into model spend.</li>
-    <li><b>Stop cleanly:</b> the function <code>Effect</code> returns runs on unload and reload. Shut the listener down there.</li>
+    <li><b>Stop cleanly:</b> the function <code>Effect</code> returns runs on unload (<code>Close</code>). Shut the listener down there.</li>
   </ul>
 </section>
 
@@ -2980,7 +3098,7 @@ kiln.WithModuleConfig("trace_otlp", map[string]any{"endpoint": "http://otel-coll
       <tr><td><code>writer</code></td><td>Who wrote the record: <code>core</code>, <code>audit_file</code>, or <code>module:&lt;name&gt;</code> for anything a module submits through the <code>audit</code> service. Set by the SDK, so a module can't pass its records off as the core's.</td></tr>
     </tbody>
   </table></div>
-  <p>Event types: <code>model.call</code>, <code>tool.call</code>, <code>secret.access</code>, <code>module.active</code> / <code>failed</code> / <code>refused</code> / <code>disposed</code>, and the store events <code>module.install</code>, <code>approve</code>, <code>enable</code>, <code>enable_failed</code>, <code>rollback</code>, <code>quarantine</code>, <code>uninstall</code>.</p>
+  <p>Event types: <code>model.call</code>, <code>tool.call</code>, <code>secret.access</code>, <code>module.active</code> / <code>failed</code> / <code>refused</code> / <code>disposed</code>.</p>
   <h2>Built-in modules</h2>
   <!-- gen:builtins telemetry -->
 <div class="builtins">
@@ -3165,7 +3283,7 @@ Config:
   <h2>Gotchas</h2>
   <ul>
     <li><b>One secrets provider at a time.</b> To combine stores, write one provider that looks in both.</li>
-    <li><b>An interpreted provider that reads the environment needs <code>env:secrets</code></b>; plain <code>env</code> hides credential-looking variables.</li>
+    <li><b>A secrets provider that reads the environment needs <code>env:secrets</code></b>; plain <code>env</code> hides credential-looking variables.</li>
   </ul>
 </section>
 
@@ -3173,8 +3291,6 @@ Config:
   <h1>Policy and the loop</h1>
   <p>A policy file sets company-wide rules. Load it with <code>kiln.WithPolicyFile("policy.json")</code>.</p>
   <div class="code" data-title="policy.json"><pre><code class="language-json">{
-  "require_pins": true,
-  "hot_reload": false,
   "deny": ["sandbox_local"],
   "locked": ["policy", "audit_file", "secrets_env"],
   "require": [
@@ -3269,7 +3385,7 @@ rules:
       <tr><td><code>Grants()</code>, <code>SetPriority(n)</code>, <code>Logf(format, …)</code></td><td>inspect held capabilities; order your hooks; log through the agent's logger (redacted)</td></tr>
     </tbody>
   </table></div>
-  <p>The descriptor is <code>engine.Module{Name, Requires, Provides, Permissions, Secrets string; Apply func(*sdk.Module) error}</code>.</p>
+  <p>The descriptor is <code>engine.Module{Name, Requires, Provides, Permissions, Secrets string; Apply func(*sdk.Module) error}</code>. To write, register and ship one, see <a href="#custom-modules">Custom modules</a>.</p>
   <p><b>Why structs of functions, not interfaces?</b> Services are structs whose fields are functions (<code>sdk.Provider{Generate: …}</code>, <code>sdk.Store{Put: …}</code>), so a module can provide one without a type declaration and the same shape works for every service.</p>
 </section>
 
@@ -3285,7 +3401,7 @@ rules:
     <li><b>People in control.</b> Approvals, reviewer models, limits and token budgets.</li>
     <li><b>Evidence.</b> A tamper-evident audit log, shipped off the machine with <code>audit_http</code>, plus OpenTelemetry traces.</li>
   </ul>
-  <div class="note warn"><b>Limit</b><div><p>Permission scoping inside the interpreter is defense in depth, not a hard boundary. For untrusted module code, run the agent in a container or microVM with <code>WithRunIn</code>.</p></div></div>
+  <div class="note warn"><b>Limit</b><div><p>Permission scoping inside a module is defense in depth, not a hard boundary. For untrusted module code, run the agent in a container or microVM with <code>WithRunIn</code>.</p></div></div>
 </section>
 
 
@@ -3319,7 +3435,6 @@ rules:
 	kiln.WithModel("anthropic:claude-sonnet-5-5"),
 	kiln.WithInstructions("You are Acme support. Be concise and never invent policy."),
 	kiln.WithPolicyFile("policy.json"),
-	kiln.WithLockFile("kiln.lock"),
 
 	// Shared state: any replica can serve any thread or approval.
 	kiln.WithPersistence("postgres", "secret://DATABASE_URL"),
@@ -3372,13 +3487,9 @@ defer agent.Close()</code></pre></div>
       <tr><td><code>WithModules(names...)</code></td><td>Load modules by name</td></tr>
       <tr><td><code>WithModuleConfig(name, cfg)</code></td><td>Load one module with config</td></tr>
       <tr><td><code>WithModuleSpec(spec)</code></td><td>Full row: <code>Use</code>, <code>As</code>, <code>Config</code>, <code>Priority</code></td></tr>
-      <tr><td><code>WithModule(p)</code></td><td>Register and load a Go module</td></tr>
-      <tr><td><code>WithModuleDir(dir)</code></td><td>Directory of module files</td></tr>
+      <tr><td><code>WithModule(p)</code></td><td>Register a compiled Go module (<a href="#custom-modules">Custom modules</a>)</td></tr>
       <tr><td><code>WithProfile(path)</code></td><td>Layer a profile file</td></tr>
       <tr><td><code>WithPolicyFile(path)</code>, <code>WithPolicy(p)</code></td><td>Admin policy</td></tr>
-      <tr><td><code>WithLockFile(path)</code></td><td>Module pins (<code>kiln.lock</code>)</td></tr>
-      <tr><td><code>WithPreset(name)</code></td><td><code>secure</code> (default) or <code>dev</code></td></tr>
-      <tr><td><code>WithHotReload(on)</code></td><td>Reload module files on save</td></tr>
       <tr><td><code>WithUser(id, roles...)</code></td><td>Default identity for runs</td></tr>
       <tr><td><code>WithApprover(fn)</code></td><td>Decide approvals synchronously</td></tr>
       <tr><td><code>WithRunIn(RunIn{...})</code></td><td>Run the agent inside a sandbox; secrets stay on the host (<a href="#runin-secrets">placeholders</a>)</td></tr>
@@ -3493,8 +3604,8 @@ go run ./cmd/kiln audit verify .kiln/audit.jsonl</code></pre></div>
   </div>
 </div>
 
-<script src="assets/vendor/highlight/highlight.min.js?v=3530183657"></script>
-<script src="assets/vendor/highlight/go.min.js?v=3530183657"></script>
-<script src="assets/site.js?v=3530183657"></script>
+<script src="assets/vendor/highlight/highlight.min.js?v=3981130387"></script>
+<script src="assets/vendor/highlight/go.min.js?v=3981130387"></script>
+<script src="assets/site.js?v=3981130387"></script>
 </body>
 </html>
