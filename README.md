@@ -112,6 +112,7 @@ The model string is just `ollama:<model>` (for example `ollama:qwen3.5:4b`). Set
 | [`examples/tensorlake`](examples/tensorlake/main.go) | the agent inside a real [Tensorlake](https://docs.tensorlake.ai/sandboxes/introduction) cloud sandbox (needs `TENSORLAKE_API_KEY`): the host keeps the model provider, secrets and broker, the provider runs the VM, and the same placeholder, host-swap, redaction and `sandbox.egress` flow is shown on a real hosted service |
 | [`examples/observability`](examples/observability/main.go) | `audit_http` to an in-process SIEM that checks HMAC signatures and the hash chain; `trace_otlp` to an in-process OpenTelemetry collector, printing the span tree and the shared fields (`run`, `thread`, `user`, `module`, `provider`) |
 | [`examples/boxprobe`](examples/boxprobe/main.go) | application modules compiled into a box program (`internal/boxtest`), the way `WithRunIn` runs them |
+| [`examples/custom-module`](examples/custom-module/main.go) | a module in its own Go package: import it, register it with `WithModule`, configure it with `WithModuleConfig`, and check it with `kiln module check` |
 
 ### Generate with a typed tool
 
@@ -293,6 +294,10 @@ agent, err := kiln.New(
 	kiln.WithModule(console),
 )
 ```
+
+A module is an ordinary Go package, so it can live in another directory, another package or another Go module. Import it and pass the descriptor; `go get` and `replace` work as usual. `WithModule` registers and enables it, `WithModuleConfig` configures it, and `WithModuleSpec` sets its instance name (`As`) or priority. `WithModules(names...)` only enables modules already compiled into the registry; it does not import anything.
+
+If you already have a Go library, write a thin `engine.Module` adapter whose `Apply` exposes its functions as tools or services; the library itself does not need to change. See [MODULES.md](MODULES.md) and the [Custom modules](https://kilnai-docs.vercel.app/#custom-modules) docs page.
 
 A missing requirement names the registry modules that would supply it, so the fix is one line:
 
@@ -589,7 +594,7 @@ agent, _ := kiln.New(
 )
 ```
 
-**A module is one Go package.** It exports a descriptor and an `Apply` function. `Provides` and `Permissions` are enforced: `Provide` of a name that is not declared fails, and a broker call without the capability fails.
+**A module is one Go package.** It exports a descriptor and an `Apply` function, and it can live in your app or in another Go module. `Provides` and `Permissions` are enforced: `Provide` of a name that is not declared fails, and a broker call without the capability fails.
 
 | You want… | Call |
 |---|---|

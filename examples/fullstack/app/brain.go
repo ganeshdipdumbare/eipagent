@@ -74,13 +74,12 @@ func say(format string, a ...any) sdk.Message {
 	return sdk.Message{Role: sdk.RoleAssistant, Content: fmt.Sprintf(format, a...)}
 }
 
-// demoTools are the app's own tools; any other tool came from a module
-// added at runtime (the Modules tab).
+// demoTools are the app's own tools; any other tool belongs to another module.
 var demoTools = map[string]bool{"lookup_order": true, "search_help_center": true, "issue_refund": true, "send_email": true}
 
 var cityRe = regexp.MustCompile(`\b(?:to|in|for)\s+([A-Z][a-zA-Z]+(?:\s[A-Z][a-zA-Z]+)?)`)
 
-// moduleTool finds a tool from a runtime module that fits the message,
+// moduleTool finds a tool from another module that fits the message,
 // the way a real model would pick a newly available tool: the message
 // names it ("shipping estimate" or "shipping_estimate"), or, when it
 // isn't about an order, uses a word from the tool's name or description

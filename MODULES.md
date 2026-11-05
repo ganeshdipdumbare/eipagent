@@ -64,6 +64,22 @@ agent, err := kiln.New(
 A module is not one "kind": the same `Apply` can add tools, wrap calls and
 provide a service.
 
+The package can live in another directory in your app, or in another Go
+module. Fetch it with `go get` (or point at a local checkout with `replace`);
+there is no module registry, lock file or runtime loader. Publish it by
+tagging the Go module.
+
+`WithModule` registers and enables the descriptor. Configure that row with
+`WithModuleConfig(name, cfg)`, or use `WithModuleSpec` when you need an
+instance name (`As`) or priority. `WithModules(names...)` only enables modules
+already in the compiled registry; it never imports a package.
+
+If you already have a Go library, write a small `engine.Module` adapter:
+`Apply` exposes the library's functions as `sdk.Tool`s (or a service), and any
+network, file, exec or database access goes through the broker. See the
+[Custom modules](https://kilnai-docs.vercel.app/#custom-modules) docs page and
+[`examples/custom-module`](examples/custom-module).
+
 Lifecycle: `Apply` runs once, in dependency order, after every required
 service exists. Anything it registered is undone on `Close`. There is no
 unload or reload; rebuild and redeploy.
