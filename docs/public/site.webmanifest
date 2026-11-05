@@ -1,7 +1,7 @@
 {
-  "name": "eipagent Docs",
-  "short_name": "eipagent",
-  "description": "The Go SDK for AI agents where everything is a plugin.",
+  "name": "kiln Docs",
+  "short_name": "kiln",
+  "description": "The statically composed, capability-secured agent SDK for Go.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#f6f4ee",

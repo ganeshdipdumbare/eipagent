@@ -1,8 +1,11 @@
 # runtime state written by plugins (threads, audit, traces, sandboxes)
-.eipagent/
+.kiln/
 # built binaries
-/eip
+/kiln
 *.test
 .vercel
 .DS_Store
 release-notes.md
+.claude/
+.deepsec/
+.eipagent/

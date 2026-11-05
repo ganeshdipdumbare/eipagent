@@ -5,7 +5,7 @@ microVM and connects to it like a small hosted sandbox. The provider:
 
 - creates a tap device and starts Firecracker with the API over a Unix socket;
 - boots an Ubuntu rootfs from the Firecracker CI;
-- connects to the guest over SSH for exec, files and `eip serve --stdio`;
+- connects to the guest over SSH for exec, files and `kiln serve --stdio`;
 - destroys the VM, tap and temporary rootfs on `Close`.
 
 The agent runs inside the microVM with `WithRunIn`. The real test token stays on
@@ -16,9 +16,9 @@ allowed request.
 
 ```
 your server / Lima VM (the host)
-  ├── eipagent host process: model provider, secrets, broker, audit
+  ├── kiln host process: model provider, secrets, broker, audit
   └── Firecracker microVM (the sandbox)
-        └── eip serve --stdio + plugins + tools
+        └── the box program (ServeBox) + modules + tools
 ```
 
 The host and the sandbox are separate kernels and process trees. They are only
@@ -32,20 +32,20 @@ that remote host, but the host-to-guest RPC flow is unchanged.
 
 The host knows the sandbox through the provider: the Firecracker API socket and
 the guest IP on the tap network. The sandbox does **not** know the host. The
-host connects out (SSH in this example), starts `eip serve --stdio`, and keeps
+host connects out (SSH in this example), starts `kiln serve --stdio`, and keeps
 that process's stdin/stdout. All `host.*` calls are RPC frames on that stream.
 
 ```mermaid
 sequenceDiagram
-    participant H as Host (eipagent + broker)
+    participant H as Host (kiln + broker)
     participant FC as Firecracker API
-    participant G as Guest eip serve --stdio
+    participant G as Guest kiln serve --stdio
     participant M as Host model provider
     participant S as Host secrets
     participant A as Acme API
 
     H->>FC: create tap, boot microVM (kernel, rootfs, MAC)
-    H->>G: SSH out: upload eip + plugins, start eip serve --stdio
+    H->>G: SSH out: upload the box program, start it with KILN_BOX=1
     G-->>H: box.ready on stdout/stdin
     H->>G: run(prompt) over stdio RPC
     G->>H: host.llm
@@ -75,13 +75,13 @@ and why a fake sandbox cannot reach the host.
 1. `examples/firecracker/main.go` keeps the real `ACME_API_TOKEN` in the host
    environment and allows it only for `GET 127.0.0.1/orders*` in
    `RunIn.SecretHosts`.
-2. The `call_api` plugin inside the VM runs `p.Secret("secret://ACME_API_TOKEN")`.
+2. The `call_api` module inside the VM runs `p.Secret("secret://ACME_API_TOKEN")`.
    That request goes through the box's `secrets` service to the host.
 3. `remote.go` handles it as `host.secret` and calls
    `broker.placeholder` (`broker.go`). The broker resolves the value on the
-   host, checks the plugin grant and audit, and returns a fresh
+   host, checks the module's grant and audits it, and returns a fresh
    `eipsec_...` placeholder. The value never crosses into the VM.
-4. The plugin sends an HTTP request containing the placeholder. The box's
+4. The module sends an HTTP request containing the placeholder. The box's
    HTTP is relayed to the host as `host.http`; `broker.fetch` (`broker.go`)
    finds the placeholder, checks the method/host/path against `SecretHosts`,
    resolves the real value, swaps it into the URL/headers/body, and makes the
@@ -95,7 +95,7 @@ token at the Acme API, and `[REDACTED]` in the reply.
 
 ## Host on macOS, Firecracker in Lima
 
-This is the real separation: the eipagent host process runs on macOS, while the
+This is the real separation: the kiln host process runs on macOS, while the
 Firecracker VMM and the guest microVM run inside the Lima VM. The provider
 starts Firecracker over SSH and reaches the guest with an SSH `ProxyJump`; the
 host process, model keys and secrets never run inside Lima.
@@ -103,7 +103,7 @@ host process, model keys and secrets never run inside Lima.
 ```bash
 # once, inside Lima
 limactl shell firecracker
-cd /Users/$(whoami)/code/eipagent
+cd /Users/$(whoami)/code/kiln
 sudo env PATH=/usr/local/go/bin:$PATH examples/firecracker/setup.sh
 
 # on macOS: host process here, Firecracker in Lima
@@ -128,16 +128,16 @@ to the host process, and set `FC_HOST` and `FC_SSH_CONFIG` to its SSH target.
 ## The same flow on a cloud-hosted sandbox
 
 Firecracker is the runnable stand-in for a hosted service. The host/sandbox
-split does not depend on who owns the machines: only the provider plugin
+split does not depend on who owns the machines: only the provider module
 changes.
 
 ```go
-agent, _ := eipagent.New(
-    eipagent.WithModel("openai:gpt-4.1"),
-    eipagent.WithPlugins("tool_shell", "tool_fs"),
-    eipagent.WithRunIn(eipagent.RunIn{
+agent, _ := kiln.New(
+    kiln.WithModel("openai:gpt-4.1"),
+    kiln.WithModules("tool_shell", "tool_fs"),
+    kiln.WithRunIn(kiln.RunIn{
         Provider: "your_hosted_provider", // e.g. E2B, microsandbox cloud, a Kubernetes provider
-        Binary:   "./eip-linux",
+        Binary:   "./kiln-linux",
         // The real values stay in the host's environment. The provider's
         // machine only ever receives placeholders.
         SecretHosts: map[string][]string{
@@ -149,7 +149,7 @@ agent, _ := eipagent.New(
 
 The host is your server: it runs the model provider, the secrets service, the
 broker and the audit sink. The sandbox is the provider's machine. When the
-plugin in that sandbox asks for a secret, the host answers with a placeholder;
+module in that sandbox asks for a secret, the host answers with a placeholder;
 when the sandbox sends a request with that placeholder, the host checks
 `SecretHosts`, swaps in the real value, makes the request from the host and
 redacts the reply. The provider never sees the value.
@@ -183,7 +183,7 @@ Install Go in the VM if needed, then run the example there:
 
 ```bash
 limactl shell firecracker
-cd /Users/$(whoami)/code/eipagent   # the writable Lima mount
+cd /Users/$(whoami)/code/kiln   # the writable Lima mount
 sudo env PATH=/usr/local/go/bin:$PATH examples/firecracker/setup.sh
 export PATH=/usr/local/go/bin:$PATH
 go run ./examples/firecracker
@@ -198,7 +198,7 @@ go run ./examples/firecracker
 
 The setup script downloads the latest Firecracker CI kernel and Ubuntu rootfs,
 adds a local SSH key, builds `rootfs.ext4`, installs `firecracker` in
-`/usr/local/bin`, and writes everything under `.eipagent/firecracker`
+`/usr/local/bin`, and writes everything under `.kiln/firecracker`
 (gitignored). The example uses `sudo -n` for the tap device and Firecracker.
 
 ## Configuration
@@ -208,10 +208,10 @@ The provider reads these environment variables:
 | Variable | Default |
 | --- | --- |
 | `FC_BIN` | `/usr/local/bin/firecracker` |
-| `FC_KERNEL` | `.eipagent/firecracker/vmlinux` |
-| `FC_ROOTFS` | `.eipagent/firecracker/rootfs.ext4` |
-| `FC_SSH_KEY` | `.eipagent/firecracker/id_ed25519` |
-| `FC_WORKDIR` | `/tmp/eip-firecracker` |
+| `FC_KERNEL` | `.kiln/firecracker/vmlinux` |
+| `FC_ROOTFS` | `.kiln/firecracker/rootfs.ext4` |
+| `FC_SSH_KEY` | `.kiln/firecracker/id_ed25519` |
+| `FC_WORKDIR` | `/tmp/kiln-firecracker` |
 | `FC_CPUS` | `1` |
 | `FC_MEM_MB` | `512` |
 | `FC_BOOT_ARGS` | `keep_bootcon console=ttyS0 reboot=k panic=1` on arm64 |

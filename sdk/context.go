@@ -8,13 +8,13 @@ import (
 )
 
 // PriorityReserved is the lowest priority only trusted (locked, policy)
-// plugins may use, so policy hooks always run outermost / first.
+// modules may use, so policy hooks always run outermost / first.
 const PriorityReserved = 1_000_000
 
 type hookEntry struct {
 	id      int
 	prio    int
-	order   int // plugin load order (profile position)
+	order   int // module load order (profile position)
 	trusted bool
 	fn      any
 }
@@ -51,52 +51,47 @@ func newRegistry(parent *registry) *registry {
 	return r
 }
 
-// Plugin is what a plugin's Apply receives: everything it can do
+// Module is what a module's Apply receives: everything it can do
 // (AddTool, WrapModel / WrapTool, Provide, Effect ...) goes through it,
 // and everything it registered is undone when it is unloaded, which is
 // how unload and hot reload stay clean.
 //
-//	func Apply(p *sdk.Plugin) error { p.AddTool(...); return nil }
-type Plugin struct {
+//	func Apply(p *sdk.Module) error { p.AddTool(...); return nil }
+type Module struct {
 	Name   string
-	Config map[string]any // per-plugin config from the profile
+	Config map[string]any // per-module config from the profile
 
 	reg      *registry
-	id       string // immutable identity: plugin instance path, used for audit / secret ACLs
+	contract *contract // what the engine let this module declare and hold; nil for the root
+	id       string    // immutable identity: module instance path, used for audit / secret ACLs
 	priority int
 	order    int
 	trusted  bool
-	// secretGrants is the set of secret names a plugin declared (or
-	// referenced with secret://). For file plugins the core restricts
+	// secretGrants is the set of secret names a module declared (or
+	// referenced with secret://). For file modules the core restricts
 	// lookups to this set unless the admin policy grants more.
 	secretGrants    []string
 	restrictSecrets bool
 	builtin         bool
 	mu              sync.Mutex
-	children        []*Plugin
+	children        []*Module
 	disposers       []func()
 	disposed        bool // set by Dispose: later registrations are undone at once
 }
 
-// Context is the old name of Plugin.
-//
-// Deprecated: use Plugin. Kept until v1.0 so existing plugins
-// (func Apply(ctx *sdk.Context) error) keep compiling.
-type Context = Plugin
-
-func NewRoot() *Plugin { return &Plugin{Name: "root", reg: newRegistry(nil)} }
+func NewRoot() *Module { return &Module{Name: "root", reg: newRegistry(nil)} }
 
 // SetLogger replaces where Logf output goes (whole registry).
-func (c *Plugin) SetLogger(fn func(scope, msg string)) { c.reg.log = fn }
+func (c *Module) SetLogger(fn func(scope, msg string)) { c.reg.log = fn }
 
 // Fork creates a child scope sharing the registry. Disposing the parent
 // disposes the child.
-func (c *Plugin) Fork(name string) *Plugin {
+func (c *Module) Fork(name string) *Module {
 	id := name
 	if c.id != "" {
 		id = c.id + "/" + name
 	}
-	child := &Plugin{Name: name, id: id, reg: c.reg, priority: c.priority, order: c.order, trusted: c.trusted}
+	child := &Module{Name: name, id: id, reg: c.reg, contract: c.contract, priority: c.priority, order: c.order, trusted: c.trusted}
 	c.mu.Lock()
 	if c.disposed {
 		child.disposed = true
@@ -110,15 +105,15 @@ func (c *Plugin) Fork(name string) *Plugin {
 // Isolate creates a child kernel: it sees the parent's services and its
 // trusted hooks (policy, audit), but has its own tools, skills and hooks.
 // Used for subagents.
-func (c *Plugin) Isolate(name string) *Plugin {
-	child := &Plugin{Name: name, id: c.id + "/" + name, reg: newRegistry(c.reg), trusted: c.trusted}
+func (c *Module) Isolate(name string) *Module {
+	child := &Module{Name: name, id: c.id + "/" + name, reg: newRegistry(c.reg), contract: c.contract, trusted: c.trusted}
 	c.onDispose(child.Dispose)
 	return child
 }
 
 // TrustKey proves the caller is the engine. Exactly one exists per
-// process: the engine claims it at init, before any plugin can run, so
-// interpreted plugins calling ClaimTrustKey get nil.
+// process: the engine claims it at init, before any module can run, so
+// interpreted modules calling ClaimTrustKey get nil.
 type TrustKey struct{ _ int }
 
 var (
@@ -134,18 +129,18 @@ func ClaimTrustKey() *TrustKey {
 
 // Trust sets load order and trust on a scope. Without the engine's key
 // it does nothing.
-func (c *Plugin) Trust(key *TrustKey, order int, trusted bool) {
+func (c *Module) Trust(key *TrustKey, order int, trusted bool) {
 	if key == nil || key != engineKey {
 		return
 	}
 	c.order, c.trusted = order, trusted
 }
 
-func (c *Plugin) Trusted() bool { return c.trusted }
+func (c *Module) Trusted() bool { return c.trusted }
 
 // SetSecretPolicy is called by the engine before Apply. Without the
-// engine's key it does nothing, so a plugin can't widen its own grant.
-func (c *Plugin) SetSecretPolicy(key *TrustKey, grants []string, restrict bool) {
+// engine's key it does nothing, so a module can't widen its own grant.
+func (c *Module) SetSecretPolicy(key *TrustKey, grants []string, restrict bool) {
 	if key == nil || key != engineKey {
 		return
 	}
@@ -153,31 +148,31 @@ func (c *Plugin) SetSecretPolicy(key *TrustKey, grants []string, restrict bool) 
 	c.restrictSecrets = restrict
 }
 
-// SetBuiltin is called by the engine. Only built-in plugins may register
+// SetBuiltin is called by the engine. Only built-in modules may register
 // extra values for redaction.
-func (c *Plugin) SetBuiltin(key *TrustKey, builtin bool) {
+func (c *Module) SetBuiltin(key *TrustKey, builtin bool) {
 	if key == nil || key != engineKey {
 		return
 	}
 	c.builtin = builtin
 }
 
-// RegisterSecret puts a value the plugin obtained outside the secrets
+// RegisterSecret puts a value the module obtained outside the secrets
 // service (for example a Vault token read from a file) into the
-// process-wide redaction set. It is a no-op for non-built-in plugins, so
-// a third-party plugin can't blank out words in everyone's audit log.
-func (c *Plugin) RegisterSecret(v string) bool {
+// process-wide redaction set. It is a no-op for non-built-in modules, so
+// a third-party module can't blank out words in everyone's audit log.
+func (c *Module) RegisterSecret(v string) bool {
 	if !c.builtin || v == "" {
 		return false
 	}
 	return AddRedaction(v)
 }
 
-// ID is the scope's immutable identity ("plugin" or "plugin/child").
-func (c *Plugin) ID() string { return c.id }
+// ID is the scope's immutable identity ("module" or "module/child").
+func (c *Module) ID() string { return c.id }
 
-// PluginName is the top-level plugin instance that owns this scope.
-func (c *Plugin) PluginName() string {
+// PluginName is the top-level module instance that owns this scope.
+func (c *Module) PluginName() string {
 	if i := strings.Index(c.id, "/"); i >= 0 {
 		return c.id[:i]
 	}
@@ -186,8 +181,8 @@ func (c *Plugin) PluginName() string {
 
 // SetPriority sets the priority of hooks registered after this call.
 // Higher runs earlier / further out. Values >= PriorityReserved are
-// clamped unless the plugin is trusted.
-func (c *Plugin) SetPriority(p int) {
+// clamped unless the module is trusted.
+func (c *Module) SetPriority(p int) {
 	if p >= PriorityReserved && !c.trusted {
 		p = PriorityReserved - 1
 	}
@@ -195,12 +190,12 @@ func (c *Plugin) SetPriority(p int) {
 }
 
 // Priority is the priority hooks registered now will get.
-func (c *Plugin) Priority() int { return c.priority }
+func (c *Module) Priority() int { return c.priority }
 
-func (c *Plugin) onDispose(f func()) {
+func (c *Module) onDispose(f func()) {
 	c.mu.Lock()
 	if c.disposed {
-		// A goroutine registered something after the plugin was unloaded:
+		// A goroutine registered something after the module was unloaded:
 		// undo it now instead of leaking it into the registry.
 		c.mu.Unlock()
 		f()
@@ -211,7 +206,7 @@ func (c *Plugin) onDispose(f func()) {
 }
 
 // Dispose runs all disposers in reverse order (children first).
-func (c *Plugin) Dispose() {
+func (c *Module) Dispose() {
 	c.mu.Lock()
 	kids, ds := c.children, c.disposers
 	c.children, c.disposers = nil, nil
@@ -225,59 +220,29 @@ func (c *Plugin) Dispose() {
 	}
 }
 
-func (c *Plugin) nextID() int { c.reg.seq++; return c.reg.seq }
+func (c *Module) nextID() int { c.reg.seq++; return c.reg.seq }
 
 // Effect runs fn now; the cleanup it returns runs when the scope is
 // disposed. Use it for timers, goroutines, connections, processes.
-func (c *Plugin) Effect(fn func() func()) {
+func (c *Module) Effect(fn func() func()) {
 	if cleanup := fn(); cleanup != nil {
 		c.onDispose(cleanup)
 	}
 }
 
-// OnUnload registers a cleanup that runs when the plugin is unloaded,
+// OnUnload registers a cleanup that runs when the module is unloaded,
 // reloaded or the agent closes.
-func (c *Plugin) OnUnload(fn func()) { c.onDispose(fn) }
-
-// Deprecated: use OnUnload. Kept until v1.0.
-func (c *Plugin) OnDispose(fn func()) { c.onDispose(fn) }
+func (c *Module) OnUnload(fn func()) { c.onDispose(fn) }
 
 // ---- Services ----
 
-// Provide registers a service. Duplicate names are an error so two
-// plugins can't silently fight over one name; unload one to swap.
-// Services renamed in v0.4. The old names keep resolving until v1.0:
-// Provide, Service, HasService and Services treat them as the new ones.
-var serviceRenames = map[string]string{"checkpointer": "threads", "store": "memory", "exec": "workspace"}
-
-// CanonicalService maps an old service name to its current one
-// ("llm/openai" -> "model/openai", "checkpointer" -> "threads",
-// "store" -> "memory", "exec" -> "workspace"); other names pass through.
-func CanonicalService(name string) string {
-	if n, ok := serviceRenames[name]; ok {
-		return n
+// Provide registers a service. The name must be in the module's declared
+// Provides list (a pattern ending in "*" matches a prefix); duplicate names
+// are an error so two modules can't silently fight over one name.
+func (c *Module) Provide(name string, svc any) error {
+	if !c.mayProvide(name) {
+		return fmt.Errorf("module %s may not provide %q: declare it in Provides", c.PluginName(), name)
 	}
-	if strings.HasPrefix(name, "llm/") {
-		return "model/" + name[len("llm/"):]
-	}
-	return name
-}
-
-// oldServiceName is the pre-v0.4 name of a service, or "".
-func oldServiceName(name string) string {
-	for old, n := range serviceRenames {
-		if n == name {
-			return old
-		}
-	}
-	if strings.HasPrefix(name, "model/") {
-		return "llm/" + name[len("model/"):]
-	}
-	return ""
-}
-
-func (c *Plugin) Provide(name string, svc any) error {
-	name = CanonicalService(name)
 	r := c.reg
 	r.mu.Lock()
 	if _, taken := r.services[name]; taken {
@@ -298,7 +263,6 @@ func (c *Plugin) Provide(name string, svc any) error {
 }
 
 func (r *registry) service(name string) (any, bool) {
-	name = CanonicalService(name)
 	for ; r != nil; r = r.parent {
 		r.mu.RLock()
 		e, ok := r.services[name]
@@ -310,7 +274,7 @@ func (r *registry) service(name string) (any, bool) {
 	return nil, false
 }
 
-func (c *Plugin) Service(name string) any {
+func (c *Module) Service(name string) any {
 	v, _ := c.reg.service(name)
 	if s, ok := v.(*Secrets); ok && name == "secrets" && s != nil {
 		return c.boundSecrets(s)
@@ -319,19 +283,18 @@ func (c *Plugin) Service(name string) any {
 		return c.boundAudit(a)
 	}
 	if p, ok := v.(*SandboxProvider); ok && strings.HasPrefix(name, "sandbox/") && p != nil && c.id != "" {
-		return pluginSandboxes(p, c.builtin)
+		return moduleSandboxes(p, c.builtin)
 	}
 	return v
 }
 
-func (c *Plugin) HasService(name string) bool {
+func (c *Module) HasService(name string) bool {
 	_, ok := c.reg.service(name)
 	return ok
 }
 
 // Services lists service names with the given prefix ("" = all).
-func (c *Plugin) Services(prefix string) []string {
-	prefix = CanonicalService(prefix)
+func (c *Module) Services(prefix string) []string {
 	seen := map[string]bool{}
 	var out []string
 	for r := c.reg; r != nil; r = r.parent {
@@ -350,17 +313,17 @@ func (c *Plugin) Services(prefix string) []string {
 
 // ---- Tools and skills ----
 
-// AddTool registers a tool. A name another plugin already registered
-// is refused (logged, first one wins), so a later plugin can't take over
-// a tool such as issue_refund; a plugin may re-register its own names.
-// Tool.Plugin is always set to the registering plugin.
-func (c *Plugin) AddTool(t Tool) {
-	t.Plugin = c.PluginName()
+// AddTool registers a tool. A name another module already registered
+// is refused (logged, first one wins), so a later module can't take over
+// a tool such as issue_refund; a module may re-register its own names.
+// Tool.Module is always set to the registering module.
+func (c *Module) AddTool(t Tool) {
+	t.Module = c.PluginName()
 	r := c.reg
 	r.mu.Lock()
-	if e, ok := r.tools[t.Name]; ok && e.v.Plugin != t.Plugin {
+	if e, ok := r.tools[t.Name]; ok && e.v.Module != t.Module {
 		r.mu.Unlock()
-		c.Logf("tool %q is already registered by %s; not replacing it", t.Name, e.v.Plugin)
+		c.Logf("tool %q is already registered by %s; not replacing it", t.Name, e.v.Module)
 		return
 	}
 	id := c.nextID()
@@ -375,8 +338,8 @@ func (c *Plugin) AddTool(t Tool) {
 	})
 }
 
-// AddSkill registers a skill; like tools, another plugin's name is refused.
-func (c *Plugin) AddSkill(s Skill) {
+// AddSkill registers a skill; like tools, another module's name is refused.
+func (c *Module) AddSkill(s Skill) {
 	r := c.reg
 	r.mu.Lock()
 	if e, ok := r.skills[s.Name]; ok && e.owner != c.PluginName() {
@@ -398,7 +361,7 @@ func (c *Plugin) AddSkill(s Skill) {
 
 // ---- Hooks ----
 
-func (c *Plugin) hook(kind string, fn any) {
+func (c *Module) hook(kind string, fn any) {
 	r := c.reg
 	r.mu.Lock()
 	id := c.nextID()
@@ -417,19 +380,19 @@ func (c *Plugin) hook(kind string, fn any) {
 	})
 }
 
-func (c *Plugin) Logf(format string, args ...any) {
+func (c *Module) Logf(format string, args ...any) {
 	c.reg.log(c.Name, Redact(fmt.Sprintf(format, args...)))
 }
 
-// ConfigString / ConfigInt / ConfigBool read plugin config with defaults.
-func (c *Plugin) ConfigString(key, def string) string {
+// ConfigString / ConfigInt / ConfigBool read module config with defaults.
+func (c *Module) ConfigString(key, def string) string {
 	if v, ok := c.Config[key].(string); ok && v != "" {
 		return v
 	}
 	return def
 }
 
-func (c *Plugin) ConfigInt(key string, def int) int {
+func (c *Module) ConfigInt(key string, def int) int {
 	switch v := c.Config[key].(type) {
 	case float64:
 		return int(v)
@@ -441,7 +404,7 @@ func (c *Plugin) ConfigInt(key string, def int) int {
 	return def
 }
 
-func (c *Plugin) ConfigFloat(key string, def float64) float64 {
+func (c *Module) ConfigFloat(key string, def float64) float64 {
 	switch v := c.Config[key].(type) {
 	case float64:
 		return v
@@ -451,14 +414,14 @@ func (c *Plugin) ConfigFloat(key string, def float64) float64 {
 	return def
 }
 
-func (c *Plugin) ConfigBool(key string, def bool) bool {
+func (c *Module) ConfigBool(key string, def bool) bool {
 	if v, ok := c.Config[key].(bool); ok {
 		return v
 	}
 	return def
 }
 
-func (c *Plugin) ConfigStrings(key string) []string {
+func (c *Module) ConfigStrings(key string) []string {
 	switch v := c.Config[key].(type) {
 	case []string:
 		return v
@@ -474,14 +437,14 @@ func (c *Plugin) ConfigStrings(key string) []string {
 	return nil
 }
 
-func (c *Plugin) ConfigMap(key string) map[string]any {
+func (c *Module) ConfigMap(key string) map[string]any {
 	if v, ok := c.Config[key].(map[string]any); ok {
 		return v
 	}
 	return nil
 }
 
-func (c *Plugin) ConfigList(key string) []map[string]any {
+func (c *Module) ConfigList(key string) []map[string]any {
 	raw, _ := c.Config[key].([]any)
 	var out []map[string]any
 	for _, x := range raw {

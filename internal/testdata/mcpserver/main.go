@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"os"
 
-	"github.com/ganeshdipdumbare/eipagent/internal/mcptest"
+	"github.com/ganeshdipdumbare/kiln/internal/mcptest"
 )
 
 func main() {

@@ -1,4 +1,4 @@
-package eipagent_test
+package kiln_test
 
 import (
 	"context"
@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ganeshdipdumbare/eipagent"
+	"github.com/ganeshdipdumbare/kiln"
 )
 
 func fakeServer(t *testing.T, check func(r *http.Request, body map[string]any), reply func(n int, body map[string]any) (sse []string, js string)) *httptest.Server {
@@ -35,12 +35,12 @@ func fakeServer(t *testing.T, check func(r *http.Request, body map[string]any), 
 	return srv
 }
 
-func newAgent(t *testing.T, model, use, url string, opts ...eipagent.Option) *eipagent.Agent {
+func newAgent(t *testing.T, model, use, url string, opts ...kiln.Option) *kiln.Agent {
 	t.Helper()
 	prov, _, _ := strings.Cut(model, ":")
-	a, err := eipagent.New(append([]eipagent.Option{
-		eipagent.WithModel(model),
-		eipagent.WithPluginSpec(eipagent.PluginSpec{Use: use, As: "llm_" + prov, Config: map[string]any{"name": prov, "base_url": url}}),
+	a, err := kiln.New(append([]kiln.Option{
+		kiln.WithModel(model),
+		kiln.WithModuleSpec(kiln.ModuleSpec{Use: use, As: "model_" + prov, Config: map[string]any{"name": prov, "base_url": url}}),
 	}, opts...)...)
 	if err != nil {
 		t.Fatal(err)
@@ -83,15 +83,15 @@ func TestAnthropic(t *testing.T) {
 			}, ""
 		}
 	})
-	weather := eipagent.Tool("weather", "w", func(ctx context.Context, in weatherIn) (string, error) { return "25C", nil })
-	a := newAgent(t, "anthropic:claude-test", "llm_anthropic", srv.URL, eipagent.WithTools(weather))
+	weather := kiln.Tool("weather", "w", func(ctx context.Context, in weatherIn) (string, error) { return "25C", nil })
+	a := newAgent(t, "anthropic:claude-test", "model_anthropic", srv.URL, kiln.WithTools(weather))
 	res, err := a.Generate(bg, "Rome?")
 	if err != nil || res.Text != "Warm." || res.Usage.TotalTokens != 18 {
 		t.Fatalf("%v %+v", err, res)
 	}
-	b := newAgent(t, "anthropic:claude-test", "llm_anthropic", srv.URL)
+	b := newAgent(t, "anthropic:claude-test", "model_anthropic", srv.URL)
 	// reuse server counter: next call is n=3
-	r, err := eipagent.GenerateObject[recipe](bg, b, "pasta")
+	r, err := kiln.GenerateObject[recipe](bg, b, "pasta")
 	if err != nil || r.Name != "Pasta" {
 		t.Fatalf("%v %+v", err, r)
 	}
@@ -133,13 +133,13 @@ func TestGemini(t *testing.T) {
 			}, ""
 		}
 	})
-	weather := eipagent.Tool("weather", "w", func(ctx context.Context, in weatherIn) (string, error) { return "rain", nil })
-	a := newAgent(t, "gemini:gem-test", "llm_gemini", srv.URL, eipagent.WithTools(weather))
+	weather := kiln.Tool("weather", "w", func(ctx context.Context, in weatherIn) (string, error) { return "rain", nil })
+	a := newAgent(t, "gemini:gem-test", "model_gemini", srv.URL, kiln.WithTools(weather))
 	res, err := a.Generate(bg, "Tokyo?")
 	if err != nil || res.Text != "Rainy." {
 		t.Fatalf("%v %+v", err, res)
 	}
-	r, err := eipagent.GenerateObject[recipe](bg, a, "ramen")
+	r, err := kiln.GenerateObject[recipe](bg, a, "ramen")
 	if err != nil || r.Name != "Ramen" {
 		t.Fatalf("%v %+v", err, r)
 	}

@@ -20,8 +20,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ganeshdipdumbare/eipagent"
-	"github.com/ganeshdipdumbare/eipagent/sdk"
+	"github.com/ganeshdipdumbare/kiln"
+	"github.com/ganeshdipdumbare/kiln/sdk"
 )
 
 // firecracker is a sandbox provider for a self-hosted Firecracker microVM.
@@ -47,15 +47,16 @@ type fcConfig struct {
 	remoteConf string
 }
 
-func firecracker() eipagent.Plugin {
-	return eipagent.Plugin{
-		Name: "sandbox_firecracker",
-		Apply: func(p *sdk.Plugin) error {
+func firecracker() kiln.Module {
+	return kiln.Module{
+		Name:     "sandbox_firecracker",
+		Provides: []string{"sandbox/firecracker"},
+		Apply: func(p *sdk.Module) error {
 			cfg := fcConfig{
 				bin:        envOr("FC_BIN", "/usr/local/bin/firecracker"),
-				kernel:     envOr("FC_KERNEL", ".eipagent/firecracker/vmlinux"),
-				rootfs:     envOr("FC_ROOTFS", ".eipagent/firecracker/rootfs.ext4"),
-				sshKey:     envOr("FC_SSH_KEY", ".eipagent/firecracker/id_ed25519"),
+				kernel:     envOr("FC_KERNEL", ".kiln/firecracker/vmlinux"),
+				rootfs:     envOr("FC_ROOTFS", ".kiln/firecracker/rootfs.ext4"),
+				sshKey:     envOr("FC_SSH_KEY", ".kiln/firecracker/id_ed25519"),
 				workdir:    envOr("FC_WORKDIR", defaultWorkdir(os.Getenv("FC_HOST"))),
 				bootArgs:   envOr("FC_BOOT_ARGS", defaultBootArgs()),
 				cpus:       envInt("FC_CPUS", 1),
@@ -101,15 +102,15 @@ func (c fcConfig) absolutize() fcConfig {
 
 func defaultWorkdir(remoteHost string) string {
 	if remoteHost != "" {
-		return "/tmp/eip-firecracker"
+		return "/tmp/kiln-firecracker"
 	}
 	if d := os.Getenv("XDG_RUNTIME_DIR"); d != "" {
-		return filepath.Join(d, "eip-firecracker")
+		return filepath.Join(d, "kiln-firecracker")
 	}
 	if d, err := os.UserCacheDir(); err == nil {
-		return filepath.Join(d, "eip-firecracker")
+		return filepath.Join(d, "kiln-firecracker")
 	}
-	return filepath.Join(os.TempDir(), fmt.Sprintf("eip-firecracker-%d", os.Getuid()))
+	return filepath.Join(os.TempDir(), fmt.Sprintf("kiln-firecracker-%d", os.Getuid()))
 }
 
 func defaultSSHConfig() string {
@@ -154,7 +155,7 @@ func (c fcConfig) check() error {
 	return nil
 }
 
-func createVM(ctx context.Context, p *sdk.Plugin, cfg fcConfig, spec sdk.SandboxSpec) (*sdk.Sandbox, error) {
+func createVM(ctx context.Context, p *sdk.Module, cfg fcConfig, spec sdk.SandboxSpec) (*sdk.Sandbox, error) {
 	if len(spec.Mounts) > 0 {
 		return nil, errors.New("firecracker: host mounts are not supported")
 	}
@@ -305,7 +306,7 @@ func writeMeta(ctx context.Context, cfg fcConfig, m *meta) error {
 	return os.WriteFile(filepath.Join(m.Dir, "meta.json"), b, 0o644)
 }
 
-func attachVM(ctx context.Context, p *sdk.Plugin, cfg fcConfig, id string) (*sdk.Sandbox, error) {
+func attachVM(ctx context.Context, p *sdk.Module, cfg fcConfig, id string) (*sdk.Sandbox, error) {
 	path := filepath.Join(cfg.workdir, id, "meta.json")
 	var b []byte
 	var err error

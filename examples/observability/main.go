@@ -22,7 +22,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/ganeshdipdumbare/eipagent"
+	"github.com/ganeshdipdumbare/kiln"
 )
 
 func main() {
@@ -39,7 +39,7 @@ func main() {
 		m.Write(body)
 		mu.Lock()
 		defer mu.Unlock()
-		if r.Header.Get("X-EIP-Signature") != "sha256="+hex.EncodeToString(m.Sum(nil)) {
+		if r.Header.Get("X-KILN-Signature") != "sha256="+hex.EncodeToString(m.Sum(nil)) {
 			badSig++
 			w.WriteHeader(http.StatusUnauthorized)
 			return
@@ -84,21 +84,21 @@ func main() {
 	type CityIn struct {
 		City string `json:"city"`
 	}
-	a, err := eipagent.New(
-		eipagent.WithModel("mock:demo"),
-		eipagent.WithPlugin("model_mock", map[string]any{"script": []any{
+	a, err := kiln.New(
+		kiln.WithModel("mock:demo"),
+		kiln.WithModuleConfig("model_mock", map[string]any{"script": []any{
 			map[string]any{"tool": "weather", "args": map[string]any{"city": "Oslo"}},
 			map[string]any{"text": "It is 4°C and windy in Oslo."},
 		}}),
-		eipagent.WithTools(eipagent.Tool("weather", "Current weather", func(c context.Context, in CityIn) (string, error) {
+		kiln.WithTools(kiln.Tool("weather", "Current weather", func(c context.Context, in CityIn) (string, error) {
 			return "4°C, wind 9 m/s", nil
 		})),
-		eipagent.WithPlugin("secrets_env", nil),
-		eipagent.WithPlugin("audit_file", map[string]any{"path": "-"}), // records only go to sinks
-		eipagent.WithPlugin("audit_http", map[string]any{"url": siem.URL, "hmac_key": "secret://SIEM_HMAC_TOKEN"}),
-		eipagent.WithPlugin("trace_otlp", map[string]any{"endpoint": otel.URL, "service_name": "support-bot"}),
-		eipagent.WithUser("u-1001"),
-		eipagent.WithLogger(func(string, string) {}),
+		kiln.WithModules("secrets_env"),
+		kiln.WithModuleConfig("audit_file", map[string]any{"path": "-"}), // records only go to sinks
+		kiln.WithModuleConfig("audit_http", map[string]any{"url": siem.URL, "hmac_key": "secret://SIEM_HMAC_TOKEN"}),
+		kiln.WithModuleConfig("trace_otlp", map[string]any{"endpoint": otel.URL, "service_name": "support-bot"}),
+		kiln.WithUser("u-1001"),
+		kiln.WithLogger(func(string, string) {}),
 	)
 	check(err)
 	res, err := a.Thread("t-weather").Generate(ctx, "What's the weather in Oslo?")
@@ -117,9 +117,9 @@ func main() {
 		case "tool.call":
 			fmt.Printf("  #%-3v tool.call   run=%v tool=%v call_id=%v outcome=%v args=%v\n", r["seq"], d["run"], d["tool"], d["call_id"], d["outcome"], d["args"])
 		case "secret.access":
-			fmt.Printf("  #%-3v secret.access plugin=%v secret=%v outcome=%v\n", r["seq"], d["plugin"], d["secret"], d["outcome"])
+			fmt.Printf("  #%-3v secret.access module=%v secret=%v outcome=%v\n", r["seq"], d["module"], d["secret"], d["outcome"])
 		default:
-			fmt.Printf("  #%-3v %v %v\n", r["seq"], r["type"], d["plugin"])
+			fmt.Printf("  #%-3v %v %v\n", r["seq"], r["type"], d["module"])
 		}
 	}
 

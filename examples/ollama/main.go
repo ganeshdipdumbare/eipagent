@@ -1,11 +1,11 @@
-// Run eipagent fully locally with Ollama: no API keys, nothing leaves
+// Run kiln fully locally with Ollama: no API keys, nothing leaves
 // your machine.
 //
 //	ollama pull lfm3                        # small and fast; any tool-capable model works
 //	go run ./examples/ollama -demo text     # plain text, the simplest start
 //	go run ./examples/ollama                # every demo
-//	go run ./examples/ollama -demo plugins  # add, update and remove plugins while the agent runs
-//	go run ./examples/ollama -demo tools    # one demo: text | stream | tools | plugins | object | thread | approve | shell | vision
+//	go run ./examples/ollama -demo modules  # add tools with modules compiled into the program
+//	go run ./examples/ollama -demo tools    # one demo: text | stream | tools | modules | object | thread | approve | shell | vision
 //	go run ./examples/ollama -model qwen3.5:4b
 //	go run ./examples/ollama -demo vision -model qwen3-vl:4b -image photo.jpg
 //
@@ -23,12 +23,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ganeshdipdumbare/eipagent"
+	"github.com/ganeshdipdumbare/kiln"
+	"github.com/ganeshdipdumbare/kiln/engine"
+	"github.com/ganeshdipdumbare/kiln/sdk"
 )
 
 var (
 	model   = flag.String("model", "lfm3:latest", "Ollama model (must support tool calling for the tools demos)")
-	demo    = flag.String("demo", "all", "text | stream | tools | plugins | object | thread | approve | shell | vision | all")
+	demo    = flag.String("demo", "all", "text | stream | tools | modules | object | thread | approve | shell | vision | all")
 	image   = flag.String("image", "", "image file for -demo vision")
 	verbose = flag.Bool("v", false, "log every model and tool call")
 	ctx     = context.Background()
@@ -40,7 +42,7 @@ func main() {
 		name string
 		run  func()
 	}{
-		{"text", text}, {"stream", stream}, {"tools", tools}, {"plugins", plugins}, {"object", object}, {"thread", thread},
+		{"text", text}, {"stream", stream}, {"tools", tools}, {"modules", modules}, {"object", object}, {"thread", thread},
 		{"approve", approve}, {"shell", shell}, {"vision", vision},
 	}
 	for _, d := range demos {
@@ -61,28 +63,28 @@ func main() {
 }
 
 // newAgent starts an agent on the local Ollama model.
-func newAgent(opts ...eipagent.Option) *eipagent.Agent {
-	base := []eipagent.Option{
-		eipagent.WithModel("ollama:" + *model),
-		eipagent.WithInstructions("You are a helpful assistant running locally. Be brief. Use tools when they help."),
-		eipagent.WithMaxSteps(8),
-		eipagent.WithLogger(func(scope, msg string) {
+func newAgent(opts ...kiln.Option) *kiln.Agent {
+	base := []kiln.Option{
+		kiln.WithModel("ollama:" + *model),
+		kiln.WithInstructions("You are a helpful assistant running locally. Be brief. Use tools when they help."),
+		kiln.WithMaxSteps(8),
+		kiln.WithLogger(func(scope, msg string) {
 			if *verbose {
 				fmt.Printf("  · [%s] %s\n", scope, msg)
 			}
 		}),
 	}
 	if *verbose {
-		base = append(base, eipagent.WithPlugins("hook_log"))
+		base = append(base, kiln.WithModules("hook_log"))
 	}
 	if host := os.Getenv("OLLAMA_HOST"); host != "" {
 		if !strings.HasPrefix(host, "http") {
 			host = "http://" + host
 		}
-		base = append(base, eipagent.WithPluginSpec(eipagent.PluginSpec{Use: "model_openai", As: "llm_ollama",
+		base = append(base, kiln.WithModuleSpec(engine.ModuleSpec{Use: "model_openai", As: "llm_ollama",
 			Config: map[string]any{"name": "ollama", "base_url": strings.TrimRight(host, "/") + "/v1", "api_key": ""}}))
 	}
-	a, err := eipagent.New(append(base, opts...)...)
+	a, err := kiln.New(append(base, opts...)...)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -113,16 +115,16 @@ type CityIn struct {
 }
 
 func tools() {
-	weather := eipagent.Tool("get_weather", "Current weather for a city", func(ctx context.Context, in CityIn) (map[string]any, error) {
+	weather := kiln.Tool("get_weather", "Current weather for a city", func(ctx context.Context, in CityIn) (map[string]any, error) {
 		// A real tool would call an API; this one is deterministic.
 		return map[string]any{"city": in.City, "temp_c": 27, "sky": "clear"}, nil
 	})
-	convert := eipagent.Tool("celsius_to_fahrenheit", "Convert °C to °F", func(ctx context.Context, in struct {
+	convert := kiln.Tool("celsius_to_fahrenheit", "Convert °C to °F", func(ctx context.Context, in struct {
 		Celsius float64 `json:"celsius"`
 	}) (string, error) {
 		return fmt.Sprintf("%.1f°F", in.Celsius*9/5+32), nil
 	})
-	a := newAgent(eipagent.WithTools(weather, convert), eipagent.WithPlugins("tool_time"))
+	a := newAgent(kiln.WithTools(weather, convert), kiln.WithModules("tool_time"))
 	defer a.Close()
 
 	res, err := a.Generate(ctx, "What's the weather in Pune right now, in Fahrenheit? Also, what time is it?")
@@ -155,95 +157,62 @@ func stream() {
 	check(err)
 }
 
-// ---- plugins: add, update and remove capabilities while the agent runs ----
+// ---- modules: application code compiled into the program ----
 
-// A brand-new plugin, written to disk while the agent is running. It is
-// interpreted Go: one file, one Apply function, nothing to compile.
-const officePlugin = `//go:build ignore
-
-package plugin
-
-import (
-	"context"
-
-	"eipagent/sdk"
-)
-
-func Apply(p *sdk.Plugin) error {
-	p.AddTool(sdk.Tool{
-		Name:        "office_hours",
-		Description: "Returns the office opening hours. Always use this for questions about office hours.",
-		Schema:      sdk.Object(map[string]any{}),
-		Run: func(c context.Context, args map[string]any) (string, error) {
-			return "HOURS", nil
-		},
-	})
-	return nil
+// officeModule is an application module: Go code compiled into this program
+// that registers a tool when the agent starts. Nothing is loaded at run
+// time; to change the hours, build the agent with a different module.
+func officeModule(hours string) engine.Module {
+	return engine.Module{Name: "office", Apply: func(p *sdk.Module) error {
+		p.AddTool(sdk.Tool{
+			Name:        "office_hours",
+			Description: "Returns the office opening hours. Always use this for questions about office hours.",
+			Schema:      sdk.Object(map[string]any{}),
+			Run: func(c context.Context, args map[string]any) (string, error) {
+				return hours, nil
+			},
+		})
+		return nil
+	}}
 }
-`
 
-func plugins() {
-	dir, err := os.MkdirTemp("", "eipagent-plugins-")
+func modules() {
+	office := func(hours string) []kiln.Option {
+		return []kiln.Option{kiln.WithModule(officeModule(hours)), kiln.WithModules("tool_time")}
+	}
+	steps := []struct {
+		label, question string
+		opts            []kiln.Option
+	}{
+		{"1) No modules: no tools", "What is the exact current time? If you have no tool for it, say so.", nil},
+		{"2) Add the standard tool_time module", "What is the exact current time? Use your tool.", []kiln.Option{kiln.WithModules("tool_time")}},
+		{"3) Add the office module compiled into the program", "When is the office open?", office("Mon-Fri 9:00-17:00")},
+		{"4) Ship new hours: build the agent with the updated module", "When is the office open?", office("Mon-Sat 8:00-20:00 (new winter hours)")},
+	}
+	for _, s := range steps {
+		a := newAgent(s.opts...)
+		fmt.Printf("\n%s\n   tools: %v\n", s.label, toolNames(a))
+		ask(a, s.question)
+		a.Close()
+	}
+}
+
+func ask(a *kiln.Agent, q string) {
+	res, err := a.Generate(ctx, q, kiln.MaxSteps(4))
 	check(err)
-	defer os.RemoveAll(dir)
-	a := newAgent(
-		eipagent.WithPreset("dev"),    // dev: unpinned plugin files allowed (secure needs eip.lock pins)
-		eipagent.WithHotReload(false), // we reload explicitly below; in dev it would also reload on save
-		eipagent.WithPluginDir(dir),
-	)
-	defer a.Close()
-	eng := a.Engine()
-	ask := func(q string) {
-		res, err := a.Generate(ctx, q, eipagent.MaxSteps(4))
-		check(err)
-		var used []string
-		for _, c := range res.ToolCalls() {
-			used = append(used, c.Name)
-		}
-		fmt.Printf("  you: %s\n  ai:  %s\n  tools used: %v\n", q, strings.TrimSpace(res.Text), used)
+	var used []string
+	for _, c := range res.ToolCalls() {
+		used = append(used, c.Name)
 	}
-	tools := func() string {
-		var names []string
-		for _, t := range eng.Root().Snapshot().Tools {
-			names = append(names, t.Name)
-		}
-		return fmt.Sprint(names)
+	fmt.Printf("  you: %s\n  ai:  %s\n  tools used: %v\n", q, strings.TrimSpace(res.Text), used)
+}
+
+func toolNames(a *kiln.Agent) []string {
+	var names []string
+	for _, t := range a.Engine().Root().Snapshot().Tools {
+		names = append(names, t.Name)
 	}
-
-	fmt.Println("1) No tools yet:", tools())
-	ask("What is the exact current time? If you have no tool for it, say so.")
-
-	fmt.Println("\n2) Load the built-in tool_time plugin at runtime")
-	check(eng.Load(eipagent.PluginSpec{Use: "tool_time"}))
-	fmt.Println("   tools:", tools())
-	ask("What is the exact current time? Use your tool.")
-
-	fmt.Println("\n3) Write a new plugin file and load it")
-	path := filepath.Join(dir, "office.go")
-	check(os.WriteFile(path, []byte(strings.Replace(officePlugin, "HOURS", "Mon-Fri 9:00-17:00", 1)), 0o644))
-	check(eng.Load(eipagent.PluginSpec{Use: "office"}))
-	fmt.Println("   tools:", tools())
-	ask("When is the office open?")
-
-	fmt.Println("\n4) Edit the plugin's code and reload it (no restart)")
-	check(os.WriteFile(path, []byte(strings.Replace(officePlugin, "HOURS", "Mon-Sat 8:00-20:00 (new winter hours)", 1)), 0o644))
-	check(eng.Reload("office"))
-	ask("When is the office open?")
-
-	fmt.Println("\n5) A broken edit is refused; the running version stays")
-	check(os.WriteFile(path, []byte("package plugin\nfunc Apply( {"), 0o644))
-	if err := eng.Reload("office"); err != nil {
-		fmt.Println("   reload refused:", strings.SplitN(err.Error(), "\n", 2)[0])
-	}
-	fmt.Println("   tools:", tools())
-
-	fmt.Println("\n6) Unload both plugins")
-	check(eng.Unload("office"))
-	check(eng.Unload("tool_time"))
-	fmt.Println("   tools:", tools())
-	for _, st := range a.Status() {
-		fmt.Println("  ", st.String())
-	}
+	return names
 }
 
 // ---- object: typed structured output ----
@@ -258,7 +227,7 @@ type Recipe struct {
 func object() {
 	a := newAgent()
 	defer a.Close()
-	r, err := eipagent.GenerateObject[Recipe](ctx, a, "A quick vegetarian Indian breakfast recipe.")
+	r, err := kiln.GenerateObject[Recipe](ctx, a, "A quick vegetarian Indian breakfast recipe.")
 	check(err)
 	fmt.Printf("%s — %d min, vegetarian=%v\n  %s\n", r.Name, r.Minutes, r.Vegetarian, strings.Join(r.Ingredients, ", "))
 }
@@ -266,8 +235,8 @@ func object() {
 // ---- thread: memory across turns, persisted to disk ----
 
 func thread() {
-	dir := filepath.Join(os.TempDir(), "eipagent-ollama-threads")
-	a := newAgent(eipagent.WithPlugin("threads_file", map[string]any{"dir": dir}))
+	dir := filepath.Join(os.TempDir(), "kiln-ollama-threads")
+	a := newAgent(kiln.WithPersistence("file", dir))
 	defer a.Close()
 	th := a.Thread(fmt.Sprintf("demo-%d", time.Now().Unix()))
 	for _, q := range []string{"Hi! My name is Ganesh and I live in Pune.", "Where do I live, and what's my name?"} {
@@ -276,13 +245,13 @@ func thread() {
 		check(err)
 		fmt.Println("ai: ", res.Text)
 	}
-	fmt.Println("  thread saved under", dir)
+	fmt.Println("  thread saved under", filepath.Join(dir, "threads"))
 }
 
 // ---- approve: human in the loop, answered at the terminal ----
 
 func approve() {
-	sendEmail := eipagent.Tool("send_email", "Send an email", func(ctx context.Context, in struct {
+	sendEmail := kiln.Tool("send_email", "Send an email", func(ctx context.Context, in struct {
 		To      string `json:"to"`
 		Subject string `json:"subject"`
 		Body    string `json:"body"`
@@ -291,16 +260,16 @@ func approve() {
 	})
 	in := bufio.NewReader(os.Stdin)
 	a := newAgent(
-		eipagent.WithTools(sendEmail),
-		eipagent.WithPlugin("hook_approval", map[string]any{"interrupt_on": map[string]any{"send_email": true}}),
-		eipagent.WithApprover(func(ctx context.Context, it eipagent.Interrupt) (*eipagent.Decision, error) {
+		kiln.WithTools(sendEmail),
+		kiln.WithApprovals("send_email"),
+		kiln.WithApprover(func(ctx context.Context, it kiln.Interrupt) (*kiln.Decision, error) {
 			fmt.Printf("  ⚠ the agent wants to call %s %v\n  approve? [y/N] ", it.ToolCall.Name, it.ToolCall.Args)
 			ans, _ := in.ReadString('\n')
 			if strings.TrimSpace(strings.ToLower(ans)) == "y" {
-				d := eipagent.Approve(it.ID)
+				d := kiln.Approve(it.ID)
 				return &d, nil
 			}
-			d := eipagent.Reject(it.ID, "the user declined")
+			d := kiln.Reject(it.ID, "the user declined")
 			return &d, nil
 		}),
 	)
@@ -313,11 +282,11 @@ func approve() {
 // ---- shell: the model runs commands in a throwaway workspace ----
 
 func shell() {
-	root := filepath.Join(os.TempDir(), "eipagent-ollama-boxes")
+	root := filepath.Join(os.TempDir(), "kiln-ollama-boxes")
 	a := newAgent(
-		eipagent.WithPlugin("sandbox_local", map[string]any{"root": root}), // swap for sandbox_docker to isolate
-		eipagent.WithPlugin("workspace_sandbox", map[string]any{"provider": "local"}),
-		eipagent.WithPlugins("tool_shell", "tool_fs"),
+		kiln.WithModuleConfig("sandbox_local", map[string]any{"root": root}), // swap for sandbox_docker to isolate
+		kiln.WithModuleConfig("workspace_sandbox", map[string]any{"provider": "local"}),
+		kiln.WithModules("tool_shell", "tool_fs"),
 	)
 	defer a.Close() // deletes the workspace
 	res, err := a.Generate(ctx, "Create a file hello.py that prints the first 10 squares, run it with python3, and tell me the output.")
@@ -342,7 +311,7 @@ func vision() {
 	}
 	a := newAgent()
 	defer a.Close()
-	res, err := a.Generate(ctx, "Describe this image in two sentences.", eipagent.WithImages(eipagent.Image{MediaType: mt, Data: data}))
+	res, err := a.Generate(ctx, "Describe this image in two sentences.", kiln.WithImages(kiln.Image{MediaType: mt, Data: data}))
 	check(err)
 	fmt.Println(res.Text)
 }

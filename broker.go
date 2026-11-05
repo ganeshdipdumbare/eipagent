@@ -1,4 +1,4 @@
-package eipagent
+package kiln
 
 import (
 	"bytes"
@@ -14,8 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ganeshdipdumbare/eipagent/engine"
-	"github.com/ganeshdipdumbare/eipagent/sdk"
+	"github.com/ganeshdipdumbare/kiln/sdk"
 )
 
 // broker keeps secrets on the host for an agent running WithRunIn. The
@@ -27,10 +26,10 @@ type broker struct {
 	host   *Agent
 	hosts  map[string][]egressRule // secret name -> where its placeholder may go (RunIn.SecretHosts)
 	egress []egressRule            // where the box may go without secrets (RunIn.Egress)
-	// callers are the plugin names the box may ask for secrets as: the
-	// ones the host put in its profile, plus the plugins it loads on its
+	// callers are the module names the box may ask for secrets as: the
+	// ones the host put in its profile, plus the modules it loads on its
 	// own. The box names the caller itself, so this keeps a box from
-	// claiming another plugin's grants. nil: any (not yet set).
+	// claiming another module's grants. nil: any (not yet set).
 	callers      map[string]bool
 	secretGrants map[string]map[string]bool
 	allowPrivate bool
@@ -218,7 +217,7 @@ func newBroker(host *Agent, ri *RunIn) (*broker, error) {
 	return b, nil
 }
 
-// setCallers records the plugins the box was started with (see callers).
+// setSecretGrants records what each box module may resolve, by module name.
 func (b *broker) setSecretGrants(grants map[string][]string) {
 	b.secretGrants = map[string]map[string]bool{}
 	for name, list := range grants {
@@ -226,27 +225,28 @@ func (b *broker) setSecretGrants(grants map[string][]string) {
 		for _, n := range list {
 			set[n] = true
 		}
-		b.secretGrants[sdk.CanonicalPlugin(name)] = set
+		b.secretGrants[name] = set
 	}
 }
 
 func (b *broker) secretAllowed(caller, name string) bool {
-	set, ok := b.secretGrants[sdk.CanonicalPlugin(caller)]
+	set, ok := b.secretGrants[caller]
 	return ok && set[name]
 }
 
-func (b *broker) setCallers(specs []engine.PluginSpec) {
+// setCallers records the module instances the box runs (see callers).
+func (b *broker) setCallers(names []string) {
 	b.callers = map[string]bool{}
-	for _, s := range specs {
-		b.callers[sdk.CanonicalPlugin(s.Name())] = true
+	for _, n := range names {
+		b.callers[n] = true
 	}
-	for _, use := range autoPlugins {
-		b.callers[sdk.CanonicalPlugin(use)] = true
+	for _, n := range []string{"bridge_llm", "bridge_tools", "bridge_secrets"} {
+		b.callers[n] = true
 	}
 }
 
 func (b *broker) knownCaller(name string) bool {
-	return b.callers == nil || b.callers[sdk.CanonicalPlugin(name)]
+	return b.callers == nil || b.callers[name]
 }
 
 func (b *broker) services() (*sdk.Secrets, *sdk.Audit) {
@@ -267,7 +267,7 @@ func (b *broker) audit(kind string, d map[string]any) {
 }
 
 // resolve returns the real value of a secret, checked against the
-// grants of the box plugin that asked for it.
+// grants of the box module that asked for it.
 func (b *broker) resolve(ctx context.Context, caller, name string) (string, error) {
 	s, _ := b.services()
 	if s == nil || s.Get == nil {
@@ -291,9 +291,9 @@ func (b *broker) placeholder(ctx context.Context, caller, name string) (string, 
 			_, err = b.resolve(ctx, caller, name)
 		}
 	} else {
-		err = fmt.Errorf("sandbox: secret %s asked for as %q, which is not a plugin in the box", name, caller)
+		err = fmt.Errorf("sandbox: secret %s asked for as %q, which is not a module in the box", name, caller)
 	}
-	d := map[string]any{"plugin": caller, "secret": name, "outcome": "granted", "value": "placeholder"}
+	d := map[string]any{"module": caller, "secret": name, "outcome": "granted", "value": "placeholder"}
 	if err != nil {
 		d["outcome"], d["error"] = "denied", sdk.Redact(err.Error())
 		b.audit("secret.access", d)
@@ -371,7 +371,7 @@ func (b *broker) fetch(ctx context.Context, req wireHTTPReq) (resp *wireHTTPResp
 		}
 		names = append(names, sec.name)
 		if !anyAllows(b.hosts[sec.name], method, dest, p) {
-			rec["plugin"] = sec.caller
+			rec["module"] = sec.caller
 			return deny(fmt.Errorf("sandbox egress: secret %s may not be sent to %s %s%s (RunIn.SecretHosts)", sec.name, method, dest, p))
 		}
 		v, err := b.resolve(ctx, sec.caller, sec.name)

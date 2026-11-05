@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-// ---- Sandboxes: provided as "sandbox/<name>" by provider plugins ----
+// ---- Sandboxes: provided as "sandbox/<name>" by provider modules ----
 
 type SandboxSpec struct {
 	Image      string
@@ -49,7 +49,7 @@ type ExecResult struct {
 	DurationMS     int64
 }
 
-// Process is a long-running command (e.g. `eip serve --stdio` inside a box).
+// Process is a long-running command (e.g. `kiln serve --stdio` inside a box).
 type Process struct {
 	Stdin  io.WriteCloser
 	Stdout io.ReadCloser
@@ -95,13 +95,13 @@ type ExecWorld struct {
 	For  func(ctx context.Context) (*Sandbox, error)
 }
 
-// pluginSandboxes is what Service("sandbox/<name>") hands a plugin: the
+// moduleSandboxes is what Service("sandbox/<name>") hands a module: the
 // same provider, but its sandboxes have no Upload / Download and it
 // refuses host mounts. Both move files between a host path and the box,
-// so a plugin without fs permissions could use them to read or write
+// so a module without fs permissions could use them to read or write
 // anywhere on the host. Only the host application (WithRunIn) moves files
-// across that boundary; plugins use ReadFile / WriteFile inside the box.
-func pluginSandboxes(p *SandboxProvider, allowAttach bool) *SandboxProvider {
+// across that boundary; modules use ReadFile / WriteFile inside the box.
+func moduleSandboxes(p *SandboxProvider, allowAttach bool) *SandboxProvider {
 	strip := func(b *Sandbox, err error) (*Sandbox, error) {
 		if b == nil {
 			return nil, err
@@ -114,7 +114,7 @@ func pluginSandboxes(p *SandboxProvider, allowAttach bool) *SandboxProvider {
 	if p.Create != nil {
 		cp.Create = func(ctx context.Context, spec SandboxSpec) (*Sandbox, error) {
 			if len(spec.Mounts) > 0 {
-				return nil, fmt.Errorf("sandbox mounts are set by the host application, not by plugins")
+				return nil, fmt.Errorf("sandbox mounts are set by the host application, not by modules")
 			}
 			if err := CheckSandboxSpec(spec); err != nil {
 				return nil, err

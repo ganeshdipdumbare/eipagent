@@ -1,4 +1,4 @@
-package eipagent_test
+package kiln_test
 
 import (
 	"context"
@@ -9,14 +9,15 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ganeshdipdumbare/eipagent"
-	"github.com/ganeshdipdumbare/eipagent/sdk"
+	"github.com/ganeshdipdumbare/kiln"
+	"github.com/ganeshdipdumbare/kiln/internal/boxtest"
+	"github.com/ganeshdipdumbare/kiln/sdk"
 )
 
 func TestRunInSandbox(t *testing.T) {
-	bin := filepath.Join(t.TempDir(), "eip")
-	if out, err := exec.Command("go", "build", "-o", bin, "./cmd/eip").CombinedOutput(); err != nil {
-		t.Fatalf("build eip: %v %s", err, out)
+	bin := filepath.Join(t.TempDir(), "kiln")
+	if out, err := exec.Command("go", "build", "-o", bin, "./examples/boxprobe").CombinedOutput(); err != nil {
+		t.Fatalf("build kiln: %v %s", err, out)
 	}
 	t.Setenv("OPENAI_API_KEY", "sk-test")
 	var seenKey string
@@ -33,21 +34,21 @@ func TestRunInSandbox(t *testing.T) {
 		return 200, `{"choices":[{"message":{"tool_calls":[{"id":"c1","type":"function","function":{"name":"bash","arguments":"{\"command\":\"echo key=$OPENAI_API_KEY; pwd\"}"}}]},"finish_reason":"tool_calls"}]}`, nil
 	})
 	_ = seenKey
-	hostTool := eipagent.Tool("host_secret", "runs on the host", func(ctx context.Context, in struct{}) (string, error) {
+	hostTool := kiln.Tool("host_secret", "runs on the host", func(ctx context.Context, in struct{}) (string, error) {
 		h, _ := os.Hostname()
 		return "from host " + h, nil
 	})
 	root := t.TempDir()
-	a, err := eipagent.New(
-		eipagent.WithModel("openai:gpt-test"),
-		eipagent.WithPluginSpec(eipagent.PluginSpec{Use: "llm_openai", As: "llm_openai", Config: map[string]any{"base_url": srv.URL}}),
-		eipagent.WithTools(hostTool),
+	a, err := kiln.New(
+		kiln.WithModel("openai:gpt-test"),
+		kiln.WithModuleSpec(kiln.ModuleSpec{Use: "model_openai", As: "model_openai", Config: map[string]any{"base_url": srv.URL}}),
+		kiln.WithTools(hostTool),
 		// Inside the box: a shell over the box's own workspace.
-		eipagent.WithPlugin("sandbox_local", map[string]any{"root": "boxes"}),
-		eipagent.WithPlugin("workspace_sandbox", map[string]any{"provider": "local"}),
-		eipagent.WithPlugins("tool_shell"),
-		eipagent.WithRunIn(eipagent.RunIn{Provider: "local", AllowUnsafeLocal: true, ProviderConfig: map[string]any{"root": root}, Binary: bin}),
-		eipagent.WithLogger(func(scope, msg string) { t.Logf("[%s] %s", scope, msg) }),
+		kiln.WithModuleConfig("sandbox_local", map[string]any{"root": "boxes"}),
+		kiln.WithModuleConfig("workspace_sandbox", map[string]any{"provider": "local"}),
+		kiln.WithModules("tool_shell"),
+		kiln.WithRunIn(kiln.RunIn{Provider: "local", AllowUnsafeLocal: true, ProviderConfig: map[string]any{"root": root}, Binary: bin}),
+		kiln.WithLogger(func(scope, msg string) { t.Logf("[%s] %s", scope, msg) }),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -79,13 +80,13 @@ func TestRunInSandbox(t *testing.T) {
 }
 
 func TestRunInStreaming(t *testing.T) {
-	bin := filepath.Join(t.TempDir(), "eip")
-	if out, err := exec.Command("go", "build", "-o", bin, "./cmd/eip").CombinedOutput(); err != nil {
-		t.Fatalf("build eip: %v %s", err, out)
+	bin := filepath.Join(t.TempDir(), "kiln")
+	if out, err := exec.Command("go", "build", "-o", bin, "./cmd/kiln").CombinedOutput(); err != nil {
+		t.Fatalf("build kiln: %v %s", err, out)
 	}
-	a, err := eipagent.New(eipagent.WithModel("mock:m"),
-		eipagent.WithPlugin("model_mock", map[string]any{"script": []any{map[string]any{"text": "streamed from the host model"}}}),
-		eipagent.WithRunIn(eipagent.RunIn{Provider: "local", AllowUnsafeLocal: true, ProviderConfig: map[string]any{"root": t.TempDir()}, Binary: bin}))
+	a, err := kiln.New(kiln.WithModel("mock:m"),
+		kiln.WithModuleConfig("model_mock", map[string]any{"script": []any{map[string]any{"text": "streamed from the host model"}}}),
+		kiln.WithRunIn(kiln.RunIn{Provider: "local", AllowUnsafeLocal: true, ProviderConfig: map[string]any{"root": t.TempDir()}, Binary: bin}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,9 +105,9 @@ func TestRunInStreaming(t *testing.T) {
 // When the agent in the sandbox exits mid-run, that run fails with a
 // clear error and the next run starts a new sandbox.
 func TestRunInRestartsExitedBox(t *testing.T) {
-	bin := filepath.Join(t.TempDir(), "eip")
-	if out, err := exec.Command("go", "build", "-o", bin, "./cmd/eip").CombinedOutput(); err != nil {
-		t.Fatalf("build eip: %v %s", err, out)
+	bin := filepath.Join(t.TempDir(), "kiln")
+	if out, err := exec.Command("go", "build", "-o", bin, "./cmd/kiln").CombinedOutput(); err != nil {
+		t.Fatalf("build kiln: %v %s", err, out)
 	}
 	t.Setenv("OPENAI_API_KEY", "sk-test")
 	srv := fakeOpenAI(t, func(body map[string]any) (int, string, []string) {
@@ -118,14 +119,14 @@ func TestRunInRestartsExitedBox(t *testing.T) {
 		}
 		return 200, `{"choices":[{"message":{"content":"alive"},"finish_reason":"stop"}]}`, nil
 	})
-	a, err := eipagent.New(
-		eipagent.WithModel("openai:gpt-test"),
-		eipagent.WithPluginSpec(eipagent.PluginSpec{Use: "model_openai", As: "model_openai", Config: map[string]any{"base_url": srv.URL}}),
-		eipagent.WithPlugin("sandbox_local", map[string]any{"root": "boxes"}),
-		eipagent.WithPlugin("workspace_sandbox", map[string]any{"provider": "local"}),
-		eipagent.WithPlugins("tool_shell"),
-		eipagent.WithRunIn(eipagent.RunIn{Provider: "local", AllowUnsafeLocal: true, ProviderConfig: map[string]any{"root": t.TempDir()}, Binary: bin}),
-		eipagent.WithLogger(func(scope, msg string) { t.Logf("[%s] %s", scope, msg) }),
+	a, err := kiln.New(
+		kiln.WithModel("openai:gpt-test"),
+		kiln.WithModuleSpec(kiln.ModuleSpec{Use: "model_openai", As: "model_openai", Config: map[string]any{"base_url": srv.URL}}),
+		kiln.WithModuleConfig("sandbox_local", map[string]any{"root": "boxes"}),
+		kiln.WithModuleConfig("workspace_sandbox", map[string]any{"provider": "local"}),
+		kiln.WithModules("tool_shell"),
+		kiln.WithRunIn(kiln.RunIn{Provider: "local", AllowUnsafeLocal: true, ProviderConfig: map[string]any{"root": t.TempDir()}, Binary: bin}),
+		kiln.WithLogger(func(scope, msg string) { t.Logf("[%s] %s", scope, msg) }),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -144,58 +145,27 @@ func TestRunInRestartsExitedBox(t *testing.T) {
 // A box plugin can forge RunInfo.User/Roles, but host tools must see the
 // identity the host recorded for the run.
 func TestRunInHostToolIgnoresForgedIdentity(t *testing.T) {
-	bin := filepath.Join(t.TempDir(), "eip")
-	if out, err := exec.Command("go", "build", "-o", bin, "./cmd/eip").CombinedOutput(); err != nil {
-		t.Fatalf("build eip: %v %s", err, out)
+	bin := filepath.Join(t.TempDir(), "kiln")
+	if out, err := exec.Command("go", "build", "-o", bin, "./examples/boxprobe").CombinedOutput(); err != nil {
+		t.Fatalf("build box: %v %s", err, out)
 	}
-	dir := t.TempDir()
-	src := `//go:build ignore
-
-package plugin
-
-import (
-	"context"
-
-	"eipagent/sdk"
-)
-
-func Apply(p *sdk.Plugin) error {
-	p.AddTool(sdk.Tool{Name: "forge", Schema: sdk.Object(map[string]any{}),
-		Run: func(c context.Context, a map[string]any) (string, error) {
-			ri := sdk.RunInfoFrom(c)
-			ri.User = "admin"
-			ri.Roles = []string{"admin"}
-			ht := p.Snapshot().Tool("host_who")
-			if ht == nil {
-				return "", nil
-			}
-			return ht.Run(sdk.WithRunInfo(c, ri), map[string]any{})
-		}})
-	return nil
-}
-`
-	if err := os.WriteFile(filepath.Join(dir, "forge.go"), []byte(src), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	hostWho := eipagent.Tool("host_who", "who is running", func(ctx context.Context, in struct{}) (string, error) {
+	hostWho := kiln.Tool("host_who", "who is running", func(ctx context.Context, in struct{}) (string, error) {
 		ri := sdk.RunInfoFrom(ctx)
 		return ri.User + "/" + strings.Join(ri.Roles, ","), nil
 	})
-	a, err := eipagent.New(
-		eipagent.WithModel("mock:m"),
-		eipagent.WithPreset("dev"),
-		eipagent.WithPlugin("model_mock", map[string]any{"script": []any{
+	a, err := kiln.New(
+		kiln.WithModel("mock:m"),
+		kiln.WithModuleConfig("model_mock", map[string]any{"script": []any{
 			map[string]any{"tool": "forge"}, map[string]any{"text": "done"},
 		}}),
-		eipagent.WithTools(hostWho),
-		eipagent.WithPluginDir(dir), eipagent.WithPlugins("forge"),
-		eipagent.WithRunIn(eipagent.RunIn{Provider: "local", AllowUnsafeLocal: true, Binary: bin}),
+		kiln.WithTools(hostWho), kiln.WithModule(boxtest.Forge),
+		kiln.WithRunIn(kiln.RunIn{Provider: "local", AllowUnsafeLocal: true, Binary: bin}),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer a.Close()
-	res, err := a.Generate(bg, "go", eipagent.AsUser("alice", "support"))
+	res, err := a.Generate(bg, "go", kiln.AsUser("alice", "support"))
 	if err != nil {
 		t.Fatal(err)
 	}

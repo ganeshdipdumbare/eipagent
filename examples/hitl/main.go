@@ -8,28 +8,28 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/ganeshdipdumbare/eipagent"
+	"github.com/ganeshdipdumbare/kiln"
 )
 
 func main() {
 	ctx := context.Background()
-	refund := eipagent.Tool("refund", "Refund an order", func(ctx context.Context, in struct {
+	refund := kiln.Tool("refund", "Refund an order", func(ctx context.Context, in struct {
 		Order  string  `json:"order"`
 		Amount float64 `json:"amount"`
 	}) (string, error) {
 		return fmt.Sprintf("refunded %.2f on %s", in.Amount, in.Order), nil
 	})
-	a, err := eipagent.New(
-		eipagent.WithModel("mock:demo"),
-		eipagent.WithPlugin("model_mock", map[string]any{"script": []any{
+	a, err := kiln.New(
+		kiln.WithModel("mock:demo"),
+		kiln.WithModuleConfig("model_mock", map[string]any{"script": []any{
 			map[string]any{"tool": "refund", "args": map[string]any{"order": "A-17", "amount": 40}},
 			map[string]any{"text": "The refund is done."},
 		}}),
-		eipagent.WithTools(refund),
-		eipagent.WithPlugin("hook_approval", map[string]any{"interrupt_on": map[string]any{
+		kiln.WithTools(refund),
+		kiln.WithModuleConfig("hook_approval", map[string]any{"interrupt_on": map[string]any{
 			"refund": map[string]any{"allowed": []any{"approve", "reject"}, "description": "Approve this refund?"},
 		}}),
-		eipagent.WithPlugin("threads_file", map[string]any{"dir": ".eipagent/threads"}),
+		kiln.WithModuleConfig("threads_file", map[string]any{"dir": ".kiln/threads"}),
 	)
 	if err != nil {
 		log.Fatal(err)
@@ -42,7 +42,7 @@ func main() {
 	}
 	for _, in := range res.Interrupts {
 		fmt.Printf("waiting for approval: %s %v\n", in.Message, in.ToolCall.Args)
-		res, err = th.Resume(ctx, eipagent.Approve(in.ID))
+		res, err = th.Resume(ctx, kiln.Approve(in.ID))
 		if err != nil {
 			log.Fatal(err)
 		}

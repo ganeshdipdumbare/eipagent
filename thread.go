@@ -1,4 +1,4 @@
-package eipagent
+package kiln
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ganeshdipdumbare/eipagent/sdk"
+	"github.com/ganeshdipdumbare/kiln/sdk"
 )
 
 // Thread is a persistent conversation stored by the "threads" service.
@@ -54,7 +54,7 @@ func (t *Thread) Generate(ctx context.Context, prompt string, opts ...RunOption)
 		return nil, err
 	}
 	if len(ts.Pending) > 0 {
-		return nil, fmt.Errorf("eipagent: thread %s is waiting on %d interrupt(s); call Resume", t.id, len(ts.Pending))
+		return nil, fmt.Errorf("kiln: thread %s is waiting on %d interrupt(s); call Resume", t.id, len(ts.Pending))
 	}
 	ro := t.a.runOpts(opts)
 	st := t.a.newState(ro)
@@ -84,7 +84,7 @@ func (t *Thread) ResumeWith(ctx context.Context, decisions []sdk.Decision, opts 
 		return nil, err
 	}
 	if len(ts.Pending) == 0 {
-		return nil, fmt.Errorf("eipagent: thread %s has nothing to resume", t.id)
+		return nil, fmt.Errorf("kiln: thread %s has nothing to resume", t.id)
 	}
 	ro := t.a.runOpts(opts)
 	st := t.a.newState(ro)
@@ -152,17 +152,17 @@ func (t *Thread) runAndSave(ctx context.Context, cp *sdk.Checkpointer, ts *sdk.T
 // already the model's answer.
 func (t *Thread) Continue(ctx context.Context, opts ...RunOption) (*Result, error) {
 	if t.a.remote != nil {
-		return nil, errors.New("eipagent: Thread.Continue is not supported with WithRunIn")
+		return nil, errors.New("kiln: Thread.Continue is not supported with WithRunIn")
 	}
 	cp, ts, err := t.load(ctx)
 	if err != nil {
 		return nil, err
 	}
 	if len(ts.Pending) > 0 {
-		return nil, fmt.Errorf("eipagent: thread %s is waiting on %d interrupt(s); call Resume", t.id, len(ts.Pending))
+		return nil, fmt.Errorf("kiln: thread %s is waiting on %d interrupt(s); call Resume", t.id, len(ts.Pending))
 	}
 	if n := len(ts.Messages); n == 0 || (ts.Messages[n-1].Role == sdk.RoleAssistant && len(ts.Messages[n-1].ToolCalls) == 0) {
-		return nil, fmt.Errorf("eipagent: thread %s has nothing to continue", t.id)
+		return nil, fmt.Errorf("kiln: thread %s has nothing to continue", t.id)
 	}
 	ro := t.a.runOpts(opts)
 	st := t.a.newState(ro)
@@ -176,14 +176,14 @@ func (t *Thread) Continue(ctx context.Context, opts ...RunOption) (*Result, erro
 // one. It fails if newID already exists.
 func (t *Thread) Fork(ctx context.Context, newID string) (*Thread, error) {
 	if t.a.remote != nil {
-		return nil, errors.New("eipagent: Thread.Fork is not supported with WithRunIn")
+		return nil, errors.New("kiln: Thread.Fork is not supported with WithRunIn")
 	}
 	cp, ts, err := t.load(ctx)
 	if err != nil {
 		return nil, err
 	}
 	if ts.Version == 0 {
-		return nil, fmt.Errorf("eipagent: thread %s does not exist", t.id)
+		return nil, fmt.Errorf("kiln: thread %s does not exist", t.id)
 	}
 	vals := map[string]any{}
 	for k, v := range ts.Values {
@@ -193,7 +193,7 @@ func (t *Thread) Fork(ctx context.Context, newID string) (*Thread, error) {
 		Pending: append([]sdk.Interrupt(nil), ts.Pending...), Values: vals, Updated: time.Now().UnixMilli()}
 	if err := cp.Save(ctx, cp2, 0); err != nil {
 		if errors.Is(err, sdk.ErrVersionConflict) {
-			return nil, fmt.Errorf("eipagent: thread %s already exists", newID)
+			return nil, fmt.Errorf("kiln: thread %s already exists", newID)
 		}
 		return nil, err
 	}

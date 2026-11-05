@@ -1,13 +1,14 @@
-package eipagent
+package kiln
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/ganeshdipdumbare/eipagent/engine"
+	"github.com/ganeshdipdumbare/kiln/engine"
 )
 
-// Options for common setups. Each one loads standard plugins with
+// Options for common setups. Each one loads standard modules with
 // sensible config, and its comment names them, so moving to WithPlugin
 // for finer control is one step. Calling one twice merges (approvals,
 // MCP servers) or replaces (the rest).
@@ -16,29 +17,33 @@ import (
 // approvals) and long-term memory across restarts.
 //
 //	WithPersistence("memory", "")                 // threads_inmem + memory_inmem (the default; lost on exit)
-//	WithPersistence("file", ".eipagent/data")     // threads_file + memory_file under that directory
+//	WithPersistence("file", ".kiln/data")     // threads_file + memory_file under that directory
 //	WithPersistence("postgres", "secret://DSN")   // db_sql + threads_sql + memory_sql; any replica serves any thread
 //
-// For postgres, import the driver once: import _ "github.com/ganeshdipdumbare/eipagent/drivers/postgres".
+// For postgres, import the driver once: import _ "github.com/ganeshdipdumbare/kiln/drivers/postgres".
 func WithPersistence(kind, target string) Option {
 	return func(c *config) {
-		var add []engine.PluginSpec
+		var add []engine.ModuleSpec
 		switch strings.ToLower(kind) {
 		case "file":
 			if target == "" {
-				target = ".eipagent"
+				target = ".kiln"
 			}
-			add = []engine.PluginSpec{
+			add = []engine.ModuleSpec{
 				{Use: "threads_file", Config: map[string]any{"dir": filepath.Join(target, "threads")}},
 				{Use: "memory_file", Config: map[string]any{"path": filepath.Join(target, "memory.json")}},
 			}
+			// The modules work inside directories they are given; the facade
+			// creates them before the agent starts.
+			dir := target
+			c.prepare = append(c.prepare, func() error { return os.MkdirAll(filepath.Join(dir, "threads"), 0o700) })
 		case "postgres", "sql":
-			add = []engine.PluginSpec{
+			add = []engine.ModuleSpec{
 				{Use: "db_sql", Config: map[string]any{"dsn": target}},
 				{Use: "threads_sql"}, {Use: "memory_sql"},
 			}
 		default: // "memory"
-			add = []engine.PluginSpec{{Use: "threads_inmem"}, {Use: "memory_inmem"}}
+			add = []engine.ModuleSpec{{Use: "threads_inmem"}, {Use: "memory_inmem"}}
 		}
 		c.specs = replaceKinds(c.specs, add, "threads_", "memory_", "db_sql")
 	}
@@ -63,7 +68,7 @@ func WithApprovals(tools ...string) Option {
 		for _, t := range tools {
 			on[t] = true
 		}
-		c.specs = append(c.specs, engine.PluginSpec{Use: "hook_approval", Config: map[string]any{"interrupt_on": on}})
+		c.specs = append(c.specs, engine.ModuleSpec{Use: "hook_approval", Config: map[string]any{"interrupt_on": on}})
 	}
 }
 
@@ -73,20 +78,21 @@ func WithApprovals(tools ...string) Option {
 // isolation, for development) or a provider you load yourself. Loads sandbox_<provider> + workspace_sandbox.
 func WithSandbox(provider string) Option {
 	return func(c *config) {
-		add := []engine.PluginSpec{{Use: "workspace_sandbox", Config: map[string]any{"provider": provider}}}
+		add := []engine.ModuleSpec{{Use: "workspace_sandbox", Config: map[string]any{"provider": provider}}}
 		if provider == "docker" || provider == "microsandbox" || provider == "local" {
-			add = append([]engine.PluginSpec{{Use: "sandbox_" + provider}}, add...)
+			add = append([]engine.ModuleSpec{{Use: "sandbox_" + provider}}, add...)
 		}
 		c.specs = replaceKinds(c.specs, add, "workspace_")
 	}
 }
 
 // WithAudit writes a tamper-evident audit log (hash-chained JSON lines)
-// of every model call, tool call, approval and plugin change. Loads
+// of every model call, tool call, approval and module change. Loads
 // audit_file. Verify it with audit.Verify.
 func WithAudit(path string) Option {
 	return func(c *config) {
-		c.specs = replaceKinds(c.specs, []engine.PluginSpec{{Use: "audit_file", Config: map[string]any{"path": path}}}, "audit_file")
+		c.prepare = append(c.prepare, func() error { return os.MkdirAll(filepath.Dir(path), 0o700) })
+		c.specs = replaceKinds(c.specs, []engine.ModuleSpec{{Use: "audit_file", Config: map[string]any{"path": path}}}, "audit_file")
 	}
 }
 
@@ -95,7 +101,7 @@ func WithAudit(path string) Option {
 // Loads trace_otlp.
 func WithTracing(endpoint string) Option {
 	return func(c *config) {
-		c.specs = replaceKinds(c.specs, []engine.PluginSpec{{Use: "trace_otlp", Config: map[string]any{"endpoint": endpoint}}}, "trace_otlp")
+		c.specs = replaceKinds(c.specs, []engine.ModuleSpec{{Use: "trace_otlp", Config: map[string]any{"endpoint": endpoint}}}, "trace_otlp")
 	}
 }
 
@@ -125,7 +131,7 @@ func WithMCP(name, target string, args ...string) Option {
 				return
 			}
 		}
-		c.specs = append(c.specs, engine.PluginSpec{Use: "tool_mcp", Config: map[string]any{"servers": []any{srv}}})
+		c.specs = append(c.specs, engine.ModuleSpec{Use: "tool_mcp", Config: map[string]any{"servers": []any{srv}}})
 	}
 }
 
@@ -135,7 +141,7 @@ func WithMCP(name, target string, args ...string) Option {
 // Loads tool_websearch; add tool_fetch to let it read the pages.
 func WithWebSearch(backend string) Option {
 	return func(c *config) {
-		c.specs = replaceKinds(c.specs, []engine.PluginSpec{{Use: "tool_websearch", Config: map[string]any{"backend": backend}}}, "tool_websearch")
+		c.specs = replaceKinds(c.specs, []engine.ModuleSpec{{Use: "tool_websearch", Config: map[string]any{"backend": backend}}}, "tool_websearch")
 	}
 }
 
@@ -145,18 +151,18 @@ func WithWebSearch(backend string) Option {
 // thinkingConfig). Loads hook_thinking.
 func WithThinking(effort string) Option {
 	return func(c *config) {
-		c.specs = replaceKinds(c.specs, []engine.PluginSpec{{Use: "hook_thinking", Config: map[string]any{"effort": effort}}}, "hook_thinking")
+		c.specs = replaceKinds(c.specs, []engine.ModuleSpec{{Use: "hook_thinking", Config: map[string]any{"effort": effort}}}, "hook_thinking")
 	}
 }
 
-// replaceKinds drops rows whose plugin (current or old name) starts with
+// replaceKinds drops rows whose module (current or old name) starts with
 // any of the prefixes, then appends add.
-func replaceKinds(specs, add []engine.PluginSpec, prefixes ...string) []engine.PluginSpec {
-	var out []engine.PluginSpec
+func replaceKinds(specs, add []engine.ModuleSpec, prefixes ...string) []engine.ModuleSpec {
+	var out []engine.ModuleSpec
 	for _, s := range specs {
 		drop := false
 		for _, p := range prefixes {
-			if strings.HasPrefix(canonicalUse(s.Use), p) {
+			if strings.HasPrefix(s.Use, p) {
 				drop = true
 			}
 		}

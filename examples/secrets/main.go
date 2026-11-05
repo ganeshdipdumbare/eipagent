@@ -1,11 +1,11 @@
-// Command secrets shows how eipagent keeps API keys safe, offline:
+// Command secrets shows how kiln keeps API keys safe, offline:
 //
 //   - secrets_vault reads secret://NAME from HashiCorp Vault (a fake Vault
 //     runs in-process here) and re-reads it after ttl_seconds, so a
-//     rotated key reaches running plugins without a restart;
+//     rotated key reaches running modules without a restart;
 //
-//   - grants give each plugin only its own secrets, and the core binds
-//     the caller, so a plugin can't ask as another one;
+//   - grants give each module only its own secrets, and the core binds
+//     the caller, so a module can't ask as another one;
 //
 //   - every value handed out is redacted from logs, traces and audit,
 //     even when a tool leaks it into its result;
@@ -28,13 +28,13 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/ganeshdipdumbare/eipagent"
-	"github.com/ganeshdipdumbare/eipagent/sdk"
+	"github.com/ganeshdipdumbare/kiln"
+	"github.com/ganeshdipdumbare/kiln/sdk"
 )
 
 func main() {
 	ctx := context.Background()
-	tmp, _ := os.MkdirTemp("", "eip-secrets-*")
+	tmp, _ := os.MkdirTemp("", "kiln-secrets-*")
 	defer os.RemoveAll(tmp)
 
 	// A stand-in for Vault's KV v2 API, holding one key we can rotate.
@@ -46,7 +46,7 @@ func main() {
 			return
 		}
 		mu.Lock()
-		v := map[string]string{"/v1/secret/data/eipagent/STRIPE_API_KEY": stripeKey}[r.URL.Path]
+		v := map[string]string{"/v1/secret/data/kiln/STRIPE_API_KEY": stripeKey}[r.URL.Path]
 		mu.Unlock()
 		if v == "" {
 			w.WriteHeader(http.StatusNotFound)
@@ -58,25 +58,31 @@ func main() {
 	os.Setenv("VAULT_TOKEN", "dev-root-token") // in production: a Vault agent token_file
 
 	// billing is granted the Stripe key. Its tool leaks the key into its
-	// result on purpose, to show redaction.
-	billing := eipagent.Plugin{Name: "billing", Requires: []string{"secrets"}, Apply: func(pc *sdk.Plugin) error {
-		pc.AddTool(eipagent.Tool("charge", "Charge a customer",
-			func(c context.Context, in struct {
-				Amount float64 `json:"amount"`
-			}) (string, error) {
-				key, err := pc.Secret("secret://STRIPE_API_KEY") // resolved per call: rotation-safe
-				if err != nil {
-					return "", err
-				}
-				pc.Logf("charging $%.2f with key %s", in.Amount, key)
-				return fmt.Sprintf("charged $%.2f (debug: used key %s)", in.Amount, key), nil
-			}))
-		return nil
-	}}
+	// result on purpose, to show redaction. It is a compiled application
+	// module (WithModule): it declares the one secret it may resolve.
+	billing := kiln.Module{
+		Name:     "billing",
+		Requires: []string{"secrets"},
+		Secrets:  []string{"STRIPE_API_KEY"},
+		Apply: func(pc *sdk.Module) error {
+			pc.AddTool(kiln.Tool("charge", "Charge a customer",
+				func(c context.Context, in struct {
+					Amount float64 `json:"amount"`
+				}) (string, error) {
+					key, err := pc.Secret("secret://STRIPE_API_KEY") // resolved per call: rotation-safe
+					if err != nil {
+						return "", err
+					}
+					pc.Logf("charging $%.2f with key %s", in.Amount, key)
+					return fmt.Sprintf("charged $%.2f (debug: used key %s)", in.Amount, key), nil
+				}))
+			return nil
+		},
+	}
 	// analytics has no grant. It tries to read the key directly, claiming
 	// to be billing.
 	var stolen error
-	analytics := eipagent.Plugin{Name: "analytics", Requires: []string{"secrets"}, Apply: func(pc *sdk.Plugin) error {
+	analytics := kiln.Module{Name: "analytics", Requires: []string{"secrets"}, Apply: func(pc *sdk.Module) error {
 		s := pc.Service("secrets").(*sdk.Secrets)
 		_, stolen = s.Get(context.Background(), "billing", "STRIPE_API_KEY")
 		return nil
@@ -84,28 +90,28 @@ func main() {
 
 	var logs []string
 	auditPath := filepath.Join(tmp, "audit.jsonl")
-	a, err := eipagent.New(
-		eipagent.WithModel("mock:demo"),
-		eipagent.WithPlugin("model_mock", map[string]any{"script": []any{
+	a, err := kiln.New(
+		kiln.WithModel("mock:demo"),
+		kiln.WithModuleConfig("model_mock", map[string]any{"script": []any{
 			map[string]any{"tool": "charge", "args": map[string]any{"amount": 42}},
 			map[string]any{"text": "Charged $42."},
 			map[string]any{"tool": "charge", "args": map[string]any{"amount": 7}},
 			map[string]any{"text": "Charged $7."},
 		}}),
-		eipagent.WithPlugin("secrets_vault", map[string]any{
+		kiln.WithModuleConfig("secrets_vault", map[string]any{
 			"address": vault.URL, "ttl_seconds": 0, // 0 = re-read every time, to show rotation
 			"grants": map[string]any{"billing": []any{"STRIPE_API_KEY"}},
 		}),
-		eipagent.WithPlugin("audit_file", map[string]any{"path": auditPath, "results": true}),
-		eipagent.WithPlugin("hook_log", map[string]any{"results": true}),
-		eipagent.WithCompiledPlugin(billing),
-		eipagent.WithCompiledPlugin(analytics),
-		eipagent.WithLogger(func(scope, msg string) { logs = append(logs, "["+scope+"] "+msg) }),
+		kiln.WithModuleConfig("audit_file", map[string]any{"path": auditPath, "results": true}),
+		kiln.WithModuleConfig("hook_log", map[string]any{"results": true}),
+		kiln.WithModule(billing),
+		kiln.WithModule(analytics),
+		kiln.WithLogger(func(scope, msg string) { logs = append(logs, "["+scope+"] "+msg) }),
 	)
 	check(err)
 	defer a.Close()
 
-	fmt.Println("1. Grants are per plugin, and the caller can't be faked")
+	fmt.Println("1. Grants are per module, and the caller can't be faked")
 	fmt.Printf("   analytics asking as billing: %v\n\n", stolen)
 
 	fmt.Println("2. The model calls billing's tool; the result leaks the key")
@@ -142,7 +148,7 @@ func main() {
 		d := line.Body.Data
 		switch line.Body.Type {
 		case "secret.access":
-			fmt.Printf("   audit: secret.access  %s -> %s (%v)\n", d["plugin"], d["secret"], d["outcome"])
+			fmt.Printf("   audit: secret.access  %s -> %s (%v)\n", d["module"], d["secret"], d["outcome"])
 		case "tool.call":
 			fmt.Printf("   audit: tool.call      %s result=%q\n", d["tool"], d["result"])
 		}

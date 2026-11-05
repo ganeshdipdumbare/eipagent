@@ -1,6 +1,6 @@
 // Package evals checks an agent against a dataset of cases: each case is
 // a prompt and what the answer and the run must look like. Run it in a
-// test, in CI, or with `eip eval`.
+// test, in CI, or with `kiln eval`.
 //
 //	ds, _ := evals.Load("cases.json")
 //	rep, _ := evals.Run(ctx, agent, ds)
@@ -31,7 +31,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ganeshdipdumbare/eipagent"
+	"github.com/ganeshdipdumbare/kiln"
 )
 
 // Dataset is a named list of cases.
@@ -110,12 +110,12 @@ func Load(path string) (*Dataset, error) {
 
 // Options for Run.
 type Options struct {
-	Parallel int                  // cases run at once (default 4)
-	RunOpts  []eipagent.RunOption // passed to every run
+	Parallel int              // cases run at once (default 4)
+	RunOpts  []kiln.RunOption // passed to every run
 }
 
 // Run runs every case on the agent and grades it.
-func Run(ctx context.Context, a *eipagent.Agent, ds *Dataset, opt ...Options) (*Report, error) {
+func Run(ctx context.Context, a *kiln.Agent, ds *Dataset, opt ...Options) (*Report, error) {
 	o := Options{Parallel: 4}
 	if len(opt) > 0 {
 		o = opt[0]
@@ -148,7 +148,7 @@ func Run(ctx context.Context, a *eipagent.Agent, ds *Dataset, opt ...Options) (*
 	return rep, nil
 }
 
-func runCase(ctx context.Context, a *eipagent.Agent, ds *Dataset, c Case, runOpts []eipagent.RunOption) Result {
+func runCase(ctx context.Context, a *kiln.Agent, ds *Dataset, c Case, runOpts []kiln.RunOption) Result {
 	name := c.Name
 	if name == "" {
 		name = c.Prompt
@@ -216,16 +216,16 @@ type verdict struct {
 	Reason string `json:"reason" desc:"one sentence on why"`
 }
 
-func judge(ctx context.Context, a *eipagent.Agent, model, prompt, answer, rubric string) (string, bool, error) {
-	opts := []eipagent.RunOption{
-		eipagent.System("You grade an AI assistant's answer against a rubric. Be strict: pass only when the rubric is clearly met."),
-		eipagent.ToolChoice("none"), eipagent.MaxSteps(1),
+func judge(ctx context.Context, a *kiln.Agent, model, prompt, answer, rubric string) (string, bool, error) {
+	opts := []kiln.RunOption{
+		kiln.System("You grade an AI assistant's answer against a rubric. Be strict: pass only when the rubric is clearly met."),
+		kiln.ToolChoice("none"), kiln.MaxSteps(1),
 	}
 	if model != "" {
-		opts = append(opts, eipagent.Model(model))
+		opts = append(opts, kiln.Model(model))
 	}
 	q := fmt.Sprintf("Rubric:\n%s\n\nThe user asked:\n%s\n\nThe assistant answered:\n%s", rubric, prompt, answer)
-	v, err := eipagent.GenerateObject[verdict](ctx, a, q, opts...)
+	v, err := kiln.GenerateObject[verdict](ctx, a, q, opts...)
 	if err != nil {
 		return "", false, err
 	}

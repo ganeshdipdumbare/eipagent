@@ -14,8 +14,7 @@ on:
     branches: [main]
     paths:
       - docs/**
-      - plugins/**
-      - pluginpkg/templates.go
+      - modules/**
       - examples/fullstack/**
       - .github/workflows/docs.yml
   workflow_dispatch:
@@ -41,7 +40,7 @@ jobs:
     timeout-minutes: 15
     environment:
       name: docs
-      url: https://eipagent-docs.vercel.app
+      url: https://kiln-docs.vercel.app
     env:
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
       VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}

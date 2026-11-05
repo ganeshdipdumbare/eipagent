@@ -1,4 +1,4 @@
-package eipagent_test
+package kiln_test
 
 import (
 	"context"
@@ -11,9 +11,9 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/ganeshdipdumbare/eipagent"
-	"github.com/ganeshdipdumbare/eipagent/evals"
-	"github.com/ganeshdipdumbare/eipagent/sdk"
+	"github.com/ganeshdipdumbare/kiln"
+	"github.com/ganeshdipdumbare/kiln/evals"
+	"github.com/ganeshdipdumbare/kiln/sdk"
 )
 
 // scripted is a compiled provider whose replies come from fn; it records
@@ -24,8 +24,8 @@ type scripted struct {
 	fn   func(req *sdk.ModelRequest, n int) (*sdk.ModelResponse, error)
 }
 
-func (s *scripted) plugin(name string) eipagent.Plugin {
-	return eipagent.Plugin{Name: "scripted_" + name, Apply: func(p *sdk.Plugin) error {
+func (s *scripted) plugin(name string) kiln.Module {
+	return kiln.Module{Name: "scripted_" + name, Provides: []string{"model/" + name}, Apply: func(p *sdk.Module) error {
 		return p.Provide("model/"+name, &sdk.Provider{Name: name, Generate: func(c context.Context, req *sdk.ModelRequest) (*sdk.ModelResponse, error) {
 			cp := *req
 			cp.Messages = append([]sdk.Message(nil), req.Messages...)
@@ -63,9 +63,9 @@ func toolResults(ms []sdk.Message) []string {
 	return out
 }
 
-func newScripted(t *testing.T, s *scripted, opts ...eipagent.Option) *eipagent.Agent {
+func newScripted(t *testing.T, s *scripted, opts ...kiln.Option) *kiln.Agent {
 	t.Helper()
-	a, err := eipagent.New(append([]eipagent.Option{eipagent.WithModel("s:m"), eipagent.WithCompiledPlugin(s.plugin("s"))}, opts...)...)
+	a, err := kiln.New(append([]kiln.Option{kiln.WithModel("s:m"), kiln.WithModule(s.plugin("s"))}, opts...)...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,8 +101,8 @@ func TestFallbackOnRefusal(t *testing.T) {
 		return &sdk.ModelResponse{Message: sdk.Message{Role: "assistant", Content: "I can't."}, FinishReason: "refusal"}, nil
 	}}
 	helper := &scripted{fn: func(*sdk.ModelRequest, int) (*sdk.ModelResponse, error) { return say("Here you go."), nil }}
-	a, err := eipagent.New(eipagent.WithModel("r:m"), eipagent.WithCompiledPlugin(refuser.plugin("r")), eipagent.WithCompiledPlugin(helper.plugin("h")),
-		eipagent.WithPlugin("hook_fallback", map[string]any{"models": []any{"h:m"}}))
+	a, err := kiln.New(kiln.WithModel("r:m"), kiln.WithModule(refuser.plugin("r")), kiln.WithModule(helper.plugin("h")),
+		kiln.WithModuleConfig("hook_fallback", map[string]any{"models": []any{"h:m"}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestFallbackOnRefusal(t *testing.T) {
 
 func TestCompactStrategies(t *testing.T) {
 	big := strings.Repeat("x", 3000)
-	dump := eipagent.Tool("dump", "Dump data", func(ctx context.Context, in struct{}) (string, error) { return big, nil })
+	dump := kiln.Tool("dump", "Dump data", func(ctx context.Context, in struct{}) (string, error) { return big, nil })
 	newRun := func(cfg map[string]any, summarize bool) (*scripted, []sdk.Event) {
 		s := &scripted{fn: func(req *sdk.ModelRequest, n int) (*sdk.ModelResponse, error) {
 			if strings.Contains(req.System, "Summarize the conversation") {
@@ -129,8 +129,8 @@ func TestCompactStrategies(t *testing.T) {
 		}}
 		var mu sync.Mutex
 		var evs []sdk.Event
-		a := newScripted(t, s, eipagent.WithTools(dump), eipagent.WithPlugin("hook_compact", cfg))
-		_, err := a.Generate(bg, "go", eipagent.OnEvent(func(e sdk.Event) {
+		a := newScripted(t, s, kiln.WithTools(dump), kiln.WithModuleConfig("hook_compact", cfg))
+		_, err := a.Generate(bg, "go", kiln.OnEvent(func(e sdk.Event) {
 			if e.Type == "context_usage" {
 				mu.Lock()
 				evs = append(evs, e)
@@ -179,7 +179,7 @@ func TestCompactStrategies(t *testing.T) {
 		t.Fatalf("summarize: first message %q", s.last().Messages[0].Content)
 	}
 
-	if _, err := eipagent.New(eipagent.WithModel("mock:x"), eipagent.WithPlugin("hook_compact", map[string]any{"strategies": []any{"magic"}})); err == nil {
+	if _, err := kiln.New(kiln.WithModel("mock:x"), kiln.WithModuleConfig("hook_compact", map[string]any{"strategies": []any{"magic"}})); err == nil {
 		t.Fatal("unknown strategy accepted")
 	}
 }
@@ -194,7 +194,7 @@ func TestCompactOnRequest(t *testing.T) {
 		}
 		return say("done"), nil
 	}}
-	a := newScripted(t, s, eipagent.WithPlugin("hook_compact", map[string]any{"tool": true, "strategies": []any{"summarize"}, "keep_messages": 0}))
+	a := newScripted(t, s, kiln.WithModuleConfig("hook_compact", map[string]any{"tool": true, "strategies": []any{"summarize"}, "keep_messages": 0}))
 	if _, err := a.Generate(bg, "order 42"); err != nil {
 		t.Fatal(err)
 	}
@@ -212,9 +212,9 @@ func TestCompactOnRequest(t *testing.T) {
 func TestToolSearch(t *testing.T) {
 	var tools []sdk.Tool
 	for _, n := range []string{"alpha", "beta", "gamma", "delta", "epsilon", "zeta"} {
-		tools = append(tools, eipagent.Tool(n+"_tool", "Does "+n+" things", func(ctx context.Context, in struct{}) (string, error) { return "ok", nil }))
+		tools = append(tools, kiln.Tool(n+"_tool", "Does "+n+" things", func(ctx context.Context, in struct{}) (string, error) { return "ok", nil }))
 	}
-	tools = append(tools, eipagent.Tool("weather_now", "Current weather for a city", func(ctx context.Context, in struct{}) (string, error) { return "sunny", nil }))
+	tools = append(tools, kiln.Tool("weather_now", "Current weather for a city", func(ctx context.Context, in struct{}) (string, error) { return "sunny", nil }))
 	s := &scripted{fn: func(req *sdk.ModelRequest, n int) (*sdk.ModelResponse, error) {
 		switch n {
 		case 1:
@@ -224,7 +224,7 @@ func TestToolSearch(t *testing.T) {
 		}
 		return say("done"), nil
 	}}
-	a := newScripted(t, s, eipagent.WithTools(tools...), eipagent.WithPlugin("tool_search", map[string]any{"threshold": 3, "always": []any{"alpha_*"}}))
+	a := newScripted(t, s, kiln.WithTools(tools...), kiln.WithModuleConfig("tool_search", map[string]any{"threshold": 3, "always": []any{"alpha_*"}}))
 	if _, err := a.Generate(bg, "weather?"); err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +256,7 @@ func TestToolPlan(t *testing.T) {
 		}
 		return say("done"), nil
 	}}
-	a := newScripted(t, s, eipagent.WithPlugins("tool_plan"))
+	a := newScripted(t, s, kiln.WithModules("tool_plan"))
 	if _, err := a.Thread("t1").Generate(bg, "refund order 7"); err != nil {
 		t.Fatal(err)
 	}
@@ -273,16 +273,16 @@ func TestToolPlan(t *testing.T) {
 }
 
 func TestLoopDetectAndOutputLimit(t *testing.T) {
-	ping := eipagent.Tool("ping", "Ping", func(ctx context.Context, in struct{}) (string, error) { return strings.Repeat("p", 500), nil })
+	ping := kiln.Tool("ping", "Ping", func(ctx context.Context, in struct{}) (string, error) { return strings.Repeat("p", 500), nil })
 	s := &scripted{fn: func(req *sdk.ModelRequest, n int) (*sdk.ModelResponse, error) {
 		if n <= 4 {
 			return call("ping", map[string]any{}), nil
 		}
 		return say("done"), nil
 	}}
-	a := newScripted(t, s, eipagent.WithTools(ping),
-		eipagent.WithPlugin("hook_loop_detect", map[string]any{"max_repeats": 3, "stop_after": 0}),
-		eipagent.WithPlugin("hook_tool_output_limit", map[string]any{"max_chars": 100}))
+	a := newScripted(t, s, kiln.WithTools(ping),
+		kiln.WithModuleConfig("hook_loop_detect", map[string]any{"max_repeats": 3, "stop_after": 0}),
+		kiln.WithModuleConfig("hook_tool_output_limit", map[string]any{"max_chars": 100}))
 	if _, err := a.Generate(bg, "go"); err != nil {
 		t.Fatal(err)
 	}
@@ -295,15 +295,15 @@ func TestLoopDetectAndOutputLimit(t *testing.T) {
 	}
 
 	s2 := &scripted{fn: func(*sdk.ModelRequest, int) (*sdk.ModelResponse, error) { return call("ping", map[string]any{}), nil }}
-	b := newScripted(t, s2, eipagent.WithTools(ping), eipagent.WithMaxSteps(20),
-		eipagent.WithPlugin("hook_loop_detect", map[string]any{"max_repeats": 2, "stop_after": 3}))
+	b := newScripted(t, s2, kiln.WithTools(ping), kiln.WithMaxSteps(20),
+		kiln.WithModuleConfig("hook_loop_detect", map[string]any{"max_repeats": 2, "stop_after": 3}))
 	if _, err := b.Generate(bg, "go"); err == nil || !strings.Contains(err.Error(), "stopping the run") {
 		t.Fatalf("stop_after: %v", err)
 	}
 }
 
 func TestGuardrails(t *testing.T) {
-	sql := eipagent.Tool("sql", "Run SQL", func(ctx context.Context, in struct {
+	sql := kiln.Tool("sql", "Run SQL", func(ctx context.Context, in struct {
 		Q string `json:"q"`
 	}) (string, error) {
 		return "ran", nil
@@ -317,7 +317,7 @@ func TestGuardrails(t *testing.T) {
 		}
 		return say("The key is sk-abcdefghijklmnopqrstuvwxyz123456"), nil
 	}}
-	a := newScripted(t, s, eipagent.WithTools(sql), eipagent.WithPlugin("hook_guardrails", map[string]any{"rules": []any{
+	a := newScripted(t, s, kiln.WithTools(sql), kiln.WithModuleConfig("hook_guardrails", map[string]any{"rules": []any{
 		map[string]any{"on": "tool_args", "keywords": []any{"DROP TABLE"}, "action": "block", "message": "No destructive SQL."},
 		map[string]any{"on": "output", "detect": "secrets", "action": "redact"},
 		map[string]any{"on": "output", "regex": `(?i)as an ai`, "action": "retry", "message": "Answer directly."},
@@ -340,14 +340,14 @@ func TestGuardrails(t *testing.T) {
 	if _, err := a.Generate(bg, "please jailbreak"); err == nil || !strings.Contains(err.Error(), "input blocked") {
 		t.Fatalf("input block: %v", err)
 	}
-	if _, err := eipagent.New(eipagent.WithModel("mock:x"), eipagent.WithPlugin("hook_guardrails", map[string]any{"rules": []any{
+	if _, err := kiln.New(kiln.WithModel("mock:x"), kiln.WithModuleConfig("hook_guardrails", map[string]any{"rules": []any{
 		map[string]any{"on": "tool_args", "regex": "x", "action": "redact"}}})); err == nil {
 		t.Fatal("redact on tool_args accepted")
 	}
 }
 
 func TestSaveEachStepContinueAndFork(t *testing.T) {
-	look := eipagent.Tool("lookup", "Look up", func(ctx context.Context, in struct{}) (string, error) { return "found it", nil })
+	look := kiln.Tool("lookup", "Look up", func(ctx context.Context, in struct{}) (string, error) { return "found it", nil })
 	fail := true
 	s := &scripted{fn: func(req *sdk.ModelRequest, n int) (*sdk.ModelResponse, error) {
 		if len(toolResults(req.Messages)) == 0 {
@@ -358,7 +358,7 @@ func TestSaveEachStepContinueAndFork(t *testing.T) {
 		}
 		return say("answer: " + toolResults(req.Messages)[0]), nil
 	}}
-	a := newScripted(t, s, eipagent.WithTools(look), eipagent.WithSaveEachStep())
+	a := newScripted(t, s, kiln.WithTools(look), kiln.WithSaveEachStep())
 	th := a.Thread("job")
 	if _, err := th.Generate(bg, "find it"); err == nil {
 		t.Fatal("expected the run to fail")
@@ -406,8 +406,8 @@ func TestEvals(t *testing.T) {
 		}
 		return say("It has shipped."), nil
 	}}
-	look := eipagent.Tool("lookup", "Look up an order", func(ctx context.Context, in struct{}) (string, error) { return "shipped", nil })
-	a := newScripted(t, s, eipagent.WithTools(look))
+	look := kiln.Tool("lookup", "Look up an order", func(ctx context.Context, in struct{}) (string, error) { return "shipped", nil })
+	a := newScripted(t, s, kiln.WithTools(look))
 	path := filepath.Join(t.TempDir(), "cases.json")
 	os.WriteFile(path, []byte(`{"name":"desk","cases":[
 	  {"name":"tracking","prompt":"Where is order 1?","expect":{"contains":["shipped"],"tools":["lookup"],"max_steps":2}},
@@ -434,12 +434,12 @@ func TestEvals(t *testing.T) {
 // cannot duplicate an external side effect.
 func TestSaveEachStepFailureStopsBeforeTool(t *testing.T) {
 	var calls int32
-	tool := eipagent.Tool("charge", "charge a card", func(ctx context.Context, in struct{}) (string, error) {
+	tool := kiln.Tool("charge", "charge a card", func(ctx context.Context, in struct{}) (string, error) {
 		atomic.AddInt32(&calls, 1)
 		return "charged", nil
 	})
 	var saves int32
-	cp := eipagent.Plugin{Name: "flaky_threads", Apply: func(p *sdk.Plugin) error {
+	cp := kiln.Module{Name: "flaky_threads", Provides: []string{"threads"}, Apply: func(p *sdk.Module) error {
 		return p.Provide("threads", &sdk.Checkpointer{
 			Load: func(ctx context.Context, id string) (*sdk.ThreadState, error) { return nil, nil },
 			Save: func(ctx context.Context, st *sdk.ThreadState, expected int64) error {
@@ -455,8 +455,8 @@ func TestSaveEachStepFailureStopsBeforeTool(t *testing.T) {
 	a := mockAgent(t, []any{
 		map[string]any{"tool": "charge"},
 		map[string]any{"text": "done"},
-	}, eipagent.WithTools(tool), eipagent.WithCompiledPlugin(cp), eipagent.WithSaveEachStep(), eipagent.WithoutDefaults(), eipagent.WithPlugins("loop"))
-	if _, err := a.Thread("t").Generate(bg, "charge it"); !errors.Is(err, eipagent.ErrThreadBusy) {
+	}, kiln.WithTools(tool), kiln.WithModule(cp), kiln.WithSaveEachStep(), kiln.WithoutDefaults(), kiln.WithModules("loop"))
+	if _, err := a.Thread("t").Generate(bg, "charge it"); !errors.Is(err, kiln.ErrThreadBusy) {
 		t.Fatalf("want ErrThreadBusy, got %v", err)
 	}
 	if n := atomic.LoadInt32(&calls); n != 0 {

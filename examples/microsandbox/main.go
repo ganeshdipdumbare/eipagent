@@ -2,7 +2,7 @@
 // shows that no secret enters it:
 //
 //   - the VM has no network and no secret env vars;
-//   - a plugin in the VM asks for secret://ACME_API_TOKEN and gets a
+//   - a module in the VM asks for secret://ACME_API_TOKEN and gets a
 //     placeholder (eipsec_...), never the value;
 //   - its HTTP request goes to the host, which swaps the placeholder for
 //     the real token because the API's host is listed for that secret;
@@ -12,7 +12,7 @@
 //   - the host records every request the VM makes, allowed or not.
 //
 // Needs msb (https://microsandbox.dev) on an arm64 Mac or a Linux host
-// with KVM:
+// with KVM. Run it from the repo root:
 //
 //	go run ./examples/microsandbox
 //
@@ -36,62 +36,65 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/ganeshdipdumbare/eipagent"
-	"github.com/ganeshdipdumbare/eipagent/engine"
-	"github.com/ganeshdipdumbare/eipagent/sdk"
+	"github.com/ganeshdipdumbare/kiln"
+	"github.com/ganeshdipdumbare/kiln/engine"
+	"github.com/ganeshdipdumbare/kiln/sdk"
 )
 
-// The plugin that runs inside the VM: it resolves the token and calls the
-// API with it, then reports what it held and what came back.
-const callAPI = `//go:build ignore
-
-package plugin
-
-import (
-	"context"
-	"io"
-	"net/http"
-
-	"eipagent/sdk"
-)
-
-var Permissions = []string{"net"}
-
-func Apply(p *sdk.Plugin) error {
-	p.AddTool(sdk.Tool{
-		Name:        "call_api",
-		Description: "Call the Acme API with the Acme token",
-		Schema:      sdk.Object(map[string]any{"url": sdk.Str("URL to call"), "method": sdk.Str("HTTP method (default GET)")}, "url"),
-		Run: func(c context.Context, args map[string]any) (string, error) {
-			token, err := p.Secret("secret://ACME_API_TOKEN")
-			if err != nil {
-				return "", err
-			}
-			out := "token in the sandbox: " + token + "\n"
-			method := sdk.ArgString(args, "method")
-			if method == "" {
-				method = "GET"
-			}
-			req, _ := http.NewRequestWithContext(c, method, sdk.ArgString(args, "url"), nil)
-			req.Header.Set("Authorization", "Bearer "+token)
-			resp, err := http.DefaultClient.Do(req)
-			if err != nil {
-				return out + "request failed: " + err.Error(), nil
-			}
-			defer resp.Body.Close()
-			b, _ := io.ReadAll(resp.Body)
-			return out + "API replied: " + string(b), nil
-		},
-	})
-	return nil
+// callAPI is the module that runs inside the VM. It resolves the token and
+// calls the API with it, then reports what it held and what came back. It
+// is compiled into this program, so the VM binary (this same program, see
+// main) has it too.
+var callAPI = engine.Module{
+	Name:        "call_api",
+	Permissions: []string{"net"},
+	Secrets:     []string{"ACME_API_TOKEN"},
+	Apply: func(p *sdk.Module) error {
+		client, err := p.HTTP(sdk.HTTPOptions{AllowHosts: []string{"127.0.0.1", "localhost"}, AllowPrivate: true})
+		if err != nil {
+			return err
+		}
+		p.AddTool(sdk.Tool{
+			Name:        "call_api",
+			Description: "Call the Acme API with the Acme token",
+			Schema:      sdk.Object(map[string]any{"url": sdk.Str("URL to call"), "method": sdk.Str("HTTP method (default GET)")}, "url"),
+			Run: func(c context.Context, args map[string]any) (string, error) {
+				token, err := p.Secret("secret://ACME_API_TOKEN")
+				if err != nil {
+					return "", err
+				}
+				out := "token in the sandbox: " + token + "\n"
+				method := sdk.ArgString(args, "method")
+				if method == "" {
+					method = "GET"
+				}
+				req, _ := http.NewRequestWithContext(c, method, sdk.ArgString(args, "url"), nil)
+				req.Header.Set("Authorization", "Bearer "+token)
+				resp, err := client.Do(req)
+				if err != nil {
+					return out + "request failed: " + err.Error(), nil
+				}
+				defer resp.Body.Close()
+				b, _ := io.ReadAll(resp.Body)
+				return out + "API replied: " + string(b), nil
+			},
+		})
+		return nil
+	},
 }
-`
 
 func main() {
+	if kiln.InBox() {
+		// Inside the VM this same program serves the agent over stdio.
+		if err := kiln.ServeBox(context.Background(), os.Stdin, os.Stdout, kiln.WithModule(callAPI)); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	if _, err := exec.LookPath("msb"); err != nil {
 		log.Fatal("msb is not installed: see https://microsandbox.dev")
 	}
-	tmp, err := os.MkdirTemp("", "eip-microsandbox-*")
+	tmp, err := os.MkdirTemp("", "kiln-microsandbox-*")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -114,18 +117,14 @@ func main() {
 	defer api.Close()
 	other := strings.Replace(api.URL, "127.0.0.1", "localhost", 1) // same server under a name that isn't allowed
 
-	// eip for the VM's OS, and the plugin it loads, pinned in eip.lock.
-	bin := filepath.Join(tmp, "eip")
-	build := exec.Command("go", "build", "-o", bin, "./cmd/eip")
+	// This program, built for the VM's OS and architecture, is what runs in
+	// the VM.
+	bin := filepath.Join(tmp, "agent")
+	build := exec.Command("go", "build", "-o", bin, "./examples/microsandbox")
 	build.Env = append(os.Environ(), "GOOS=linux", "GOARCH="+runtime.GOARCH, "CGO_ENABLED=0")
 	if out, err := build.CombinedOutput(); err != nil {
-		log.Fatalf("build eip for linux/%s (run from the repo root): %v\n%s", runtime.GOARCH, err, out)
+		log.Fatalf("build the example for linux/%s (run from the repo root): %v\n%s", runtime.GOARCH, err, out)
 	}
-	dir := filepath.Join(tmp, "plugins")
-	os.MkdirAll(dir, 0o755)
-	os.WriteFile(filepath.Join(dir, "call_api.go"), []byte(callAPI), 0o644)
-	lock := filepath.Join(tmp, "eip.lock")
-	os.WriteFile(lock, []byte(`{"plugins": {"call_api": "`+engine.Hash([]byte(callAPI))+`"}}`), 0o644)
 
 	step := func(tool string, args map[string]any) map[string]any {
 		return map[string]any{"tool": tool, "args": args}
@@ -138,25 +137,25 @@ func main() {
 	} else {
 		fmt.Println("Booting a microsandbox VM (no network) and starting the agent in it…")
 	}
-	a, err := eipagent.New(
-		eipagent.WithModel("mock:demo"),
-		eipagent.WithPlugin("model_mock", map[string]any{"script": []any{
+	a, err := kiln.New(
+		kiln.WithModel("mock:demo"),
+		kiln.WithModuleConfig("model_mock", map[string]any{"script": []any{
 			step("bash", map[string]any{"command": "echo \"kernel: $(uname -sr)\"; echo 'environment:'; env | sort | sed 's/^/  /'"}),
 			step("call_api", map[string]any{"url": api.URL + "/orders"}),
 			step("call_api", map[string]any{"url": api.URL + "/orders", "method": "DELETE"}),
 			step("call_api", map[string]any{"url": other + "/steal"}),
 			map[string]any{"text": "done"},
 		}}),
-		eipagent.WithPlugins("tool_shell"),
-		eipagent.WithLogger(func(scope, msg string) {
+		kiln.WithModules("tool_shell"),
+		kiln.WithModule(callAPI),
+		kiln.WithLogger(func(scope, msg string) {
 			if strings.HasPrefix(msg, "sandbox egress") {
 				mu.Lock()
 				egress = append(egress, msg)
 				mu.Unlock()
 			}
 		}),
-		eipagent.WithPluginDir(dir), eipagent.WithLockFile(lock), eipagent.WithPlugins("call_api"),
-		eipagent.WithRunIn(eipagent.RunIn{
+		kiln.WithRunIn(kiln.RunIn{
 			Provider: "microsandbox",
 			Binary:   bin,
 			Spec:     sdk.SandboxSpec{Network: sdk.NetworkPolicy{Mode: "none"}},
@@ -176,7 +175,7 @@ func main() {
 	}
 	titles := []string{
 		"1. Inside the VM: no secret env vars",
-		"2. A plugin in the VM calls the API (GET /orders is allowed for the token)",
+		"2. A module in the VM calls the API (GET /orders is allowed for the token)",
 		"3. The same token on a DELETE (only GET is allowed)",
 		"4. The same token sent to a host that isn't listed",
 	}

@@ -1,4 +1,4 @@
-package eipagent
+package kiln
 
 import (
 	"bufio"
@@ -12,16 +12,32 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ganeshdipdumbare/eipagent/engine"
-	"github.com/ganeshdipdumbare/eipagent/plugins"
-	"github.com/ganeshdipdumbare/eipagent/rpc"
-	"github.com/ganeshdipdumbare/eipagent/sdk"
+	"github.com/ganeshdipdumbare/kiln/engine"
+	"github.com/ganeshdipdumbare/kiln/modules/std"
+	"github.com/ganeshdipdumbare/kiln/rpc"
+	"github.com/ganeshdipdumbare/kiln/sdk"
 )
 
-// RunIn runs the whole agent inside a sandbox. The host keeps the model
-// provider, the secrets provider, host-only Go tools and the sandbox
-// provider; everything else — loop, plugins, middleware, file and shell
-// tools, threads — runs in the box.
+// Environment variables that mark a process as a sandbox box, and where
+// the host put the profile and policy it uploaded.
+const (
+	boxEnv    = "KILN_BOX"
+	boxDirEnv = "KILN_BOX_DIR"
+	boxDir    = "kiln"
+	boxBinary = "kiln/agent"
+)
+
+// InBox reports whether this process is a sandbox box started by WithRunIn.
+// A program that uses WithRunIn checks it first and, when true, calls
+// ServeBox with the same options instead of creating an agent.
+func InBox() bool { return os.Getenv(boxEnv) == "1" }
+
+// RunIn runs the whole agent inside a sandbox. The box runs the same
+// program: the host uploads its own binary (or RunIn.Binary, built for the
+// box's OS and architecture), and the host's resolved profile and policy.
+// The host keeps the model providers, the secrets providers, host-only Go
+// tools and the sandbox provider; everything else — loop, modules, threads,
+// file and shell tools — runs in the box.
 //
 // No secret enters the box. Its "secrets" service returns placeholders
 // (eipsec_...); its HTTP requests are made by the host, which swaps a
@@ -29,12 +45,11 @@ import (
 // listed for that secret in SecretHosts, and redacts secret values out
 // of responses. Requests without placeholders may reach only Egress.
 type RunIn struct {
-	Provider       string              // sandbox plugin suffix: "docker", "local", or your own sandbox_<name>
+	Provider       string              // sandbox module suffix: "docker", "local", or your own sandbox_<name>
 	ProviderConfig map[string]any      // config for sandbox_<Provider>
 	Spec           sdk.SandboxSpec     // image, limits, network
-	Binary         string              // eip binary built for the box's OS/arch (GOOS=linux for containers)
-	PluginDirs     []string            // uploaded to the box (plugins travel as source)
-	HostPlugins    []engine.PluginSpec // extra plugins that stay on the host (e.g. mw_retry for model calls)
+	Binary         string              // the program, built for the box's OS/arch (GOOS=linux for containers); default: this binary
+	HostPlugins    []engine.ModuleSpec // extra modules that stay on the host (e.g. a retry hook for model calls)
 	NoBridgeTools  bool                // don't expose host Go tools to the box
 	BridgedTools   []string            // host tools the box may call (nil = all; [] = none)
 	SecretHosts    map[string][]string // secret name -> rules for where its placeholder may be sent: "host", "*.host", "GET host/path/*"
@@ -51,8 +66,6 @@ type RunIn struct {
 // WithRunIn starts the agent inside a sandbox; the API is unchanged.
 func WithRunIn(r RunIn) Option { return func(c *config) { c.runIn = &r } }
 
-func withoutProviderAutoload() Option { return func(c *config) { c.noProviderAuto = true } }
-
 type remote struct {
 	host    *Agent
 	box     *sdk.Sandbox
@@ -68,85 +81,30 @@ type remote struct {
 	prov      *sdk.SandboxProvider
 	ri        *RunIn
 	hostTools []sdk.Tool
-	configs   map[string]any    // box path -> JSON written there (profile, policy, lock)
-	uploads   map[string]string // host file -> box path (eip binary, plugin sources)
+	configs   map[string]any    // box path -> JSON written there (profile, policy)
+	uploads   map[string]string // host file -> box path (the program)
 	startMu   sync.Mutex
 }
 
 // errBoxExited is returned to a call the box didn't answer because it
 // exited; the next run starts a new box.
-var errBoxExited = errors.New("eipagent: the agent in the sandbox exited (see [box] logs); the next run starts a new sandbox")
+var errBoxExited = errors.New("kiln: the agent in the sandbox exited (see [box] logs); the next run starts a new sandbox")
 
-var errRunExpired = errors.New("eipagent: sandbox run expired")
+var errRunExpired = errors.New("kiln: sandbox run expired")
 
-// boxPluginSecrets builds the secret grants the host will enforce for
-// plugins running in the box. The box cannot be trusted to declare its
-// own grants, so the host derives them from the same sources it uploads.
-func boxPluginSecrets(specs []engine.PluginSpec, dirs []string) map[string][]string {
+// boxSecretGrants is what the host enforces for each module in the box:
+// the secrets it declares and the secret:// references in its config. The
+// box cannot declare its own grants.
+func boxSecretGrants(reg []engine.Module, rows []engine.ModuleSpec) map[string][]string {
+	byName := map[string]engine.Module{}
+	for _, m := range reg {
+		byName[m.Name] = m
+	}
 	out := map[string][]string{}
-	seen := map[string]bool{}
-	add := func(spec engine.PluginSpec) {
-		name := sdk.CanonicalPlugin(spec.Name())
-		if seen[name] {
-			return
+	for _, row := range rows {
+		if m, ok := byName[row.Use]; ok {
+			out[row.Name()] = engine.SecretNames(m, row.Config)
 		}
-		seen[name] = true
-		var refs []string
-		collectConfigSecrets(spec.Config, &refs)
-		use := sdk.CanonicalPlugin(spec.Use)
-		if src := readBoxPluginSource(spec.Use, dirs); src != nil {
-			refs = append(refs, engine.SecretRefs(string(src))...)
-		}
-		_ = use
-		out[name] = dedupStrings(refs)
-	}
-	for _, spec := range specs {
-		add(spec)
-	}
-	for _, use := range autoPlugins {
-		add(engine.PluginSpec{Use: use})
-	}
-	return out
-}
-
-func readBoxPluginSource(use string, dirs []string) []byte {
-	for _, name := range []string{use, sdk.CanonicalPlugin(use)} {
-		for _, dir := range dirs {
-			if b, err := os.ReadFile(filepath.Join(dir, name+".go")); err == nil {
-				return b
-			}
-		}
-		if b, err := plugins.FS.ReadFile(name + ".go"); err == nil {
-			return b
-		}
-	}
-	return nil
-}
-
-func collectConfigSecrets(v any, out *[]string) {
-	switch x := v.(type) {
-	case string:
-		*out = append(*out, engine.SecretRefs(x)...)
-	case map[string]any:
-		for _, e := range x {
-			collectConfigSecrets(e, out)
-		}
-	case []any:
-		for _, e := range x {
-			collectConfigSecrets(e, out)
-		}
-	}
-}
-
-func dedupStrings(in []string) []string {
-	seen := map[string]bool{}
-	var out []string
-	for _, s := range in {
-		if s == "" || seen[s] {
-			continue
-		}
-		seen[s] = true
-		out = append(out, s)
 	}
 	return out
 }
@@ -154,104 +112,106 @@ func dedupStrings(in []string) []string {
 func newRemote(cfg *config) (*Agent, error) {
 	ri := cfg.runIn
 	if ri.Binary == "" {
-		return nil, errors.New("eipagent: RunIn.Binary is required (an eip binary for the sandbox's OS)")
+		exe, err := os.Executable()
+		if err != nil {
+			return nil, fmt.Errorf("kiln: RunIn.Binary: %w", err)
+		}
+		ri.Binary = exe
 	}
 	if ri.Provider == "" {
 		ri.Provider = "docker"
 	}
 	if ri.Provider == "local" && !ri.AllowUnsafeLocal {
-		return nil, errors.New("eipagent: RunIn.Provider \"local\" is not an isolation boundary (the box is a host process that can read host files); use docker/microsandbox or set RunIn.AllowUnsafeLocal for development")
+		return nil, errors.New("kiln: RunIn.Provider \"local\" is not an isolation boundary (the box is a host process that can read host files); use docker/microsandbox or set RunIn.AllowUnsafeLocal for development")
 	}
-	// Host side: model provider + keys, sandbox provider, host-only tools.
-	hostCfg := *cfg
-	hostCfg.runIn, hostCfg.profiles, hostCfg.dirs = nil, nil, nil
 	if err := sdk.CheckSandboxSpec(ri.Spec); err != nil {
-		return nil, fmt.Errorf("eipagent: RunIn.Spec: %w", err)
+		return nil, fmt.Errorf("kiln: RunIn.Spec: %w", err)
 	}
 	// Parse the egress rules before anything starts.
 	if _, err := newBroker(nil, ri); err != nil {
-		return nil, fmt.Errorf("eipagent: %w", err)
+		return nil, fmt.Errorf("kiln: %w", err)
 	}
-	hostCfg.specs = []engine.PluginSpec{{Use: "sandbox_" + ri.Provider, Config: ri.ProviderConfig}}
-	// A compiled plugin has no source the box could load. Keep it on the
-	// host; the sandbox provider is already in hostCfg.specs.
-	compiled := make(map[string]bool, len(cfg.compiled))
-	for _, p := range cfg.compiled {
-		compiled[sdk.CanonicalPlugin(p.Name)] = true
-	}
-	// Secret providers, then model providers (which resolve their keys
-	// through them), always stay on the host.
-	var boxSpecs, models []engine.PluginSpec
-	for _, s := range cfg.specs {
-		use := sdk.CanonicalPlugin(s.Use)
-		if compiled[use] {
-			if use != sdk.CanonicalPlugin("sandbox_"+ri.Provider) {
-				hostCfg.specs = append(hostCfg.specs, s)
-			}
-			continue
-		}
-		switch {
-		case strings.HasPrefix(use, "secrets_"):
-			hostCfg.specs = append(hostCfg.specs, s)
-		case strings.HasPrefix(use, "model_"):
-			models = append(models, s)
-		default:
-			boxSpecs = append(boxSpecs, s)
-		}
-	}
-	hostCfg.specs = append(append(hostCfg.specs, ri.HostPlugins...), models...)
-	if len(cfg.profiles) > 0 && hostCfg.model == "" {
-		var p engine.Profile
-		if err := engine.ReadJSON(cfg.profiles[len(cfg.profiles)-1], &p); err == nil {
-			hostCfg.model = p.Model
-		}
-	}
-	host, err := newLocal(&hostCfg)
+	prof, pol, err := resolve(cfg)
 	if err != nil {
 		return nil, err
 	}
-	fail := func(err error) (*Agent, error) { host.Close(); return nil, err }
 
-	// Box side: the user's profile, without provider plugins.
-	boxCfg := *cfg
-	boxCfg.runIn, boxCfg.compiled, boxCfg.tools = nil, nil, nil
-	boxCfg.noProviderAuto = true
-	boxCfg.specs = boxSpecs
-	prof, pol, lock, err := boxCfg.resolve()
-	if err != nil {
-		return fail(err)
+	// Split the rows. Host: the sandbox provider that creates the box, the
+	// model and secret providers, and RunIn.HostPlugins. Box: everything
+	// else, including sandbox modules the box's own tools use.
+	providerUse := "sandbox_" + ri.Provider
+	hostRows := []engine.ModuleSpec{{Use: providerUse, Config: ri.ProviderConfig}}
+	hostRows = append(hostRows, ri.HostPlugins...)
+	hostOnlyNames := map[string]bool{} // host module rows never run in the box
+	for _, s := range ri.HostPlugins {
+		hostOnlyNames[s.Name()] = true
 	}
-	snap := host.eng.Root().Snapshot()
-	prov, ok := snap.Services["sandbox/"+ri.Provider].(*sdk.SandboxProvider)
-	if !ok {
-		return fail(fmt.Errorf("eipagent: no sandbox/%s provider on the host", ri.Provider))
+	hostNames := map[string]bool{} // host rows already present (for the store)
+	for _, s := range hostRows {
+		hostNames[s.Name()] = true
 	}
-	r := &remote{host: host, prov: prov, ri: ri, hostTools: cfg.tools, subs: map[string]func(sdk.Event){}, runs: map[string]*sdk.RunState{}, runSeen: map[string]time.Time{},
-		configs: map[string]any{"eip/profile.json": prof, "eip/policy.json": pol, "eip/eip.lock": lock},
-		uploads: map[string]string{ri.Binary: "eip/eip"}}
-	r.broker, _ = newBroker(host, ri) // rules checked above
-	boxAll := append(append([]engine.PluginSpec{}, prof.Plugins...), pol.Require...)
-	r.broker.setCallers(boxAll)
-	dirsForSource := append(append([]string{}, ri.PluginDirs...), cfg.dirs...)
-	r.broker.setSecretGrants(boxPluginSecrets(boxAll, dirsForSource))
-	for _, d := range append(append([]string{}, ri.PluginDirs...), cfg.dirs...) {
-		files, _ := filepath.Glob(filepath.Join(d, "*.go"))
-		for _, f := range files {
-			// A symlinked source could copy a host secret into the box.
-			if fi, err := os.Lstat(f); err != nil || fi.Mode()&os.ModeSymlink != 0 {
-				r.host.eng.Root().Logf("eipagent: skipping symlinked plugin source %s", f)
-				continue
+	var boxRows []engine.ModuleSpec
+	for _, s := range prof.Modules {
+		switch {
+		case hostOnly(s):
+			if !hostNames[s.Name()] {
+				hostRows = append(hostRows, s)
+				hostNames[s.Name()] = true
 			}
-			r.uploads[f] = "eip/plugins/" + filepath.Base(f)
+		case s.Use == providerUse:
+			// RunIn configures the host's provider; the application's row
+			// configures the box's own sandbox of the same kind, so it goes
+			// to the box unless the host module list already names it.
+			if !hostOnlyNames[s.Name()] {
+				boxRows = append(boxRows, s)
+			}
+		case !hostOnlyNames[s.Name()]:
+			boxRows = append(boxRows, s)
 		}
 	}
+
+	// Host side: the same registry and policy, only the host rows.
+	hostCfg := *cfg
+	hostCfg.runIn, hostCfg.profiles, hostCfg.specs, hostCfg.noDefaults = nil, nil, nil, true
+	a := newAgent(&hostCfg, prof)
+	hostProf := &engine.Profile{Model: prof.Model, Instructions: prof.Instructions, MaxSteps: prof.MaxSteps, Modules: hostRows}
+	plan, err := compose(&hostCfg, hostProf, pol, a)
+	if err != nil {
+		return nil, fmt.Errorf("kiln: host: %w", err)
+	}
+	hostEng, err := plan.Start()
+	if err != nil {
+		return nil, fmt.Errorf("kiln: host: %w", err)
+	}
+	a.eng = hostEng
+	fail := func(err error) (*Agent, error) { hostEng.Close(); return nil, err }
+
+	// Box side: the box rows and the policy without host rows.
+	boxProf := &engine.Profile{Model: prof.Model, Instructions: prof.Instructions, MaxSteps: prof.MaxSteps, Modules: boxRows}
+	boxPol := *pol
+	boxPol.Require = dropSpecs(pol.Require, func(s engine.ModuleSpec) bool { return hostOnly(s) || hostOnlyNames[s.Name()] })
+
+	reg := append(std.All(), cfg.modules...)
+	snap := hostEng.Root()
+	prov, ok := snap.Service("sandbox/" + ri.Provider).(*sdk.SandboxProvider)
+	if !ok {
+		return fail(fmt.Errorf("kiln: no sandbox/%s provider on the host", ri.Provider))
+	}
+	r := &remote{host: a, prov: prov, ri: ri, hostTools: cfg.tools, subs: map[string]func(sdk.Event){}, runs: map[string]*sdk.RunState{}, runSeen: map[string]time.Time{},
+		configs: map[string]any{boxDir + "/profile.json": boxProf, boxDir + "/policy.json": &boxPol},
+		uploads: map[string]string{ri.Binary: boxBinary}}
+	r.broker, _ = newBroker(a, ri) // rules checked above
+	var callers []string
+	for _, s := range append(append([]engine.ModuleSpec{}, boxProf.Modules...), boxPol.Require...) {
+		callers = append(callers, s.Name())
+	}
+	r.broker.setCallers(callers)
+	r.broker.setSecretGrants(boxSecretGrants(reg, append(append([]engine.ModuleSpec{}, boxProf.Modules...), boxPol.Require...)))
 	if err := r.start(); err != nil {
 		r.close()
 		return nil, err
 	}
-
-	a := &Agent{eng: host.eng, model: prof.Model, instructions: prof.Instructions, maxSteps: prof.MaxSteps,
-		user: cfg.user, roles: cfg.roles, stop: make(chan struct{}), remote: r}
+	a.remote = r
 	return a, nil
 }
 
@@ -266,9 +226,9 @@ func (r *remote) start() error {
 	}
 	r.box = box
 	if box.Start == nil {
-		return fmt.Errorf("eipagent: sandbox/%s can't run long-lived processes", r.ri.Provider)
+		return fmt.Errorf("kiln: sandbox/%s can't run long-lived processes", r.ri.Provider)
 	}
-	tmp, err := os.MkdirTemp("", "eip-runin-")
+	tmp, err := os.MkdirTemp("", "kiln-runin-")
 	if err != nil {
 		return err
 	}
@@ -290,11 +250,11 @@ func (r *remote) start() error {
 	}
 	for src, dst := range uploads {
 		if err := box.Upload(ctx, src, dst); err != nil {
-			return fmt.Errorf("eipagent: upload %s: %w", dst, err)
+			return fmt.Errorf("kiln: upload %s: %w", dst, err)
 		}
 	}
-	proc, err := box.Start(ctx, sdk.ExecRequest{Cmd: "./eip/eip", Args: []string{"serve", "--stdio",
-		"--profile", "eip/profile.json", "--policy", "eip/policy.json", "--lock", "eip/eip.lock", "--plugins", "eip/plugins"}})
+	proc, err := box.Start(ctx, sdk.ExecRequest{Cmd: "./" + boxBinary,
+		Env: map[string]string{boxEnv: "1", boxDirEnv: boxDir}})
 	if err != nil {
 		return err
 	}
@@ -319,12 +279,12 @@ func (r *remote) start() error {
 	select {
 	case err := <-ready:
 		if err != nil {
-			return fmt.Errorf("eipagent: agent in sandbox failed to start: %w", err)
+			return fmt.Errorf("kiln: agent in sandbox failed to start: %w", err)
 		}
 	case <-r.conn.Done():
-		return errors.New("eipagent: agent in sandbox exited during startup (see [box] logs)")
+		return errors.New("kiln: agent in sandbox exited during startup (see [box] logs)")
 	case <-time.After(60 * time.Second):
-		return errors.New("eipagent: agent in sandbox did not start within 60s")
+		return errors.New("kiln: agent in sandbox did not start within 60s")
 	}
 	return nil
 }
@@ -346,7 +306,7 @@ func (r *remote) live() (*rpc.Conn, error) {
 	r.stop()
 	if err := r.start(); err != nil {
 		r.stop()
-		return nil, fmt.Errorf("eipagent: restarting the sandbox: %w", err)
+		return nil, fmt.Errorf("kiln: restarting the sandbox: %w", err)
 	}
 	return r.conn, nil
 }
@@ -487,7 +447,7 @@ func (r *remote) handle(noTools bool, hostTools []sdk.Tool) {
 				outcome = "failed"
 			}
 			r.broker.audit("tool.call", map[string]any{"run": st.ID, "thread": st.Thread, "user": st.User,
-				"tool": call.Name, "call_id": info.CallID, "step": info.Step, "plugin": "host",
+				"tool": call.Name, "call_id": info.CallID, "step": info.Step, "module": "host",
 				"args": args, "outcome": outcome})
 		}
 		if err != nil {
@@ -680,14 +640,14 @@ func (r *remote) statusErr() ([]string, error) {
 	return rows, err
 }
 
-func (r *remote) status() []engine.PluginStatus {
+func (r *remote) status() []engine.ModuleStatus {
 	rows, err := r.statusErr()
-	var out []engine.PluginStatus
+	var out []engine.ModuleStatus
 	for _, row := range rows {
-		out = append(out, engine.PluginStatus{Name: "[box] " + row})
+		out = append(out, engine.ModuleStatus{ModuleInfo: engine.ModuleInfo{Name: "[box] " + row}, State: "ACTIVE"})
 	}
 	if err != nil {
-		out = append(out, engine.PluginStatus{Name: "[box]", Err: err})
+		out = append(out, engine.ModuleStatus{ModuleInfo: engine.ModuleInfo{Name: "[box]"}, State: "FAILED", Err: err})
 	}
 	return append(out, r.host.eng.Status()...)
 }
@@ -706,7 +666,11 @@ func (r *remote) stop() {
 	r.conn, r.proc, r.box = nil, nil, nil
 }
 
+// close stops the box and disposes the host modules. The agent that owns
+// this remote calls it from its own Close, so it must not call Close again.
 func (r *remote) close() {
 	r.stop()
-	r.host.Close()
+	if r.host != nil && r.host.eng != nil {
+		r.host.eng.Close()
+	}
 }

@@ -1,146 +1,75 @@
 package engine
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"regexp"
-	"sort"
 
-	"github.com/ganeshdipdumbare/eipagent/sdk"
+	"github.com/ganeshdipdumbare/kiln/sdk"
 )
 
-// PluginSpec is one row of a profile.
-type PluginSpec struct {
-	Use      string         `json:"use"`          // source plugin name
-	As       string         `json:"as,omitempty"` // instance name (load one source twice)
-	Config   map[string]any `json:"config,omitempty"`
-	Disabled bool           `json:"disabled,omitempty"`
-	Priority *int           `json:"priority,omitempty"` // default: profile order
-	// Auto marks a plugin the SDK loaded because something needed it
-	// (shown as "auto" in Status); never set it in a profile.
-	Auto bool `json:"-"`
-}
-
-func (s PluginSpec) Name() string {
-	if s.As != "" {
-		return s.As
-	}
-	return s.Use
-}
-
-// Profile says which plugins to run (like cordis.yml). Profiles layer:
-// later layers replace rows with the same instance name and append new ones.
-type Profile struct {
-	Model        string       `json:"model,omitempty"`
-	Instructions string       `json:"instructions,omitempty"`
-	MaxSteps     int          `json:"max_steps,omitempty"`
-	Plugins      []PluginSpec `json:"plugins"`
-}
-
-func (p *Profile) Merge(o *Profile) {
-	if o == nil {
-		return
-	}
-	if o.Model != "" {
-		p.Model = o.Model
-	}
-	if o.Instructions != "" {
-		p.Instructions = o.Instructions
-	}
-	if o.MaxSteps != 0 {
-		p.MaxSteps = o.MaxSteps
-	}
-	for _, s := range o.Plugins {
-		replaced := false
-		for i := range p.Plugins {
-			if p.Plugins[i].Name() == s.Name() {
-				p.Plugins[i], replaced = s, true
-			}
-		}
-		if !replaced {
-			p.Plugins = append(p.Plugins, s)
-		}
-	}
-}
-
-// Policy is the admin layer. It is applied last and nothing below it
-// (profile, chat, plugins) can override it.
+// Policy is the admin layer. It is applied last; nothing below it (a
+// profile, a module) can override it.
 type Policy struct {
-	// RequirePins refuses file plugins whose sha256 is not in the lock.
-	RequirePins bool `json:"require_pins"`
-	// Allow lists permitted plugin sources (empty = all); Deny wins.
+	// Allow lists the modules that may run (empty = any registered module).
 	Allow []string `json:"allow,omitempty"`
-	Deny  []string `json:"deny,omitempty"`
-	// Grants maps plugin instance (or "*") to permissions it may hold.
-	// nil = every plugin gets what it declares.
+	// Deny lists modules that may not run. Deny wins over Allow.
+	Deny []string `json:"deny,omitempty"`
+	// Grants limits capabilities per module name, or "*" for all. A module
+	// holds the intersection of what it declares and what is granted here.
+	// nil: every declared capability is granted. Non-nil: anything not
+	// listed is denied.
 	Grants map[string][]string `json:"grants,omitempty"`
-	// Locked plugins are trusted: they can't be unloaded or reloaded at
-	// runtime and may use the reserved priority band.
+	// Locked modules cannot be disabled by a profile. They get the reserved
+	// priority band, so their hooks run outermost.
 	Locked []string `json:"locked,omitempty"`
-	// Require are plugins always loaded (appended to any profile).
-	Require []PluginSpec `json:"require,omitempty"`
-	// HotReload enables the file watcher.
-	HotReload bool `json:"hot_reload"`
-	// Rules is passed through to the policy plugin as its config.
+	// Require rows are always enabled. They replace profile rows with the
+	// same name.
+	Require []ModuleSpec `json:"require,omitempty"`
+	// Rules is passed to the "policy" module as its config.
 	Rules map[string]any `json:"rules,omitempty"`
 }
 
-// named reports whether list contains name under its current or
-// pre-v0.4 name (policies written before the renames keep working).
-func named(list []string, name string) bool {
-	for _, n := range sdk.PluginAliases(name) {
-		for _, l := range list {
-			if l == n {
-				return true
-			}
+// SecurePolicy is the default. Modules get exactly the capabilities they
+// declare; nothing is denied or locked until the application says so.
+func SecurePolicy() *Policy { return &Policy{} }
+
+func contains(list []string, name string) bool {
+	for _, n := range list {
+		if n == name {
+			return true
 		}
 	}
 	return false
 }
 
-func (p *Policy) allowed(src string) bool {
-	if named(p.Deny, src) {
+func (p *Policy) allowed(name string) bool {
+	if contains(p.Deny, name) {
 		return false
 	}
-	return len(p.Allow) == 0 || named(p.Allow, src)
+	return len(p.Allow) == 0 || contains(p.Allow, name)
 }
 
-func (p *Policy) locked(name string) bool { return named(p.Locked, name) }
+func (p *Policy) locked(name string) bool { return contains(p.Locked, name) }
 
-func (p *Policy) grant(name string, declared []string) []string {
+// granted returns the capabilities a module holds: declared, narrowed by
+// Grants when the policy sets it.
+func (p *Policy) granted(name string, declared []string) []string {
 	if p.Grants == nil {
-		return declared
+		return append([]string(nil), declared...)
 	}
-	for _, n := range sdk.PluginAliases(name) {
-		if g, ok := p.Grants[n]; ok {
-			return intersect(declared, g)
+	allow := append(append([]string(nil), p.Grants[name]...), p.Grants["*"]...)
+	var out []string
+	for _, d := range declared {
+		if contains(allow, d) {
+			out = append(out, d)
 		}
 	}
-	return intersect(declared, p.Grants["*"])
+	return out
 }
 
-// Presets. Secure is the default for New().
-func SecurePolicy() *Policy {
-	return &Policy{RequirePins: true, HotReload: false}
-}
-
-func DevPolicy() *Policy {
-	return &Policy{RequirePins: false, HotReload: true}
-}
-
-// Lock pins plugin sources by sha256 (eip.lock).
-type Lock struct {
-	Plugins map[string]string `json:"plugins"`
-}
-
-func Hash(src []byte) string {
-	h := sha256.Sum256(src)
-	return hex.EncodeToString(h[:])
-}
-
+// ReadJSON decodes a JSON file into v.
 func ReadJSON(path string, v any) error {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -152,29 +81,16 @@ func ReadJSON(path string, v any) error {
 	return nil
 }
 
-func WriteLock(path string, l *Lock) error {
-	names := make([]string, 0, len(l.Plugins))
-	for n := range l.Plugins {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	b, err := json.MarshalIndent(l, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, append(b, '\n'), 0o644)
-}
-
 var envRef = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 
-// interpolate expands ${ENV} in config strings. Secret-looking names
-// (SecretLike) expand only for plugins holding env:secrets; others get
-// their credentials through secret://NAME references and grants.
-func interpolate(v any, perms []string) (any, error) {
-	secrets, envOK := false, false
-	for _, p := range perms {
-		secrets = secrets || p == PermEnvSecrets
-		envOK = envOK || p == PermEnv || p == PermEnvSecrets
+// interpolate expands ${ENV} in config strings. Expanding needs the "env"
+// capability; secret-looking names also need "env:secrets". Secrets
+// normally arrive through secret:// references instead.
+func interpolate(v any, granted []string) (any, error) {
+	envOK, secretsOK := false, false
+	for _, p := range granted {
+		envOK = envOK || p == sdk.PermEnv || p == sdk.PermEnvSecrets
+		secretsOK = secretsOK || p == sdk.PermEnvSecrets
 	}
 	var bad string
 	var walk func(v any) any
@@ -183,11 +99,7 @@ func interpolate(v any, perms []string) (any, error) {
 		case string:
 			return envRef.ReplaceAllStringFunc(x, func(m string) string {
 				name := m[2 : len(m)-1]
-				if !envOK {
-					bad = name
-					return ""
-				}
-				if !secrets && SecretLike(name) {
+				if !envOK || (!secretsOK && sdk.SecretLike(name)) {
 					bad = name
 					return ""
 				}
@@ -210,7 +122,37 @@ func interpolate(v any, perms []string) (any, error) {
 	}
 	out := walk(v)
 	if bad != "" {
-		return nil, fmt.Errorf("config ${%s}: expanding environment variables needs the env permission", bad)
+		return nil, fmt.Errorf("config ${%s}: expanding environment variables needs the %q capability", bad, sdk.PermEnv)
 	}
 	return out, nil
 }
+
+var secretRef = regexp.MustCompile(`secret://([A-Za-z0-9_.-]+)`)
+
+// configSecretRefs lists the secret names written as secret://NAME anywhere
+// in a module's configuration.
+func configSecretRefs(v any) []string {
+	var out []string
+	var walk func(v any)
+	walk = func(v any) {
+		switch x := v.(type) {
+		case string:
+			for _, m := range secretRef.FindAllStringSubmatch(x, -1) {
+				out = append(out, m[1])
+			}
+		case map[string]any:
+			for _, e := range x {
+				walk(e)
+			}
+		case []any:
+			for _, e := range x {
+				walk(e)
+			}
+		}
+	}
+	walk(v)
+	return out
+}
+
+// Allows reports whether the policy lets module name run at all.
+func (p *Policy) Allows(name string) bool { return p.allowed(name) }

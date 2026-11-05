@@ -1,5 +1,5 @@
 // Command fullstack runs the Acme Support Desk demo: a Go backend built on
-// eipagent with a web UI. It works offline with a built-in demo model.
+// kiln with a web UI. It works offline with a built-in demo model.
 //
 //	go run ./examples/fullstack                           # http://localhost:8080
 //	go run ./examples/fullstack -model ollama:qwen3.5:4b  # a real local model
@@ -12,13 +12,13 @@ import (
 	"os"
 	"time"
 
-	"github.com/ganeshdipdumbare/eipagent/examples/fullstack/app"
+	"github.com/ganeshdipdumbare/kiln/examples/fullstack/app"
 )
 
 func main() {
 	addr := flag.String("addr", "localhost:8080", "listen address")
 	model := flag.String("model", "demo:support", `model, e.g. "ollama:qwen3.5:4b" or "anthropic:claude-sonnet-5-5"`)
-	data := flag.String("data", ".eipagent/support-desk", "where threads and the audit log are stored")
+	data := flag.String("data", ".kiln/support-desk", "where threads and the audit log are stored")
 	limit := flag.Float64("refund-limit", 50, "refunds above this need a supervisor")
 	rate := flag.Int("rate", 20, "agent runs per client per minute")
 	maxRuns := flag.Int("max-runs", 8, "agent runs in flight at once")
@@ -26,13 +26,12 @@ func main() {
 	// the last X-Forwarded-For entry, which the proxy appends. Visitors who
 	// come through another proxy (the docs site's rewrite) share its address.
 	proxied := flag.Bool("trust-proxy", os.Getenv("RENDER") != "", "rate-limit by X-Forwarded-For")
-	allowCode := flag.Bool("allow-plugin-code", false, "let the Plugins tab install any code (never on a public server)")
 	flag.Parse()
 	if port := os.Getenv("PORT"); port != "" { // set by hosts such as Fly.io
 		*addr = ":" + port
 	}
 
-	srv, err := app.New(app.Config{Model: *model, DataDir: *data, RefundLimit: *limit, RatePerMin: *rate, MaxRuns: *maxRuns, TrustProxy: *proxied, AllowPluginCode: *allowCode})
+	srv, err := app.New(app.Config{Model: *model, DataDir: *data, RefundLimit: *limit, RatePerMin: *rate, MaxRuns: *maxRuns, TrustProxy: *proxied})
 	if err != nil {
 		log.Fatal(err)
 	}

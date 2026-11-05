@@ -4,7 +4,7 @@
 # the demo (it reseeds on start).
 services:
   - type: web
-    name: eipagent-support-desk
+    name: kiln-support-desk
     runtime: docker
     plan: free
     dockerfilePath: ./examples/fullstack/Dockerfile

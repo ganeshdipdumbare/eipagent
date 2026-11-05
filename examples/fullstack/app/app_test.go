@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -151,8 +150,8 @@ func TestSupportDeskFlows(t *testing.T) {
 		if d["decided_by"] == "ada" && d["decision"] == "edit" {
 			found = true
 		}
-		if e["type"] == "tool.call" && d["tool"] == "send_email" && d["plugin"] == "mailer" {
-			mailer = true // the tool's owning plugin is recorded
+		if e["type"] == "tool.call" && d["tool"] == "send_email" && d["module"] == "mailer" {
+			mailer = true // the tool's owning module is recorded
 		}
 		if e["type"] == "model.call" && d["run"] != nil && d["run"] != "" {
 			runID = true
@@ -203,7 +202,7 @@ func TestApprovedEmailReadsRelaySecret(t *testing.T) {
 	var au struct{ Entries []map[string]any }
 	c.get("/api/audit", &au)
 	for _, e := range au.Entries {
-		if d, _ := e["data"].(map[string]any); e["type"] == "secret.access" && d["plugin"] == "mailer" && d["outcome"] == "granted" {
+		if d, _ := e["data"].(map[string]any); e["type"] == "secret.access" && d["module"] == "mailer" && d["outcome"] == "granted" {
 			return
 		}
 	}
@@ -274,114 +273,4 @@ func (c client) post(path string, body any) (map[string]any, int) {
 	var out map[string]any
 	json.NewDecoder(r.Body).Decode(&out)
 	return out, r.StatusCode
-}
-
-func TestPluginsAddUpdateRollbackRemove(t *testing.T) {
-	c, _ := newServer(t, t.TempDir())
-	ask := func(thread string) string {
-		evs, _ := c.stream("/api/threads/"+thread+"/messages", map[string]any{"text": "What's the shipping estimate to Berlin?", "user": "sam"})
-		return text(evs)
-	}
-	state := func() map[string]any {
-		var v struct{ Plugins []map[string]any }
-		c.get("/api/plugins", &v)
-		for _, p := range v.Plugins {
-			if p["name"] == "shipping_estimate" {
-				return p
-			}
-		}
-		return nil
-	}
-	submit := func(id string) map[string]any {
-		out, code := c.post("/api/plugins", map[string]any{"user": "sam", "sample": id})
-		if code != 200 {
-			t.Fatalf("submit %s: %d %v", id, code, out)
-		}
-		return out
-	}
-	approve := func(version string) (map[string]any, int) {
-		return c.post("/api/plugins/shipping_estimate", map[string]any{"user": "ada", "action": "approve", "version": version})
-	}
-
-	v1 := submit("shipping-v1")
-	if v1["state"] != "VALIDATED" || !strings.Contains(v1["summary"].(string), "adds 1 tool (shipping_estimate)") {
-		t.Fatalf("v1: %v", v1)
-	}
-	if strings.Contains(ask("t-p1"), "business days") {
-		t.Fatal("an unapproved plugin answered")
-	}
-	if _, code := c.post("/api/plugins/shipping_estimate", map[string]any{"user": "sam", "action": "approve", "version": "0.1.0"}); code != 403 {
-		t.Fatalf("an agent approved a plugin: %d", code)
-	}
-	if out, code := approve("0.1.0"); code != 200 {
-		t.Fatalf("approve v1: %d %v", code, out)
-	}
-	if got := ask("t-p2"); !strings.Contains(got, "3 to 5 business days") || strings.Contains(got, "express") {
-		t.Fatalf("v1 answer: %q", got)
-	}
-	// A question that doesn't name the tool still uses it, as a real model would.
-	evs, _ := c.stream("/api/threads/t-p2b/messages", map[string]any{"text": "How long does shipping to Paris take?", "user": "sam"})
-	if got := text(evs); !strings.Contains(got, "Standard delivery to Paris") {
-		t.Fatalf("a plugin tool should be picked from its description: %q", got)
-	}
-	// Order questions still go to the order tools.
-	evs, _ = c.stream("/api/threads/t-p2c/messages", map[string]any{"text": "Where is my order #1077?", "user": "sam"})
-	if got := text(evs); strings.Contains(got, "business days") {
-		t.Fatalf("an order question went to the plugin: %q", got)
-	}
-
-	submit("shipping-v2")
-	approve("0.1.1")
-	if got := ask("t-p3"); !strings.Contains(got, "express") {
-		t.Fatalf("v2 answer: %q", got)
-	}
-
-	submit("shipping-v3") // fails to start
-	if out, code := approve("0.1.2"); code != 422 || !strings.Contains(fmt.Sprint(out["error"]), "carrier_url") {
-		t.Fatalf("broken v3 should fail to enable: %d %v", code, out)
-	}
-	if p := state(); p["active"] != "0.1.1" {
-		t.Fatalf("a failed update replaced the running version: %v", p)
-	}
-	if got := ask("t-p4"); !strings.Contains(got, "express") {
-		t.Fatalf("v2 should still answer: %q", got)
-	}
-
-	if _, code := c.post("/api/plugins/shipping_estimate", map[string]any{"user": "ada", "action": "rollback"}); code != 200 {
-		t.Fatal("rollback")
-	}
-	if got := ask("t-p5"); strings.Contains(got, "express") || !strings.Contains(got, "business days") {
-		t.Fatalf("after rollback (v1): %q", got)
-	}
-
-	if _, code := c.post("/api/plugins/shipping_estimate", map[string]any{"user": "ada", "action": "remove"}); code != 200 {
-		t.Fatal("remove")
-	}
-	if state() != nil || strings.Contains(ask("t-p6"), "business days") {
-		t.Fatal("removed plugin still installed or answering")
-	}
-
-	// The public demo refuses free-form code.
-	if _, code := c.post("/api/plugins", map[string]any{"user": "sam", "name": "evil", "code": "package plugin"}); code != 403 {
-		t.Fatalf("free-form code accepted: %d", code)
-	}
-}
-
-func TestPluginCodeWhenAllowed(t *testing.T) {
-	s, err := New(Config{DataDir: t.TempDir(), AllowPluginCode: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ts := httptest.NewServer(s)
-	t.Cleanup(func() { ts.Close(); s.Close() })
-	c := client{t, ts.URL}
-	withNet := strings.Replace(Samples[0].Code, "// Estimates", "var Permissions = []string{\"net\"}\n\n// Estimates", 1)
-	if out, code := c.post("/api/plugins", map[string]any{"user": "sam", "name": "shipping_estimate", "code": withNet}); code != 422 {
-		t.Fatalf("a plugin with permissions was accepted: %d %v", code, out)
-	}
-	bad := "//go:build ignore\n\npackage plugin\n\nimport \"eipagent/sdk\"\n\nfunc Apply(p *sdk.Plugin) error { return undefinedThing }\n"
-	out, code := c.post("/api/plugins", map[string]any{"user": "sam", "name": "broken", "code": bad})
-	if code != 422 || out["issues"] == nil {
-		t.Fatalf("a plugin that doesn't compile should come back with lint issues: %d %v", code, out)
-	}
 }
