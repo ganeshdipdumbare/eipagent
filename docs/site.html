@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>kiln Docs — the statically composed agent SDK for Go</title>
 <meta name="description" content="kiln is the statically composed, capability-secured agent SDK for Go. Guides, examples, lifecycles and reference.">
-<link rel="canonical" href="https://kiln-docs.vercel.app/">
+<link rel="canonical" href="https://eipagent-docs.vercel.app/">
 <meta name="robots" content="index,follow">
 <meta name="author" content="kiln">
 <meta name="theme-color" content="#f6f4ee" media="(prefers-color-scheme: light)">
@@ -15,14 +15,14 @@
 <meta property="og:site_name" content="kiln Docs">
 <meta property="og:title" content="kiln Docs — statically composed agent SDK for Go">
 <meta property="og:description" content="The Go toolkit for building secure, production-ready AI agents. Swap the loop, models, tools, memory and policy as modules.">
-<meta property="og:url" content="https://kiln-docs.vercel.app/">
-<meta property="og:image" content="https://kiln-docs.vercel.app/assets/img/og.png">
+<meta property="og:url" content="https://eipagent-docs.vercel.app/">
+<meta property="og:image" content="https://eipagent-docs.vercel.app/assets/img/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="kiln Docs — statically composed agent SDK for Go">
 <meta name="twitter:description" content="Build secure, production-ready AI agents in Go. The loop, providers, tools, memory and policy are all modules.">
-<meta name="twitter:image" content="https://kiln-docs.vercel.app/assets/img/og.png">
+<meta name="twitter:image" content="https://eipagent-docs.vercel.app/assets/img/og.png">
 <link rel="icon" href="assets/img/favicon.svg" type="image/svg+xml">
 <link rel="icon" href="assets/img/favicon.ico" sizes="any">
 <link rel="apple-touch-icon" href="assets/img/apple-touch-icon.png">
@@ -33,7 +33,7 @@
 <link rel="preload" href="assets/fonts/instrument-serif-400-italic-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="assets/site.css">
 <script type="application/ld+json">
-{"@context":"https://schema.org","@type":"WebSite","name":"kiln Docs","url":"https://kiln-docs.vercel.app/","description":"The statically composed, capability-secured agent SDK for Go.","publisher":{"@type":"Organization","name":"kiln"}}
+{"@context":"https://schema.org","@type":"WebSite","name":"kiln Docs","url":"https://eipagent-docs.vercel.app/","description":"The statically composed, capability-secured agent SDK for Go.","publisher":{"@type":"Organization","name":"kiln"}}
 </script>
 <script>(function(){try{var t=localStorage.getItem("kiln-theme");if(t)document.documentElement.dataset.theme=t;}catch(e){}})();</script>
 </head>
@@ -53,6 +53,7 @@
       <a href="#introduction" data-top="docs" aria-current="page">Docs</a>
       <a href="#providers" data-top="providers">Providers</a>
       <a href="#reference-options" data-top="reference">Reference</a>
+      <a href="#composition" data-top="lab">Lab</a>
     </nav>
     <span class="grow"></span>
     <button class="searchbtn" id="searchbtn" aria-label="Search docs">
@@ -136,8 +137,8 @@
   </div>
 
   <div class="section" id="composition">
-    <div class="section-head reveal"><span class="section-label">02 / Composition</span><h2 data-toc="Composition">Compose at build time.<br>Validate before execution.</h2></div>
-    <p class="section-lede reveal">Modules are compiled Go packages. <code>kiln.New</code> checks the plan before anything runs: every required service has a provider, no two modules claim one name, the graph has no cycle, and each module holds only the capabilities the policy grants.</p>
+    <div class="section-head reveal"><span class="section-label">02 / Composition lab</span><h2 data-toc="Composition lab">Compose modules.<br>Watch the plan run.</h2></div>
+    <p class="section-lede reveal">Toggle a module and the build config, the capability summary and the run trace update. <strong>Illustrative:</strong> in a real app the module set is fixed at compile time, so a change means rebuild and redeploy. The host keeps the keys; the sandbox gets placeholders.</p>
     <div class="code" data-title="go"><pre><code class="language-go">agent, err := kiln.New(
 	kiln.WithModel("openai:gpt-4.1"),                 // model_openai
 	kiln.WithModuleConfig("hook_retry", nil),          // a standard module, configured
@@ -148,6 +149,91 @@ if err != nil {
 	// (add one of: db_sql, memory_sql, threads_sql)
 	log.Fatal(err)
 }</code></pre></div>
+
+    <div class="lab reveal" data-lab>
+      <div class="lab-top">
+        <div class="lab-topline">
+          <span class="tag">Illustrative cloud run</span><span class="lab-cloud">Tensorlake sandbox</span>
+          <span class="lab-run-status" data-lab-status style="font:500 10.5px var(--f-mono);color:var(--fg-3);letter-spacing:.08em;text-transform:uppercase">Ready</span>
+          <div class="lab-presets" role="group" aria-label="Module presets">
+            <button type="button" data-preset="prototype" aria-pressed="false">Prototype</button>
+            <button type="button" data-preset="team" aria-pressed="true">Team</button>
+            <button type="button" data-preset="production" aria-pressed="false">Production</button>
+          </div>
+        </div>
+        <div class="lab-livebar" data-lab-livebar>
+          <span class="live-dot" aria-hidden="true"></span>
+          <span data-lab-live>Ready · toggle a module</span>
+          <span class="live-progress" aria-hidden="true"><i data-lab-progress></i></span>
+          <div class="lab-controls">
+            <div class="lab-mode" role="group" aria-label="Playback mode">
+              <button type="button" data-lab-mode="auto" aria-pressed="true">Auto</button>
+              <button type="button" data-lab-mode="step" aria-pressed="false">Step</button>
+            </div>
+            <button class="lab-btn mini" type="button" data-lab-run>Run</button>
+            <button class="lab-btn mini" type="button" data-lab-step hidden>Next</button>
+            <button class="lab-btn mini" type="button" data-lab-reset>Reset</button>
+          </div>
+        </div>
+      </div>
+      <div class="lab-mobile-tabs" role="tablist" aria-label="Lab view">
+        <button type="button" role="tab" data-lab-view="modules" aria-selected="false">Modules</button>
+        <button type="button" role="tab" data-lab-view="run" aria-selected="true">Run</button>
+      </div>
+      <div class="lab-grid">
+        <div class="lab-panel" data-lab-view-panel="modules">
+          <div class="lab-panel-head"><h4>Compose</h4><span class="count" data-lab-count>0 selected</span></div>
+          <div class="lab-modules" data-lab-modules></div>
+        </div>
+        <div class="lab-panel lab-run" data-lab-view-panel="run">
+          <div class="lab-run-body">
+            <div class="lab-map" data-lab-map aria-label="Where the agent and modules run">
+              <div class="map-node host" data-plane-node="host">
+                <span class="map-kicker">Host</span>
+                <b>Your process</b>
+                <small>model · secrets</small>
+              </div>
+              <div class="map-link" data-plane-node="boundary">
+                <span class="map-line"></span><span class="map-pulse" aria-hidden="true"></span>
+                <small>TLS</small>
+              </div>
+              <div class="map-node cloud" data-plane-node="cloud">
+                <span class="map-kicker">Cloud</span>
+                <b>Tensorlake</b>
+                <div class="map-node sandbox" data-plane-node="sandbox">
+                  <span class="map-kicker">Sandbox</span>
+                  <b>agent · tools</b>
+                </div>
+              </div>
+            </div>
+            <div class="lab-run-main">
+              <div class="lab-scenario"><div class="who"><i></i> Scenario / cloud sandbox run</div><p class="prompt">“Run the tests, read the log, open a PR.”</p></div>
+              <div class="lab-trace" data-lab-trace aria-live="polite"></div>
+              <div class="lab-side" data-lab-view-panel="config">
+                <div class="lab-tabs" role="tablist" aria-label="Lab details">
+                  <button type="button" role="tab" aria-selected="true" data-lab-tab="config">Config</button>
+                  <button type="button" role="tab" aria-selected="false" data-lab-tab="diff">Diff</button>
+                </div>
+                <div class="lab-side-body">
+                  <div class="lab-pane" data-lab-pane="config">
+                    <div class="lab-summary" data-lab-summary></div>
+                    <div class="lab-config" data-lab-config></div>
+                  </div>
+                  <div class="lab-pane" data-lab-pane="diff" hidden>
+                    <div class="lab-diff" data-lab-diff></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="lab-foot">
+        <button class="lab-btn" type="button" data-lab-copy>Copy config</button>
+        <a class="lab-btn" href="#modules">Module reference</a>
+        <span class="note-mini">Simulated cloud run; a real build fixes the module set. <a href="https://github.com/ganeshdipdumbare/kiln/blob/main/examples/tensorlake/main.go">See the real Tensorlake example</a>.</span>
+      </div>
+    </div>
   </div>
 
   <div class="cta-band">
