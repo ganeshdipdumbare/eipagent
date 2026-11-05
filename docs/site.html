@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>kiln Docs — the statically composed agent SDK for Go</title>
 <meta name="description" content="kiln is the statically composed, capability-secured agent SDK for Go. Guides, examples, lifecycles and reference.">
-<link rel="canonical" href="https://kiln-docs.vercel.app/">
+<link rel="canonical" href="https://eipagent-docs.vercel.app/">
 <meta name="robots" content="index,follow">
 <meta name="author" content="kiln">
 <meta name="theme-color" content="#f6f4ee" media="(prefers-color-scheme: light)">
@@ -15,14 +15,14 @@
 <meta property="og:site_name" content="kiln Docs">
 <meta property="og:title" content="kiln Docs — statically composed agent SDK for Go">
 <meta property="og:description" content="The Go toolkit for building secure, production-ready AI agents. Swap the loop, models, tools, memory and policy as modules.">
-<meta property="og:url" content="https://kiln-docs.vercel.app/">
-<meta property="og:image" content="https://kiln-docs.vercel.app/assets/img/og.png">
+<meta property="og:url" content="https://eipagent-docs.vercel.app/">
+<meta property="og:image" content="https://eipagent-docs.vercel.app/assets/img/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="kiln Docs — statically composed agent SDK for Go">
 <meta name="twitter:description" content="Build secure, production-ready AI agents in Go. The loop, providers, tools, memory and policy are all modules.">
-<meta name="twitter:image" content="https://kiln-docs.vercel.app/assets/img/og.png">
+<meta name="twitter:image" content="https://eipagent-docs.vercel.app/assets/img/og.png">
 <link rel="icon" href="assets/img/favicon.svg" type="image/svg+xml">
 <link rel="icon" href="assets/img/favicon.ico" sizes="any">
 <link rel="apple-touch-icon" href="assets/img/apple-touch-icon.png">
@@ -33,7 +33,7 @@
 <link rel="preload" href="assets/fonts/instrument-serif-400-italic-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="assets/site.css">
 <script type="application/ld+json">
-{"@context":"https://schema.org","@type":"WebSite","name":"kiln Docs","url":"https://kiln-docs.vercel.app/","description":"The statically composed, capability-secured agent SDK for Go.","publisher":{"@type":"Organization","name":"kiln"}}
+{"@context":"https://schema.org","@type":"WebSite","name":"kiln Docs","url":"https://eipagent-docs.vercel.app/","description":"The statically composed, capability-secured agent SDK for Go.","publisher":{"@type":"Organization","name":"kiln"}}
 </script>
 <script>(function(){try{var t=localStorage.getItem("kiln-theme");if(t)document.documentElement.dataset.theme=t;}catch(e){}})();</script>
 </head>
@@ -71,7 +71,7 @@
 <div class="scrim" id="scrim" aria-hidden="true"></div>
 <div class="shell">
 <aside class="side" id="side" aria-label="Documentation">
-  <a class="version" href="https://github.com/ganeshdipdumbare/kiln/blob/main/CHANGELOG.md" aria-label="Release notes">
+  <a class="version" href="https://github.com/ganeshdipdumbare/eipagent/blob/main/CHANGELOG.md" aria-label="Release notes">
     <span class="logo"><svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8.5" fill="var(--fg)"/><rect x="6.00" y="6.00" width="3.36" height="3.36" rx="0.8" fill="var(--bg)"/><rect x="6.00" y="10.16" width="3.36" height="3.36" rx="0.8" fill="var(--bg)"/><rect x="6.00" y="14.32" width="3.36" height="3.36" rx="0.8" fill="var(--bg)"/><rect x="6.00" y="18.48" width="3.36" height="3.36" rx="0.8" fill="var(--bg)"/><rect x="6.00" y="22.64" width="3.36" height="3.36" rx="0.8" fill="var(--bg)"/><rect x="18.48" y="6.00" width="3.36" height="3.36" rx="0.8" fill="var(--bg)"/><rect x="14.32" y="10.16" width="3.36" height="3.36" rx="0.8" fill="var(--bg)"/><rect x="14.32" y="18.48" width="3.36" height="3.36" rx="0.8" fill="var(--bg)"/><rect x="18.48" y="22.64" width="3.36" height="3.36" rx="0.8" fill="var(--bg)"/><rect x="10.16" y="14.32" width="3.36" height="3.36" rx="0.8" fill="var(--accent)"/></svg></span>
     <span><b>v0.5.0</b><small>latest</small></span>
   </a>
@@ -167,7 +167,7 @@ gh auth setup-git        # or use an SSH key for github.com</code></pre></div>
   <p>The CLI installs the same way:</p>
   <div class="code" data-title="terminal"><pre><code class="language-bash">go install github.com/ganeshdipdumbare/kiln/cmd/kiln@v0.5.0</code></pre></div>
   <h2>Versions</h2>
-  <p>Releases are git tags that follow semantic versioning. While the major version is 0, patch releases (<code>v0.4.x</code>) only fix bugs and security issues, and minor releases (<code>v0.x.0</code>) may break the API. Each break is listed with what to change in <a href="https://github.com/ganeshdipdumbare/kiln/blob/main/CHANGELOG.md">CHANGELOG.md</a>. Modules import the SDK from <code>github.com/ganeshdipdumbare/kiln/sdk</code>.</p>
+  <p>Releases are git tags that follow semantic versioning. While the major version is 0, patch releases (<code>v0.4.x</code>) only fix bugs and security issues, and minor releases (<code>v0.x.0</code>) may break the API. Each break is listed with what to change in <a href="https://github.com/ganeshdipdumbare/eipagent/blob/main/CHANGELOG.md">CHANGELOG.md</a>. Modules import the SDK from <code>github.com/ganeshdipdumbare/kiln/sdk</code>.</p>
   <p>Check that everything works from a checkout. The test suite runs offline, using a mock model that needs no API key.</p>
   <div class="code" data-title="terminal"><pre><code class="language-bash">git clone https://github.com/ganeshdipdumbare/kiln
 cd kiln && go test ./...</code></pre></div>
@@ -290,7 +290,7 @@ func main() {
       <tr><td><b>Workspace</b> and <b>sandbox</b></td><td>Where shell and file tools act: the host folder (<code>workspace_local</code>) or a container or microVM per thread (<code>workspace_sandbox</code> with a <code>sandbox_*</code> module). <a href="#kind-sandboxes">Sandboxes</a></td></tr>
     </tbody>
   </table></div>
-  <div class="note"><b>From v0.4</b><div><p>v0.5 removed the runtime system. Old short names (<code>llm_*</code>, <code>mw_*</code>, <code>checkpoint_*</code>, <code>store_*</code>, <code>exec_*</code>, <code>jobs</code>, <code>audit_jsonl</code>) are gone, not aliased. The <a href="https://github.com/ganeshdipdumbare/kiln/blob/main/CHANGELOG.md">CHANGELOG</a> lists every old-to-new rename.</p></div></div>
+  <div class="note"><b>From v0.4</b><div><p>v0.5 removed the runtime system. Old short names (<code>llm_*</code>, <code>mw_*</code>, <code>checkpoint_*</code>, <code>store_*</code>, <code>exec_*</code>, <code>jobs</code>, <code>audit_jsonl</code>) are gone, not aliased. The <a href="https://github.com/ganeshdipdumbare/eipagent/blob/main/CHANGELOG.md">CHANGELOG</a> lists every old-to-new rename.</p></div></div>
 </section>
 
 <section id="ollama" class="page">
@@ -349,7 +349,7 @@ go run ./examples/ollama                 # every demo</code></pre></div>
     <tbody>
       <tr><td>Composition fails</td><td>The error names the module and the reason. Run <code>kiln module check</code> for capability and descriptor mistakes; for a missing service, add the module it suggests or provide the service yourself.</td></tr>
       <tr><td>A module needs a service that is missing</td><td>Load the provider of that service first, for example <code>db_sql</code> before <code>threads_sql</code>, or <code>sandbox_docker</code> before <code>workspace_sandbox</code>.</td></tr>
-      <tr><td>Old names stop working after an upgrade</td><td>v0.5 renamed them without aliases. Use the table in the <a href="https://github.com/ganeshdipdumbare/kiln/blob/main/CHANGELOG.md">CHANGELOG</a>.</td></tr>
+      <tr><td>Old names stop working after an upgrade</td><td>v0.5 renamed them without aliases. Use the table in the <a href="https://github.com/ganeshdipdumbare/eipagent/blob/main/CHANGELOG.md">CHANGELOG</a>.</td></tr>
     </tbody>
   </table></div>
 
@@ -690,7 +690,7 @@ if len(ap.Approvals) != 1 {
    audit: secret.access  billing -&gt; STRIPE_API_KEY (granted)
    audit: tool.call      charge result="charged $42.00 (debug: used key [REDACTED])"
    any key in the logs or audit log? false</code></pre></div>
-  <p>A <code>billing</code> module is granted <code>STRIPE_API_KEY</code> in <code>secrets_vault</code>. An <code>analytics</code> module looks up the service and asks as <code>billing</code>, and is refused, because the core supplies the caller. The key is rotated in Vault mid-run and the next call picks it up. Its tool leaks the key on purpose. The model and the app see it, but the logs and audit log only ever contain <code>[REDACTED]</code>. <a href="https://github.com/ganeshdipdumbare/kiln/blob/main/examples/secrets/main.go">Source</a></p>
+  <p>A <code>billing</code> module is granted <code>STRIPE_API_KEY</code> in <code>secrets_vault</code>. An <code>analytics</code> module looks up the service and asks as <code>billing</code>, and is refused, because the core supplies the caller. The key is rotated in Vault mid-run and the next call picks it up. Its tool leaks the key on purpose. The model and the app see it, but the logs and audit log only ever contain <code>[REDACTED]</code>. <a href="https://github.com/ganeshdipdumbare/eipagent/blob/main/examples/secrets/main.go">Source</a></p>
 
   <h2>Secrets stay outside a microVM</h2>
   <div class="code" data-title="terminal"><pre><code class="language-bash">go run ./examples/microsandbox   # needs msb (microsandbox) on an arm64 Mac or Linux with KVM</code></pre></div>
@@ -765,7 +765,7 @@ The host's record of every request from the microVM (sandbox.egress):
   allowed GET 127.0.0.1/orders -&gt; 200 secrets=[ACME_API_TOKEN]
   denied DELETE 127.0.0.1/orders secrets=[ACME_API_TOKEN] (... may not be sent to DELETE 127.0.0.1/orders ...)
   denied GET localhost/steal secrets=[ACME_API_TOKEN] (... may not be sent to GET localhost/steal ...)</code></pre></div>
-  <p>The provider creates a tap device, boots an Ubuntu rootfs with the Firecracker API, and connects to the guest over SSH. It is a self-hosted version of the hosted-service path: the agent, modules and tools run in the microVM, while the model provider and every secret stay on the host. With <code>FC_HOST</code> the host process runs on macOS and Firecracker runs in Lima, so the host-to-sandbox link crosses a real machine boundary. The same placeholder, host-swap, redaction and <code>sandbox.egress</code> rules apply, and <code>Close</code> destroys the VM and its rootfs copy. <a href="https://github.com/ganeshdipdumbare/kiln/blob/main/examples/firecracker/main.go">Source</a></p>
+  <p>The provider creates a tap device, boots an Ubuntu rootfs with the Firecracker API, and connects to the guest over SSH. It is a self-hosted version of the hosted-service path: the agent, modules and tools run in the microVM, while the model provider and every secret stay on the host. With <code>FC_HOST</code> the host process runs on macOS and Firecracker runs in Lima, so the host-to-sandbox link crosses a real machine boundary. The same placeholder, host-swap, redaction and <code>sandbox.egress</code> rules apply, and <code>Close</code> destroys the VM and its rootfs copy. <a href="https://github.com/ganeshdipdumbare/eipagent/blob/main/examples/firecracker/main.go">Source</a></p>
 
   <h2>Run the agent in a real Tensorlake cloud sandbox</h2>
   <div class="code" data-title="terminal"><pre><code class="language-bash">TENSORLAKE_API_KEY=... go run ./examples/tensorlake</code></pre></div>
@@ -794,7 +794,7 @@ The host's record of every request from the sandbox (sandbox.egress):
   allowed GET 127.0.0.1/orders -&gt; 200 secrets=[ACME_API_TOKEN]
   denied DELETE 127.0.0.1/orders secrets=[ACME_API_TOKEN] (...)
   denied GET localhost/steal secrets=[ACME_API_TOKEN] (...)</code></pre></div>
-  <p>The host process runs on your machine; Tensorlake runs the cloud sandbox. kiln creates an ephemeral sandbox, uploads <code>kiln</code> and the modules, starts <code>kiln serve --stdio</code> through Tensorlake's process API, and deletes the sandbox when the run finishes. The host holds the model provider, secrets and broker; the sandbox only sees <code>eipsec_...</code> placeholders. <a href="https://github.com/ganeshdipdumbare/kiln/blob/main/examples/tensorlake/main.go">Source</a></p>
+  <p>The host process runs on your machine; Tensorlake runs the cloud sandbox. kiln creates an ephemeral sandbox, uploads <code>kiln</code> and the modules, starts <code>kiln serve --stdio</code> through Tensorlake's process API, and deletes the sandbox when the run finishes. The host holds the model provider, secrets and broker; the sandbox only sees <code>eipsec_...</code> placeholders. <a href="https://github.com/ganeshdipdumbare/eipagent/blob/main/examples/tensorlake/main.go">Source</a></p>
 
   <h2>Audit to a SIEM, traces to OpenTelemetry</h2>
   <div class="code" data-title="terminal"><pre><code class="language-bash">go run ./examples/observability</code></pre></div>
@@ -809,7 +809,7 @@ Collector received 4 spans:
     └─ chat demo  trace=f9a69cfa…
     └─ execute_tool weather  trace=f9a69cfa…
     └─ chat demo  trace=f9a69cfa…</code></pre></div>
-  <p><code>audit_file</code> keeps no local file (<code>"path": "-"</code>) and hands every record to <code>audit_http</code>. The fake SIEM checks each batch's HMAC signature and that every record links to the one before. <code>trace_otlp</code> sends one trace per run. The run id is the same in both, so the two systems can be joined. <a href="https://github.com/ganeshdipdumbare/kiln/blob/main/examples/observability/main.go">Source</a></p>
+  <p><code>audit_file</code> keeps no local file (<code>"path": "-"</code>) and hands every record to <code>audit_http</code>. The fake SIEM checks each batch's HMAC signature and that every record links to the one before. <code>trace_otlp</code> sends one trace per run. The run id is the same in both, so the two systems can be joined. <a href="https://github.com/ganeshdipdumbare/eipagent/blob/main/examples/observability/main.go">Source</a></p>
 
   <h2>What the build-time check catches</h2>
   <div class="code" data-title="terminal"><pre><code class="language-bash">$ kiln module check modules</code></pre></div>
@@ -1208,7 +1208,7 @@ var Module = engine.Module{
       <tr><td><code>policy</code>, <code>loop</code></td><td>company rules; the agent loop itself</td><td><a href="#kind-policy">Policy and the loop</a></td></tr>
     </tbody>
   </table></div>
-  <div class="note"><b>From v0.4</b><div><p>v0.5 removed the runtime module system. Interpreted modules, the module store, signed packages, lock files and hot reload are gone; old short names are not aliased. The full old-to-new table is in the <a href="https://github.com/ganeshdipdumbare/kiln/blob/main/CHANGELOG.md">CHANGELOG</a>, and <a href="https://github.com/ganeshdipdumbare/kiln/blob/main/MODULES.md">MODULES.md</a> is the short guide.</p></div></div>
+  <div class="note"><b>From v0.4</b><div><p>v0.5 removed the runtime module system. Interpreted modules, the module store, signed packages, lock files and hot reload are gone; old short names are not aliased. The full old-to-new table is in the <a href="https://github.com/ganeshdipdumbare/eipagent/blob/main/CHANGELOG.md">CHANGELOG</a>, and <a href="https://github.com/ganeshdipdumbare/eipagent/blob/main/MODULES.md">MODULES.md</a> is the short guide.</p></div></div>
 </section>
 
 <section id="modules-choose" class="page" data-nav="What to use when">
@@ -2422,7 +2422,7 @@ func Apply(p *sdk.Module) error {
   <p>To see it end to end in a microVM, run <code>go run ./examples/microsandbox</code> (<a href="#production-examples">output</a>): the agent runs in a <code>sandbox_microsandbox</code> VM with no network, the VM holds only a placeholder, and the API on the host receives the real token.</p>
   <div class="note warn"><b>What it doesn't cover</b><div><p>Placeholders are swapped only in HTTP sent through Go's default transport. A module that needs the raw value in its own process (a database DSN, env for a stdio MCP server), or dials with its own transport like <code>tool_fetch</code>, can't use a secret inside the box: load it on the host with <code>RunIn.HostModules</code>. The host takes the box's word for which of its modules is asking, so grants between modules in the same box are only as strong as the box; a placeholder is still useless outside its <code>SecretHosts</code>. On the host without a sandbox, the agent already has the host's access, so none of this applies.</p></div></div>
   <h3>Run it on a self-hosted microVM</h3>
-  <p><a href="https://firecracker-microvm.github.io/">Firecracker</a> is the microVM monitor behind AWS Lambda. <a href="https://github.com/ganeshdipdumbare/kiln/blob/main/examples/firecracker"><code>examples/firecracker</code></a> is a complete <code>sdk.SandboxProvider</code> that creates a tap device, boots a local microVM through the Firecracker API, connects to it over SSH, and runs the agent inside it. It is the same provider shape a hosted service would use, but self-hosted and free:</p>
+  <p><a href="https://firecracker-microvm.github.io/">Firecracker</a> is the microVM monitor behind AWS Lambda. <a href="https://github.com/ganeshdipdumbare/eipagent/blob/main/examples/firecracker"><code>examples/firecracker</code></a> is a complete <code>sdk.SandboxProvider</code> that creates a tap device, boots a local microVM through the Firecracker API, connects to it over SSH, and runs the agent inside it. It is the same provider shape a hosted service would use, but self-hosted and free:</p>
   <div class="code" data-title="go"><pre><code class="language-go">agent, _ := kiln.New(
 	kiln.WithModule(firecracker()), // examples/firecracker/provider.go
 	kiln.WithModules("tool_shell"),
@@ -3377,8 +3377,8 @@ go run ./cmd/kiln audit verify .kiln/audit.jsonl</code></pre></div>
         <p>The Go SDK for AI agents where everything is a module. Built for teams that need to ship safely.</p>
       </div>
       <div><h6>Docs</h6><a href="#quickstart">Quickstart</a><a href="#concepts">Concepts</a><a href="#lifecycles">Lifecycles</a><a href="#reference-options">Reference</a></div>
-      <div><h6>Project</h6><a href="https://github.com/ganeshdipdumbare/kiln">GitHub</a><a href="https://github.com/ganeshdipdumbare/kiln/releases">Releases</a><a href="https://github.com/ganeshdipdumbare/kiln/blob/main/CHANGELOG.md">Changelog</a><a href="https://github.com/ganeshdipdumbare/kiln/blob/main/SECURITY.md">Security</a></div>
-      <div><h6>Help</h6><a href="#troubleshooting">Troubleshooting</a><a href="#production-checklist">Production checklist</a><a href="https://github.com/ganeshdipdumbare/kiln/issues">Report an issue</a><a href="https://github.com/ganeshdipdumbare/kiln/edit/main/docs/site.html">Edit this page</a></div>
+      <div><h6>Project</h6><a href="https://github.com/ganeshdipdumbare/kiln">GitHub</a><a href="https://github.com/ganeshdipdumbare/eipagent/releases">Releases</a><a href="https://github.com/ganeshdipdumbare/eipagent/blob/main/CHANGELOG.md">Changelog</a><a href="https://github.com/ganeshdipdumbare/eipagent/blob/main/SECURITY.md">Security</a></div>
+      <div><h6>Help</h6><a href="#troubleshooting">Troubleshooting</a><a href="#production-checklist">Production checklist</a><a href="https://github.com/ganeshdipdumbare/eipagent/issues">Report an issue</a><a href="https://github.com/ganeshdipdumbare/eipagent/edit/main/docs/site.html">Edit this page</a></div>
     </div>
     <div class="bottom"><span>© 2026 kiln · docs</span><span>Built with Go · <a href="#introduction">Back to top</a></span></div>
   </footer>
@@ -3390,7 +3390,7 @@ go run ./cmd/kiln audit verify .kiln/audit.jsonl</code></pre></div>
   <div id="toc"></div>
   <div class="extra">
     <button type="button" id="totop"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m8 13 4-4 4 4"/></svg>Scroll to top</button>
-    <a href="https://github.com/ganeshdipdumbare/kiln/issues"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>Give feedback</a>
+    <a href="https://github.com/ganeshdipdumbare/eipagent/issues"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>Give feedback</a>
   </div>
   <div class="promo">
     <b>Try it in one minute</b>
