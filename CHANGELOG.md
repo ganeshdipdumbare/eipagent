@@ -4,6 +4,8 @@ All notable changes to kiln. Versions follow [semantic versioning](https://semve
 
 ## Unreleased
 
+## v0.5.0 — 2026-11-05
+
 ### Added
 
 - The composition lab is back on the docs site (`#composition`): toggle modules and see the build config, the capability summary/diff and a simulated run. It notes that a real build fixes the module set, so this is illustrative rather than runtime toggling.
