@@ -921,7 +921,7 @@
     var box = document.getElementById("demo-embed");
     if (!box) return;
     var here = /vercel\.app$|^localhost$|^127\.0\.0\.1$/.test(location.hostname);
-    var url = here ? "demo/" : "https://eipagent-docs.vercel.app/demo/";
+    var url = here ? "demo/" : "https://kilnai-docs.vercel.app/demo/";
     box.innerHTML = (here ? '<div class="demo-frame"><iframe src="' + url + '" title="Acme Support Desk demo" loading="lazy"></iframe></div>' : "") +
       '<p class="demo-cap">' + (here ? "The live demo, served by the Go backend (on a free instance, so the first visit can take a minute to wake it; until then you can use a replay of recorded runs). Chat as Sam, then switch to Ada to decide. " : "") +
       '<a href="' + url + '">Open the demo in a new tab</a>.</p>';

@@ -10,7 +10,7 @@ All notable changes to kiln. Versions follow [semantic versioning](https://semve
 
 ### Changed
 
-- The project repository is now `github.com/ganeshdipdumbare/kiln`; docs and repository links were updated. The docs site still deploys to `eipagent-docs.vercel.app`, because `kiln-docs.vercel.app` belongs to another project.
+- The project repository is now `github.com/ganeshdipdumbare/kiln`; docs and repository links were updated. The docs site moved to `kilnai-docs.vercel.app` (`kiln.vercel.app`, `kiln-ai.vercel.app` and `klinai.vercel.app` belong to other projects).
 
 ## v0.5.0 — 2026-11-05
 

@@ -55,7 +55,7 @@ func main() {
 
 `mock:demo` is an offline fake model, so this runs with no API key. For a real model, change the model string and set its key (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY` …). The right provider module is enabled by itself.
 
-**Words you'll meet** (the [glossary](https://eipagent-docs.vercel.app/#concepts) has more):
+**Words you'll meet** (the [glossary](https://kilnai-docs.vercel.app/#concepts) has more):
 
 - **Module:** a compiled Go package that exports a descriptor and `func Apply(p *sdk.Module) error`. The loop, providers, tools, memory and policy are all modules.
 - **Service:** something a module provides by name for others to use: `model/anthropic`, `threads`, `memory`, `secrets`.
@@ -63,9 +63,9 @@ func main() {
 - **Capability:** what a module may reach through the broker: `net`, `exec`, `fs:read`, `fs:write`, `env`, `env:secrets`, `db`.
 - **Run** and **thread:** one `Generate` call, and a conversation saved across runs.
 
-**Demo:** [`examples/fullstack`](examples/fullstack) is a support desk with a Go backend and web UI: streaming, refunds that wait for a supervisor, redaction and an audit trail. Run it with `go run ./examples/fullstack`, or try it live at https://eipagent-docs.vercel.app/demo/ (the backend runs on a free instance, so the first visit can take a minute to wake it).
+**Demo:** [`examples/fullstack`](examples/fullstack) is a support desk with a Go backend and web UI: streaming, refunds that wait for a supervisor, redaction and an audit trail. Run it with `go run ./examples/fullstack`, or try it live at https://kilnai-docs.vercel.app/demo/ (the backend runs on a free instance, so the first visit can take a minute to wake it).
 
-**Docs:** https://eipagent-docs.vercel.app has the full guide, with examples, lifecycles and reference. The content is `docs/site.html`; the design system, self-hosted fonts and interactions live in `docs/assets/` (the content is generated from the code and the examples). Every push to `main` that touches the docs or demo rebuilds the site and deploys it ([`docs.yml`](.github/workflows/docs.yml)); to build it locally, run `docs/build.sh` (add `SKIP_RECORD=1` to skip re-recording the demo).
+**Docs:** https://kilnai-docs.vercel.app has the full guide, with examples, lifecycles and reference. The content is `docs/site.html`; the design system, self-hosted fonts and interactions live in `docs/assets/` (the content is generated from the code and the examples). Every push to `main` that touches the docs or demo rebuilds the site and deploys it ([`docs.yml`](.github/workflows/docs.yml)); to build it locally, run `docs/build.sh` (add `SKIP_RECORD=1` to skip re-recording the demo).
 
 Releases and breaking changes are listed in [CHANGELOG.md](CHANGELOG.md); see [Versioning](#versioning).
 
