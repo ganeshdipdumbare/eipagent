@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"os"
 	"strings"
@@ -39,6 +40,7 @@ type branch struct {
 type env struct {
 	srv *app.Server
 	ts  *httptest.Server
+	hc  *http.Client
 	dir string
 }
 
@@ -51,13 +53,14 @@ func start() *env {
 	if err != nil {
 		log.Fatal(err)
 	}
-	return &env{s, httptest.NewServer(s), dir}
+	jar, _ := cookiejar.New(nil)
+	return &env{s, httptest.NewServer(s), &http.Client{Jar: jar}, dir}
 }
 
 func (e *env) close() { e.ts.Close(); e.srv.Close(); os.RemoveAll(e.dir) }
 
 func (e *env) get(path string) any {
-	r, err := http.Get(e.ts.URL + path)
+	r, err := e.hc.Get(e.ts.URL + path)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -69,7 +72,7 @@ func (e *env) get(path string) any {
 
 func (e *env) post(path string, body any) [][2]any {
 	b, _ := json.Marshal(body)
-	r, err := http.Post(e.ts.URL+path, "application/json", bytes.NewReader(b))
+	r, err := e.hc.Post(e.ts.URL+path, "application/json", bytes.NewReader(b))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -91,7 +94,7 @@ func (e *env) post(path string, body any) [][2]any {
 
 func (e *env) postJSON(path string, body any) map[string]any {
 	b, _ := json.Marshal(body)
-	r, err := http.Post(e.ts.URL+path, "application/json", bytes.NewReader(b))
+	r, err := e.hc.Post(e.ts.URL+path, "application/json", bytes.NewReader(b))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -117,6 +120,9 @@ func (e *env) snapshot(threads ...string) map[string]any {
 
 func (e *env) pendingID() string {
 	ap := e.get("/api/approvals").(map[string]any)["approvals"].([]any)
+	if len(ap) == 0 {
+		log.Fatal("expected a pending approval")
+	}
 	return ap[0].(map[string]any)["ID"].(string)
 }
 
