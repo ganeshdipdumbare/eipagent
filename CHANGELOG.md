@@ -4,6 +4,8 @@ All notable changes to kiln. Versions follow [semantic versioning](https://semve
 
 ## Unreleased
 
+## v0.6.0 — 2026-11-06
+
 ### Breaking changes — one way to do each thing
 
 The public API had several spellings for the same decision. It now has one.
