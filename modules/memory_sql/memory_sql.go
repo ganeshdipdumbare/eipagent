@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ganeshdipdumbare/kiln/internal/sqlval"
 	"github.com/ganeshdipdumbare/kiln/sdk"
 )
 
@@ -34,10 +35,8 @@ func Apply(p *sdk.Scope) error {
 		return err
 	}
 	table := p.ConfigString("table", "eip_store")
-	for _, r := range table {
-		if !(r == '_' || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')) {
-			return errors.New("memory_sql: invalid table name")
-		}
+	if !sqlval.ValidIdent(table) {
+		return errors.New("memory_sql: invalid table name")
 	}
 	c, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -53,9 +52,9 @@ func Apply(p *sdk.Scope) error {
 	scan := func(rows []map[string]any) ([]sdk.StoreItem, error) {
 		var out []sdk.StoreItem
 		for _, r := range rows {
-			ns, ok1 := asString(r["ns"])
-			key, ok2 := asString(r["key"])
-			raw, ok3 := asBytes(r["value"])
+			ns, ok1 := sqlval.AsString(r["ns"])
+			key, ok2 := sqlval.AsString(r["key"])
+			raw, ok3 := sqlval.AsBytes(r["value"])
 			ts, ok4 := r["updated_at"].(time.Time)
 			if !ok1 || !ok2 || !ok3 || !ok4 {
 				return nil, errors.New("memory_sql: unexpected column types")
@@ -104,28 +103,6 @@ func Apply(p *sdk.Scope) error {
 			return err
 		},
 	})
-}
-
-// asString and asBytes accept what a driver returns for text and JSONB
-// columns (string or []byte).
-func asString(v any) (string, bool) {
-	switch x := v.(type) {
-	case string:
-		return x, true
-	case []byte:
-		return string(x), true
-	}
-	return "", false
-}
-
-func asBytes(v any) ([]byte, bool) {
-	switch x := v.(type) {
-	case []byte:
-		return x, true
-	case string:
-		return []byte(x), true
-	}
-	return nil, false
 }
 
 // Module is the compiled form of "memory_sql". modules/std registers it.

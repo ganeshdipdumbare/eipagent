@@ -9,6 +9,7 @@ import (
 	"path"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/ganeshdipdumbare/kiln/sdk"
 )
@@ -276,6 +277,7 @@ func Apply(p *sdk.Scope) error {
 	})
 
 	// Record before/after of writes for review.
+	var changesMu sync.Mutex
 	p.OnRunStart(func(c context.Context, st *sdk.RunState) error {
 		if st.Values != nil {
 			delete(st.Values, "fs.changes")
@@ -303,11 +305,13 @@ func Apply(p *sdk.Scope) error {
 				after = string(data)
 			}
 		}
+		changesMu.Lock()
 		if req.Run.Values == nil {
 			req.Run.Values = map[string]any{}
 		}
 		changes, _ := req.Run.Values["fs.changes"].([]map[string]any)
 		req.Run.Values["fs.changes"] = append(changes, map[string]any{"path": path, "before": before, "after": after})
+		changesMu.Unlock()
 		return r, nil
 	})
 	return nil

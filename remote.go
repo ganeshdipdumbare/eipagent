@@ -63,15 +63,16 @@ type RunIn struct {
 }
 
 type remote struct {
-	host    *Agent
-	box     *sdk.Sandbox
-	proc    *sdk.Process
-	conn    *rpc.Conn
-	mu      sync.Mutex
-	subs    map[string]func(sdk.Event)
-	runs    map[string]*sdk.RunState
-	runSeen map[string]time.Time
-	broker  *broker
+	host       *Agent
+	box        *sdk.Sandbox
+	proc       *sdk.Process
+	conn       *rpc.Conn
+	mu         sync.Mutex
+	subs       map[string]func(sdk.Event)
+	runs       map[string]*sdk.RunState
+	runSeen    map[string]time.Time
+	hostIssued map[string]bool // true = started by remote.run / remote.thread
+	broker     *broker
 
 	// What start needs to make a box again after one exits.
 	prov      *sdk.SandboxProvider
@@ -193,7 +194,7 @@ func newRemote(cfg Config) (*Agent, error) {
 	if !ok {
 		return fail(fmt.Errorf("kiln: no sandbox/%s provider on the host", ri.Provider))
 	}
-	r := &remote{host: a, prov: prov, ri: ri, hostTools: cfg.Tools, subs: map[string]func(sdk.Event){}, runs: map[string]*sdk.RunState{}, runSeen: map[string]time.Time{},
+	r := &remote{host: a, prov: prov, ri: ri, hostTools: cfg.Tools, subs: map[string]func(sdk.Event){}, runs: map[string]*sdk.RunState{}, runSeen: map[string]time.Time{}, hostIssued: map[string]bool{},
 		configs: map[string]any{boxDir + "/profile.json": boxProf, boxDir + "/policy.json": &boxPol},
 		uploads: map[string]string{ri.Binary: boxBinary}}
 	r.broker, _ = newBroker(a, ri) // rules checked above
@@ -356,14 +357,16 @@ func (r *remote) handle(noTools bool, hostTools []sdk.Tool) {
 		}
 		st := r.runState(wr.RunID)
 		if st == nil {
-			// A run started inside the box (a scheduled job or webhook) has
-			// no host-issued identity. Accept it for model calls, record it,
-			// and let host policy/budgets apply to this run id. Host tool
-			// calls stay unavailable to such runs (see host.tool).
+			// A run started inside the box (scheduled job / webhook) has no
+			// host-issued identity. Accept model calls and record the id for
+			// host policy/budgets, but do not mark it host-issued so host.tool
+			// stays unavailable (see host.tool).
 			st = &sdk.RunState{ID: wr.RunID, Thread: wr.Thread, User: wr.User, Model: wr.Model, Values: map[string]any{}}
-			if !r.setRun(st) {
+			if !r.setRun(st, false) {
 				return nil, fmt.Errorf("host.llm: too many live sandbox runs")
 			}
+		} else {
+			r.touchRun(wr.RunID)
 		}
 		snap := r.host.eng.Root().Snapshot()
 		st.Model = wr.Model
@@ -413,6 +416,10 @@ func (r *remote) handle(noTools bool, hostTools []sdk.Tool) {
 		if st == nil {
 			return nil, fmt.Errorf("host.tool: unknown run %q (the box must start a run first)", call.RunID)
 		}
+		if !r.isHostIssued(call.RunID) {
+			return nil, fmt.Errorf("host.tool: run %q was not started by the host", call.RunID)
+		}
+		r.touchRun(call.RunID)
 		var tool *sdk.Tool
 		for i := range hostTools {
 			if hostTools[i].Name == call.Name {
@@ -485,10 +492,11 @@ func (r *remote) subscribe(runID string, fn func(sdk.Event)) func() {
 	return func() { r.mu.Lock(); delete(r.subs, runID); r.mu.Unlock() }
 }
 
-// setRun records the host-side identity of a run. Box calls to host.llm
-// and host.tool are checked against this map, not against the identity
-// the box supplies, so a compromised box can't act as another user.
-func (r *remote) setRun(st *sdk.RunState) bool {
+// setRun records a run on the host. When issued is true (remote.run /
+// remote.thread), host.tool may use it. Box-minted ids from host.llm use
+// issued=false so a compromised box can't open the tool bridge by inventing
+// a run id. Identity for host-issued runs comes from this map, not the box.
+func (r *remote) setRun(st *sdk.RunState, issued bool) bool {
 	if st == nil || st.ID == "" {
 		return false
 	}
@@ -502,6 +510,7 @@ func (r *remote) setRun(st *sdk.RunState) bool {
 				}
 				delete(r.runs, id)
 				delete(r.runSeen, id)
+				delete(r.hostIssued, id)
 			}
 		}
 	}
@@ -514,11 +523,30 @@ func (r *remote) setRun(st *sdk.RunState) bool {
 	}
 	r.runs[st.ID] = st
 	r.runSeen[st.ID] = time.Now()
+	if issued {
+		r.hostIssued[st.ID] = true
+	} else {
+		delete(r.hostIssued, st.ID)
+	}
 	r.mu.Unlock()
 	for _, old := range expired {
 		r.endHostRun(context.Background(), old, nil, errRunExpired)
 	}
 	return true
+}
+
+func (r *remote) isHostIssued(id string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.hostIssued[id]
+}
+
+func (r *remote) touchRun(id string) {
+	r.mu.Lock()
+	if _, ok := r.runs[id]; ok {
+		r.runSeen[id] = time.Now()
+	}
+	r.mu.Unlock()
 }
 
 func (r *remote) runState(id string) *sdk.RunState {
@@ -528,6 +556,7 @@ func (r *remote) runState(id string) *sdk.RunState {
 	if stale {
 		delete(r.runs, id)
 		delete(r.runSeen, id)
+		delete(r.hostIssued, id)
 	}
 	r.mu.Unlock()
 	if stale {
@@ -541,6 +570,7 @@ func (r *remote) endRun(id string) {
 	r.mu.Lock()
 	delete(r.runs, id)
 	delete(r.runSeen, id)
+	delete(r.hostIssued, id)
 	r.mu.Unlock()
 }
 
@@ -555,7 +585,9 @@ func (r *remote) run(ctx context.Context, st *sdk.RunState, run Run) (*Result, e
 	if st.ID == "" {
 		st.ID = sdk.NewRunID()
 	}
-	r.setRun(st)
+	if !r.setRun(st, true) {
+		return nil, fmt.Errorf("kiln: too many live sandbox runs")
+	}
 	defer r.endRun(st.ID)
 	if err := r.host.eng.Root().Snapshot().AgentStart(ctx, st); err != nil {
 		r.endHostRun(ctx, st, nil, err)
@@ -594,7 +626,9 @@ func (r *remote) thread(ctx context.Context, thread, prompt string, decisions []
 	if run.Model != "" {
 		st.Model = run.Model
 	}
-	r.setRun(st)
+	if !r.setRun(st, true) {
+		return nil, fmt.Errorf("kiln: too many live sandbox runs")
+	}
 	defer r.endRun(runID)
 	if err := r.host.eng.Root().Snapshot().AgentStart(ctx, st); err != nil {
 		r.endHostRun(ctx, st, nil, err)

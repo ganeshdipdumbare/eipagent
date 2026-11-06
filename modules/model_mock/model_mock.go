@@ -16,7 +16,8 @@ import (
 //
 // Config:
 //
-//	script: [{text: "..."} | {tool: "name", args: {...}} | {json: {...}}]
+//	script: [{text: "..."} | {tool: "name", args: {...}} |
+//	         {tools: [{tool, args}, ...]} | {json: {...}}]
 //	        replies used in order, one per model call; after the script
 //	        runs out the heuristics below apply.
 //	name:   service suffix (default "mock")
@@ -46,6 +47,16 @@ func Apply(p *sdk.Scope) error {
 		}
 		mu.Unlock()
 		if step != nil {
+			if raw, ok := step["tools"].([]any); ok {
+				var calls []sdk.ToolCall
+				for _, item := range raw {
+					m, _ := item.(map[string]any)
+					name, _ := m["tool"].(string)
+					args, _ := m["args"].(map[string]any)
+					calls = append(calls, sdk.ToolCall{Name: name, Args: args})
+				}
+				return sdk.Message{Role: "assistant", ToolCalls: calls}
+			}
 			if t, ok := step["tool"].(string); ok {
 				args, _ := step["args"].(map[string]any)
 				return sdk.Message{Role: "assistant", ToolCalls: []sdk.ToolCall{{Name: t, Args: args}}}

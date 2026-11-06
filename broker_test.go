@@ -62,3 +62,30 @@ func TestBrokerBlocksPrivateAddressesByDefault(t *testing.T) {
 		t.Fatalf("AllowPrivateEgress must permit the dial: %v", err)
 	}
 }
+
+func TestBrokerRejectsSecretQueryInURL(t *testing.T) {
+	t.Setenv("API_TOKEN", "x?admin=1")
+	a, err := New(Config{
+		Model:   "mock:x",
+		Modules: []Module{must("model_mock"), must("secrets_env")},
+		Logger:  func(string, string) {},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	b, err := newBroker(a, &RunIn{SecretHosts: map[string][]string{"API_TOKEN": {"GET example.com/v1/public/*"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.setCallers([]string{"mod"})
+	b.setSecretGrants(map[string][]string{"mod": {"API_TOKEN"}})
+	ph, err := b.placeholder(context.Background(), "mod", "API_TOKEN")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = b.fetch(context.Background(), wireHTTPReq{Method: "GET", URL: "https://example.com/v1/public/" + ph})
+	if err == nil || !strings.Contains(err.Error(), "? or #") {
+		t.Fatalf("secret with ? in URL must be refused: %v", err)
+	}
+}
