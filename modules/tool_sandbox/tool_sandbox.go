@@ -18,7 +18,8 @@ import (
 // destroyed when the module unloads.
 //
 // Config: provider ("docker"), image, network ("none"), memory_mb, cpus,
-// max_boxes (3 per thread), images (allowed images; [] = any).
+// max_boxes (3 per thread), max_boxes_total (32 across all threads),
+// images (allowed images; [] = any).
 //
 // Example:
 //
@@ -34,6 +35,7 @@ func Apply(p *sdk.Scope) error {
 	provName := p.ConfigString("provider", "docker")
 	defImage := p.ConfigString("image", "")
 	maxBoxes := p.ConfigInt("max_boxes", 3)
+	maxTotal := p.ConfigInt("max_boxes_total", 32)
 	allowedImages := p.ConfigStrings("images")
 	base := sdk.SandboxSpec{
 		MemoryMB: p.ConfigInt("memory_mb", 0),
@@ -42,6 +44,7 @@ func Apply(p *sdk.Scope) error {
 	}
 	var mu sync.Mutex
 	boxes := map[string]map[string]*sdk.Sandbox{} // thread -> id -> box
+	pending := map[string]int{}                   // creates in flight per thread
 	p.OnClose(func() {
 		mu.Lock()
 		defer mu.Unlock()
@@ -95,17 +98,36 @@ func Apply(p *sdk.Scope) error {
 			}
 			t := thread(c)
 			mu.Lock()
-			n := len(boxes[t])
-			mu.Unlock()
-			if n >= maxBoxes {
+			total := pending[t]
+			for _, m := range boxes {
+				total += len(m)
+			}
+			for th, n := range pending {
+				if th != t {
+					total += n
+				}
+			}
+			if len(boxes[t])+pending[t] >= maxBoxes {
+				mu.Unlock()
 				return "", fmt.Errorf("limit of %d sandboxes reached; destroy one first", maxBoxes)
 			}
+			if total >= maxTotal {
+				mu.Unlock()
+				return "", fmt.Errorf("global limit of %d sandboxes reached; destroy one first", maxTotal)
+			}
+			pending[t]++
+			mu.Unlock()
 			spec.Labels = map[string]string{"kiln.thread": t}
 			b, err := sp.Create(c, spec)
+			mu.Lock()
+			pending[t]--
+			if pending[t] == 0 {
+				delete(pending, t)
+			}
 			if err != nil {
+				mu.Unlock()
 				return "", err
 			}
-			mu.Lock()
 			if boxes[t] == nil {
 				boxes[t] = map[string]*sdk.Sandbox{}
 			}

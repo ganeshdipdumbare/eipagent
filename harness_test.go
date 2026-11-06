@@ -302,6 +302,25 @@ func TestLoopDetectAndOutputLimit(t *testing.T) {
 	}
 }
 
+func TestHookGuardPreset(t *testing.T) {
+	echo := kiln.NewTool("echo", "Echo", func(ctx context.Context, in struct {
+		Text string `json:"text"`
+	}) (string, error) {
+		return in.Text, nil
+	})
+	a := mockAgent(t, []any{
+		map[string]any{"tool": "echo", "args": map[string]any{"text": "my password is secret"}},
+		map[string]any{"text": "done"},
+	}, withTools(echo), withModuleConfig("hook_guard", map[string]any{"words": []any{"password"}}))
+	res, err := a.Generate(bg, "go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := res.Steps[0].ToolResults[0].Content; !strings.Contains(r, "blocked word") && !strings.Contains(r, "password") {
+		t.Fatalf("hook_guard should block: %q", r)
+	}
+}
+
 func TestGuardrails(t *testing.T) {
 	sql := kiln.NewTool("sql", "Run SQL", func(ctx context.Context, in struct {
 		Q string `json:"q"`

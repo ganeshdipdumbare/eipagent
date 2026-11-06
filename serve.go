@@ -137,7 +137,9 @@ func ServeBox(ctx context.Context, r io.Reader, w io.Writer, cfg Config) error {
 	})
 	conn.Handle("thread.get", func(c context.Context, raw json.RawMessage) (any, error) {
 		var wr wireRun
-		json.Unmarshal(raw, &wr)
+		if err := json.Unmarshal(raw, &wr); err != nil {
+			return nil, err
+		}
 		msgs, err := a.Thread(wr.Thread).Messages(c)
 		if err != nil {
 			return nil, err

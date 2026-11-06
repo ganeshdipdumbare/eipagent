@@ -67,6 +67,62 @@ func TestToolSandbox(t *testing.T) {
 	}
 }
 
+func TestToolSandboxMaxBoxesParallel(t *testing.T) {
+	root := t.TempDir()
+	a := mockAgent(t, []any{
+		map[string]any{"tools": []any{
+			map[string]any{"tool": "sandbox_create"},
+			map[string]any{"tool": "sandbox_create"},
+		}},
+		map[string]any{"tool": "sandbox_list"},
+		map[string]any{"text": "done"},
+	}, withModuleConfig("loop", map[string]any{"parallel_tools": true}),
+		withModuleConfig("sandbox_local", map[string]any{"root": root}),
+		withModuleConfig("tool_sandbox", map[string]any{"provider": "local", "max_boxes": 1}))
+	res, err := a.Generate(bg, "make two")
+	if err != nil {
+		t.Fatal(err)
+	}
+	outs := []string{res.Steps[0].ToolResults[0].Content, res.Steps[0].ToolResults[1].Content}
+	ok, denied := 0, 0
+	for _, o := range outs {
+		if strings.Contains(o, "created sandbox") {
+			ok++
+		}
+		if strings.Contains(o, "limit of 1 sandboxes") {
+			denied++
+		}
+	}
+	if ok != 1 || denied != 1 {
+		t.Fatalf("max_boxes under parallel create: ok=%d denied=%d outs=%q", ok, denied, outs)
+	}
+	listed := strings.TrimSpace(res.Steps[1].ToolResults[0].Content)
+	if strings.Count(listed, "local-") != 1 {
+		t.Fatalf("expected one live box, list=%q", listed)
+	}
+}
+
+func TestParallelWriteFileChanges(t *testing.T) {
+	root := t.TempDir()
+	a := mockAgent(t, []any{
+		map[string]any{"tools": []any{
+			map[string]any{"tool": "write_file", "args": map[string]any{"path": "a.txt", "content": "A"}},
+			map[string]any{"tool": "write_file", "args": map[string]any{"path": "b.txt", "content": "B"}},
+		}},
+		map[string]any{"text": "done"},
+	}, withModuleConfig("loop", map[string]any{"parallel_tools": true}),
+		withModuleConfig("sandbox_local", map[string]any{"root": root}),
+		withModuleConfig("workspace_sandbox", map[string]any{"provider": "local"}),
+		withModules("tool_fs"))
+	res, err := a.Generate(bg, "write both")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Changes) != 2 {
+		t.Fatalf("parallel writes must record both changes: %+v", res.Changes)
+	}
+}
+
 func TestDockerSandbox(t *testing.T) {
 	if exec.Command("docker", "info").Run() != nil {
 		t.Skip("docker not available")

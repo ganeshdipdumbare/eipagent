@@ -13,11 +13,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ganeshdipdumbare/kiln/internal/filelock"
 	"github.com/ganeshdipdumbare/kiln/sdk"
 )
 
-// Long-term store kept in one JSON file, provided as "memory". Good for
-// single-node and development use; use memory_sql for shared storage.
+// Long-term store kept in one JSON file, provided as "memory". Safe
+// across processes on one machine (PID lock file around each write).
+// Prefer memory_sql for multi-host shared storage.
 //
 // Config: path (default ".kiln/store.json"). The file's directory is
 // granted through fs:read and fs:write and must already exist.
@@ -36,7 +38,8 @@ func Apply(p *sdk.Scope) error {
 	}
 	p.OnClose(func() { d.Close() })
 	name := filepath.Base(path)
-	var mu sync.Mutex
+	lockName := name + ".lock"
+	var mu sync.Mutex // process-local; file lock covers other processes
 	key := func(ns []string, k string) string { return strings.Join(ns, "\x1f") + "\x1e" + k }
 	read := func() (map[string]sdk.StoreItem, error) {
 		items := map[string]sdk.StoreItem{}
@@ -70,63 +73,77 @@ func Apply(p *sdk.Scope) error {
 		}
 		return true
 	}
+	withLock := func(c context.Context, fn func() error) error {
+		mu.Lock()
+		defer mu.Unlock()
+		unlock, err := filelock.Lock(c, d, lockName)
+		if err != nil {
+			return err
+		}
+		defer unlock()
+		return fn()
+	}
 	return p.Provide("memory", &sdk.Store{
 		Put: func(c context.Context, ns []string, k string, v map[string]any) error {
-			mu.Lock()
-			defer mu.Unlock()
-			items, err := read()
-			if err != nil {
-				return err
-			}
-			items[key(ns, k)] = sdk.StoreItem{Namespace: ns, Key: k, Value: sdk.RedactMap(v), Updated: time.Now().UnixMilli()}
-			return write(items)
+			return withLock(c, func() error {
+				items, err := read()
+				if err != nil {
+					return err
+				}
+				items[key(ns, k)] = sdk.StoreItem{Namespace: ns, Key: k, Value: sdk.RedactMap(v), Updated: time.Now().UnixMilli()}
+				return write(items)
+			})
 		},
 		Get: func(c context.Context, ns []string, k string) (*sdk.StoreItem, error) {
-			mu.Lock()
-			defer mu.Unlock()
-			items, err := read()
-			if err != nil {
-				return nil, err
-			}
-			it, ok := items[key(ns, k)]
-			if !ok {
-				return nil, nil
-			}
-			return &it, nil
+			var it *sdk.StoreItem
+			err := withLock(c, func() error {
+				items, err := read()
+				if err != nil {
+					return err
+				}
+				v, ok := items[key(ns, k)]
+				if !ok {
+					return nil
+				}
+				it = &v
+				return nil
+			})
+			return it, err
 		},
 		Search: func(c context.Context, ns []string, q string, limit int) ([]sdk.StoreItem, error) {
-			mu.Lock()
-			defer mu.Unlock()
-			items, err := read()
-			if err != nil {
-				return nil, err
-			}
-			q = strings.ToLower(q)
 			var out []sdk.StoreItem
-			for _, it := range items {
-				if !under(it.Namespace, ns) {
-					continue
+			err := withLock(c, func() error {
+				items, err := read()
+				if err != nil {
+					return err
 				}
-				if q != "" && !strings.Contains(strings.ToLower(it.Key+" "+sdk.ToJSON(it.Value)), q) {
-					continue
+				q = strings.ToLower(q)
+				for _, it := range items {
+					if !under(it.Namespace, ns) {
+						continue
+					}
+					if q != "" && !strings.Contains(strings.ToLower(it.Key+" "+sdk.ToJSON(it.Value)), q) {
+						continue
+					}
+					out = append(out, it)
 				}
-				out = append(out, it)
-			}
-			sort.Slice(out, func(i, j int) bool { return out[i].Updated > out[j].Updated })
-			if limit > 0 && len(out) > limit {
-				out = out[:limit]
-			}
-			return out, nil
+				sort.Slice(out, func(i, j int) bool { return out[i].Updated > out[j].Updated })
+				if limit > 0 && len(out) > limit {
+					out = out[:limit]
+				}
+				return nil
+			})
+			return out, err
 		},
 		Delete: func(c context.Context, ns []string, k string) error {
-			mu.Lock()
-			defer mu.Unlock()
-			items, err := read()
-			if err != nil {
-				return err
-			}
-			delete(items, key(ns, k))
-			return write(items)
+			return withLock(c, func() error {
+				items, err := read()
+				if err != nil {
+					return err
+				}
+				delete(items, key(ns, k))
+				return write(items)
+			})
 		},
 	})
 }

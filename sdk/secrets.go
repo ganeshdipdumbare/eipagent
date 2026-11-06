@@ -405,7 +405,9 @@ func secretAllowed(grants []string, name string) bool {
 // NewRunID returns a random run id (16 hex chars).
 func NewRunID() string {
 	b := make([]byte, 8)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		panic("kiln/sdk: crypto/rand failed: " + err.Error())
+	}
 	return hex.EncodeToString(b)
 }
 
@@ -438,7 +440,9 @@ const placeholderLen = len(PlaceholderPrefix) + 32
 // NewPlaceholder returns a fresh random placeholder.
 func NewPlaceholder() string {
 	b := make([]byte, 16)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		panic("kiln/sdk: crypto/rand failed: " + err.Error())
+	}
 	return PlaceholderPrefix + hex.EncodeToString(b)
 }
 

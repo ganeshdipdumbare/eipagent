@@ -4,6 +4,39 @@ All notable changes to kiln. Versions follow [semantic versioning](https://semve
 
 ## Unreleased
 
+### Fixed
+
+- **RunIn `host.tool` boundary.** Box-minted runs (webhook/schedule inside
+  the sandbox) could open the host tool bridge by calling `host.llm` first.
+  Only host-started runs are tool-eligible now; `runSeen` is refreshed on
+  each bridge call so long runs do not expire into the same hole.
+- **`trigger_webhook` invalid thread ids.** Bad thread templates no longer
+  take a concurrency slot or hang `Close`; the id is checked before the
+  slot and WaitGroup entry.
+- **`tool_sandbox` `max_boxes` under parallel creates.** In-flight creates
+  are counted so `parallel_tools` cannot exceed the per-thread cap. A
+  process-wide `max_boxes_total` (default 32) caps growth across threads.
+- **`tool_fs` `fs.changes` under `parallel_tools`.** Concurrent writes no
+  longer race on `Run.Values`.
+- **File persistence locks.** `threads_file` and `memory_file` use PID lock
+  files and only reclaim a lock when the holder process is gone (not after
+  30s while it still holds it).
+- **Broker secret substitution in URLs.** After swapping placeholders the
+  host re-checks host/path rules and refuses secrets that inject `?` or `#`
+  into the URL.
+- **`thread.get` JSON errors** on the box RPC are returned instead of
+  treated as an empty thread.
+- **`NewRunID` / `NewPlaceholder`** panic if `crypto/rand` fails instead of
+  returning weak zero ids.
+
+### Changed
+
+- **`hook_guard`** is a thin preset over `hook_guardrails` (`tool_args` +
+  keywords + block). Prefer `hook_guardrails` for new rules.
+- **`threads_sql.List`** applies `list_limit` (default 10000).
+- Shared SQL column helpers live in `internal/sqlval`; PID file locks in
+  `internal/filelock`.
+
 ## v0.6.0 — 2026-11-06
 
 ### Breaking changes — one way to do each thing

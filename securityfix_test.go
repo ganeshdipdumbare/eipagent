@@ -533,6 +533,42 @@ func TestWebhookReplayCacheFull(t *testing.T) {
 	}
 }
 
+func TestWebhookInvalidThreadDoesNotLeakSlot(t *testing.T) {
+	t.Setenv("HOOK_TOKEN", "hook-secret-123")
+	addr := freeAddr(t)
+	a := mockAgent(t, []any{map[string]any{"text": "done"}},
+		withModuleConfig("secrets_env", nil),
+		withModuleConfig("trigger_webhook", map[string]any{"addr": addr, "routes": []any{map[string]any{
+			"path": "/hook", "secret": "secret://HOOK_TOKEN", "user": "bot",
+			"thread": "t-{n}", "max_concurrent": 1,
+		}}}))
+	for i := 0; i < 4; i++ {
+		ts := strconv.FormatInt(time.Now().Unix(), 10)
+		// JSON \n becomes a real newline in the filled thread id (invalid).
+		body := []byte(`{"n":"bad\n` + strconv.Itoa(i) + `"}`)
+		code, out := postHook(t, addr, "/hook", ts, signHook("hook-secret-123", ts, body), body)
+		if code != 400 || !strings.Contains(out, "invalid thread id") {
+			t.Fatalf("invalid #%d: %d %s", i, code, out)
+		}
+	}
+	ts := strconv.FormatInt(time.Now().Unix(), 10)
+	okBody := []byte(`{"n":"ok"}`)
+	code, out := postHook(t, addr, "/hook", ts, signHook("hook-secret-123", ts, okBody), okBody)
+	if code != 202 {
+		t.Fatalf("valid request after invalids should be accepted: %d %s", code, out)
+	}
+	done := make(chan struct{})
+	go func() {
+		a.Close()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Close hung; invalid-thread path likely leaked a WaitGroup slot")
+	}
+}
+
 func TestWebhookTimestampDefaultAndOptOut(t *testing.T) {
 	t.Setenv("HOOK_TOKEN", "hook-secret-123")
 	addr := freeAddr(t)

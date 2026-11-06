@@ -231,6 +231,16 @@ func route(p *sdk.Scope, mux *http.ServeMux, agent *sdk.AgentService, r map[stri
 			http.Error(w, "replayed request", 409)
 			return
 		}
+		var doc map[string]any
+		json.Unmarshal(body, &doc)
+		thread := fill(threadT, doc, string(body))
+		if !validThreadID(thread) {
+			p.Logf("webhook %s: refused thread id %q", path, thread)
+			release(got)
+			http.Error(w, "invalid thread id", 400)
+			return
+		}
+		prompt := fill(promptT, doc, string(body))
 		select {
 		case slots <- struct{}{}:
 		default:
@@ -244,15 +254,6 @@ func route(p *sdk.Scope, mux *http.ServeMux, agent *sdk.AgentService, r map[stri
 			http.Error(w, "shutting down", 503)
 			return
 		}
-		var doc map[string]any
-		json.Unmarshal(body, &doc)
-		thread := fill(threadT, doc, string(body))
-		if !validThreadID(thread) {
-			p.Logf("webhook %s: refused thread id %q", path, thread)
-			http.Error(w, "invalid thread id", 400)
-			return
-		}
-		prompt := fill(promptT, doc, string(body))
 		w.WriteHeader(202)
 		fmt.Fprintf(w, "{\"accepted\":true,\"thread\":%q}\n", thread)
 		go func() {

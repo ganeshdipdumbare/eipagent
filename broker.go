@@ -396,7 +396,40 @@ func (b *broker) fetch(ctx context.Context, req wireHTTPReq) (resp *wireHTTPResp
 	norm := *u
 	norm.Path = requestPath(u)
 	norm.RawPath = ""
-	hr, err := http.NewRequestWithContext(ctx, method, swap(norm.String()), bytes.NewReader(body))
+	finalURL := swap(norm.String())
+	u2, err := url.Parse(finalURL)
+	if err != nil || (u2.Scheme != "http" && u2.Scheme != "https") || u2.Host == "" {
+		return deny(fmt.Errorf("sandbox egress: secret substitution produced a bad URL"))
+	}
+	if ambiguousPath(u2) || strings.ContainsAny(u2.Path, ";\\") {
+		return deny(fmt.Errorf("sandbox egress: secret substitution produced an ambiguous path"))
+	}
+	dest2, p2 := u2.Hostname(), requestPath(u2)
+	if !strings.EqualFold(dest2, dest) {
+		return deny(fmt.Errorf("sandbox egress: secret substitution changed the host from %s to %s", dest, dest2))
+	}
+	// Re-check path rules after swap so a secret containing "?" or path
+	// segments cannot open a URL the pre-swap rule did not allow.
+	if len(phs) > 0 {
+		for _, ph := range phs {
+			b.mu.Lock()
+			sec := b.byPh[ph]
+			b.mu.Unlock()
+			if !anyAllows(b.hosts[sec.name], method, dest2, p2) {
+				rec["module"] = sec.caller
+				return deny(fmt.Errorf("sandbox egress: secret %s may not be sent to %s %s%s after substitution (RunIn.SecretHosts)", sec.name, method, dest2, p2))
+			}
+		}
+	} else if !anyAllows(b.egress, method, dest2, p2) {
+		return deny(fmt.Errorf("sandbox egress: %s %s%s is not allowed after substitution (RunIn.Egress)", method, dest2, p2))
+	}
+	for _, ph := range sdk.FindPlaceholders(norm.String()) {
+		if strings.ContainsAny(values[ph], "?#") {
+			return deny(fmt.Errorf("sandbox egress: secret value may not contain ? or # when used in a URL"))
+		}
+	}
+	rec["path"] = sdk.Redact(p2)
+	hr, err := http.NewRequestWithContext(ctx, method, finalURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -411,7 +444,7 @@ func (b *broker) fetch(ctx context.Context, req wireHTTPReq) (resp *wireHTTPResp
 			hr.Header.Add(k, swap(v))
 		}
 	}
-	hr.Host = u.Host
+	hr.Host = u2.Host
 	hresp, err := b.client.Do(hr)
 	if err != nil {
 		return nil, errors.New(sdk.Redact(err.Error()))

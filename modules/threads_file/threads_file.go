@@ -6,18 +6,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io/fs"
 	"net/url"
 	"sort"
 	"strings"
-	"time"
 
+	"github.com/ganeshdipdumbare/kiln/internal/filelock"
 	"github.com/ganeshdipdumbare/kiln/sdk"
 )
 
 // Thread storage keeping one JSON file per thread, provided as
-// "threads". Safe across processes on one machine (lock files).
+// "threads". Safe across processes on one machine (PID lock files).
 //
 // Config: dir (default ".kiln/threads"). The directory is granted
 // through fs:read and fs:write and must already exist.
@@ -36,26 +35,6 @@ func Apply(p *sdk.Scope) error {
 	}
 	p.OnClose(func() { d.Close() })
 	path := func(id string) string { return url.PathEscape(id) + ".json" }
-	lock := func(c context.Context, id string) (func(), error) {
-		lp := path(id) + ".lock"
-		for i := 0; ; i++ {
-			if err := d.CreateNew(lp, 0o600); err == nil {
-				return func() { d.Remove(lp) }, nil
-			}
-			if st, serr := d.Stat(lp); serr == nil && time.Since(st.ModTime()) > 30*time.Second {
-				d.Remove(lp) // stale lock from a crashed process
-				continue
-			}
-			if i > 200 {
-				return nil, fmt.Errorf("threads_file: thread %s is locked", id)
-			}
-			select {
-			case <-c.Done():
-				return nil, c.Err()
-			case <-time.After(10 * time.Millisecond):
-			}
-		}
-	}
 	load := func(id string) (*sdk.ThreadState, error) {
 		raw, err := d.ReadFile(path(id))
 		if errors.Is(err, fs.ErrNotExist) {
@@ -73,7 +52,7 @@ func Apply(p *sdk.Scope) error {
 	return p.Provide("threads", &sdk.Checkpointer{
 		Load: func(c context.Context, id string) (*sdk.ThreadState, error) { return load(id) },
 		Save: func(c context.Context, st *sdk.ThreadState, expected int64) error {
-			unlock, err := lock(c, st.ID)
+			unlock, err := filelock.Lock(c, d, path(st.ID)+".lock")
 			if err != nil {
 				return err
 			}

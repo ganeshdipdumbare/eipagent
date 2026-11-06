@@ -3,32 +3,35 @@ package hook_guard
 import "github.com/ganeshdipdumbare/kiln/engine"
 
 import (
-	"strings"
-
+	"github.com/ganeshdipdumbare/kiln/modules/hook_guardrails"
 	"github.com/ganeshdipdumbare/kiln/sdk"
 )
 
-// Vetoes tool calls whose arguments contain a blocked word.
+// Vetoes tool calls whose arguments contain a blocked word. This is a
+// thin preset over hook_guardrails (tool_args + keywords + block).
 // Config: words (default ["password"]).
 //
 // Example:
 //
 //	hook_guard.New(map[string]any{"words": []any{"password", "api_key"}})
+//	// Prefer hook_guardrails.New when you need more rules.
 func Apply(p *sdk.Scope) error {
 	words := p.ConfigStrings("words")
 	if len(words) == 0 {
 		words = []string{"password"}
 	}
-	p.On(sdk.HookToolBefore, func(e *sdk.HookEvent) {
-		s := sdk.ToJSON(e.Args)
-		for _, w := range words {
-			if strings.Contains(strings.ToLower(s), strings.ToLower(w)) {
-				e.Veto = "refusing: arguments mention " + w
-				return
-			}
-		}
-	})
-	return nil
+	kws := make([]any, len(words))
+	for i, w := range words {
+		kws[i] = w
+	}
+	prev := p.Config
+	p.Config = map[string]any{"rules": []any{map[string]any{
+		"on": "tool_args", "keywords": kws, "action": "block",
+		"message": "refusing: arguments mention a blocked word",
+	}}}
+	err := hook_guardrails.Apply(p)
+	p.Config = prev
+	return err
 }
 
 // Module is the compiled form of "hook_guard". modules/std registers it.

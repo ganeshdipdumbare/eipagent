@@ -8,6 +8,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/ganeshdipdumbare/kiln/internal/sqlval"
 	"github.com/ganeshdipdumbare/kiln/sdk"
 )
 
@@ -15,7 +16,7 @@ import (
 // "threads". Optimistic versioning lets many stateless replicas
 // share threads safely. The table is created on first load.
 //
-// Config: table (default "eip_threads").
+// Config: table (default "eip_threads"), list_limit (default 10000).
 //
 // Example:
 //
@@ -32,8 +33,12 @@ func Apply(p *sdk.Scope) error {
 		return err
 	}
 	table := p.ConfigString("table", "eip_threads")
-	if !validIdent(table) {
+	if !sqlval.ValidIdent(table) {
 		return errors.New("threads_sql: invalid table name")
+	}
+	listLimit := p.ConfigInt("list_limit", 10000)
+	if listLimit <= 0 {
+		listLimit = 10000
 	}
 	c, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -53,7 +58,7 @@ func Apply(p *sdk.Scope) error {
 			if len(rows) == 0 {
 				return nil, nil
 			}
-			raw, ok := asBytes(rows[0]["state"])
+			raw, ok := sqlval.AsBytes(rows[0]["state"])
 			if !ok {
 				return nil, errors.New("threads_sql: state is not JSON bytes")
 			}
@@ -89,13 +94,13 @@ func Apply(p *sdk.Scope) error {
 			return err
 		},
 		List: func(c context.Context, prefix string) ([]string, error) {
-			rows, err := db.Query(c, `SELECT id FROM `+table+` WHERE starts_with(id, $1) ORDER BY id`, prefix)
+			rows, err := db.Query(c, `SELECT id FROM `+table+` WHERE starts_with(id, $1) ORDER BY id LIMIT $2`, prefix, listLimit)
 			if err != nil {
 				return nil, err
 			}
 			var out []string
 			for _, r := range rows {
-				id, ok := asString(r["id"])
+				id, ok := sqlval.AsString(r["id"])
 				if !ok {
 					return nil, errors.New("threads_sql: id is not text")
 				}
@@ -104,40 +109,6 @@ func Apply(p *sdk.Scope) error {
 			return out, nil
 		},
 	})
-}
-
-// asString and asBytes accept what a driver returns for text and JSONB
-// columns (string or []byte).
-func asString(v any) (string, bool) {
-	switch x := v.(type) {
-	case string:
-		return x, true
-	case []byte:
-		return string(x), true
-	}
-	return "", false
-}
-
-func asBytes(v any) ([]byte, bool) {
-	switch x := v.(type) {
-	case []byte:
-		return x, true
-	case string:
-		return []byte(x), true
-	}
-	return nil, false
-}
-
-func validIdent(s string) bool {
-	if s == "" || len(s) > 63 {
-		return false
-	}
-	for _, r := range s {
-		if !(r == '_' || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')) {
-			return false
-		}
-	}
-	return true
 }
 
 // Module is the compiled form of "threads_sql". modules/std registers it.
