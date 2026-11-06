@@ -4,6 +4,8 @@ All notable changes to kiln. Versions follow [semantic versioning](https://semve
 
 ## Unreleased
 
+## v0.6.2 — 2026-11-06
+
 ### Added
 
 - **One-package modules.** `kiln.Scope`, `kiln.HTTPOptions`, `kiln.Object`,

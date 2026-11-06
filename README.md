@@ -19,7 +19,7 @@
 Requires **Go 1.27**.
 
 ```bash
-go get github.com/ganeshdipdumbare/kiln@v0.6.1
+go get github.com/ganeshdipdumbare/kiln@v0.6.2
 ```
 
 The repository is private: run `go env -w GOPRIVATE=github.com/ganeshdipdumbare/*` once, and `gh auth setup-git` (or an SSH key) so `git` can fetch it.
