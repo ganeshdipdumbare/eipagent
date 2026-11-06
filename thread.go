@@ -45,9 +45,9 @@ func (t *Thread) load(ctx context.Context) (*sdk.Checkpointer, *sdk.ThreadState,
 }
 
 // Generate adds a user message and runs the agent on the thread.
-func (t *Thread) Generate(ctx context.Context, prompt string, opts ...RunOption) (*Result, error) {
+func (t *Thread) Generate(ctx context.Context, prompt string, run ...Run) (*Result, error) {
 	if t.a.remote != nil {
-		return t.a.remote.thread(ctx, t.id, prompt, nil, opts)
+		return t.a.remote.thread(ctx, t.id, prompt, nil, one(run))
 	}
 	cp, ts, err := t.load(ctx)
 	if err != nil {
@@ -56,28 +56,27 @@ func (t *Thread) Generate(ctx context.Context, prompt string, opts ...RunOption)
 	if len(ts.Pending) > 0 {
 		return nil, fmt.Errorf("kiln: thread %s is waiting on %d interrupt(s); call Resume", t.id, len(ts.Pending))
 	}
-	ro := t.a.runOpts(opts)
-	st := t.a.newState(ro)
+	r := one(run)
+	st := t.a.newState(r)
 	st.Thread, st.Values = t.id, ts.Values
-	st.Messages = append(append([]sdk.Message{}, ts.Messages...), ro.history...)
-	st.Messages = append(st.Messages, sdk.Message{Role: sdk.RoleUser, Content: prompt, Images: ro.images})
-	return t.runAndSave(ctx, cp, ts, st, ro)
+	st.Messages = append(append([]sdk.Message{}, ts.Messages...), r.History...)
+	st.Messages = append(st.Messages, sdk.Message{Role: sdk.RoleUser, Content: prompt, Images: r.Images})
+	return t.runAndSave(ctx, cp, ts, st, r)
 }
 
 // Stream is Generate with streaming events.
-func (t *Thread) Stream(ctx context.Context, prompt string, opts ...RunOption) *Stream {
-	return startStream(func(o RunOption) (*Result, error) { return t.Generate(ctx, prompt, append(opts, o)...) })
+func (t *Thread) Stream(ctx context.Context, prompt string, run ...Run) *Stream {
+	return startStream(func(onEvent func(sdk.Event)) (*Result, error) {
+		r := one(run)
+		r.OnEvent = onEvent
+		return t.Generate(ctx, prompt, r)
+	})
 }
 
 // Resume answers the thread's pending interrupts and continues the run.
-func (t *Thread) Resume(ctx context.Context, decisions ...sdk.Decision) (*Result, error) {
-	return t.ResumeWith(ctx, decisions)
-}
-
-// ResumeWith is Resume with run options (identity, events, limits).
-func (t *Thread) ResumeWith(ctx context.Context, decisions []sdk.Decision, opts ...RunOption) (*Result, error) {
+func (t *Thread) Resume(ctx context.Context, decisions []sdk.Decision, run ...Run) (*Result, error) {
 	if t.a.remote != nil {
-		return t.a.remote.thread(ctx, t.id, "", decisions, opts)
+		return t.a.remote.thread(ctx, t.id, "", decisions, one(run))
 	}
 	cp, ts, err := t.load(ctx)
 	if err != nil {
@@ -86,20 +85,24 @@ func (t *Thread) ResumeWith(ctx context.Context, decisions []sdk.Decision, opts 
 	if len(ts.Pending) == 0 {
 		return nil, fmt.Errorf("kiln: thread %s has nothing to resume", t.id)
 	}
-	ro := t.a.runOpts(opts)
-	st := t.a.newState(ro)
+	r := one(run)
+	st := t.a.newState(r)
 	st.Thread, st.Values = t.id, ts.Values
 	st.Messages = append([]sdk.Message{}, ts.Messages...)
 	st.Pending, st.Decisions = ts.Pending, decisions
-	return t.runAndSave(ctx, cp, ts, st, ro)
+	return t.runAndSave(ctx, cp, ts, st, r)
 }
 
-// ResumeStream is ResumeWith with streaming events.
-func (t *Thread) ResumeStream(ctx context.Context, decisions []sdk.Decision, opts ...RunOption) *Stream {
-	return startStream(func(o RunOption) (*Result, error) { return t.ResumeWith(ctx, decisions, append(opts, o)...) })
+// ResumeStream is Resume with streaming events.
+func (t *Thread) ResumeStream(ctx context.Context, decisions []sdk.Decision, run ...Run) *Stream {
+	return startStream(func(onEvent func(sdk.Event)) (*Result, error) {
+		r := one(run)
+		r.OnEvent = onEvent
+		return t.Resume(ctx, decisions, r)
+	})
 }
 
-func (t *Thread) runAndSave(ctx context.Context, cp *sdk.Checkpointer, ts *sdk.ThreadState, st *sdk.RunState, ro *runOptions) (*Result, error) {
+func (t *Thread) runAndSave(ctx context.Context, cp *sdk.Checkpointer, ts *sdk.ThreadState, st *sdk.RunState, r Run) (*Result, error) {
 	version := ts.Version
 	var stepErr error
 	runCtx, cancel := context.WithCancel(ctx)
@@ -122,10 +125,10 @@ func (t *Thread) runAndSave(ctx context.Context, cp *sdk.Checkpointer, ts *sdk.T
 		// its result), so a run cut short can be continued from here. The
 		// loop also calls Checkpoint immediately before executing tools, so
 		// a failed save can stop before a side effect.
-		ro.onStep = func(st *sdk.RunState) { _ = checkpoint() }
-		ro.checkpoint = checkpoint
+		r.onStep = func(st *sdk.RunState) { _ = checkpoint() }
+		r.checkpoint = checkpoint
 	}
-	res, err := t.a.run(runCtx, st, ro)
+	res, err := t.a.exec(runCtx, st, r)
 	if stepErr != nil {
 		err = stepErr
 	}
@@ -147,12 +150,12 @@ func (t *Thread) runAndSave(ctx context.Context, cp *sdk.Checkpointer, ts *sdk.T
 }
 
 // Continue runs the agent on the thread's stored history without a new
-// message: for a run that was cut short (see WithSaveEachStep), or after
+// message: for a run that was cut short (see Config.SaveEachStep), or after
 // editing the history elsewhere. It fails when the last message is
 // already the model's answer.
-func (t *Thread) Continue(ctx context.Context, opts ...RunOption) (*Result, error) {
+func (t *Thread) Continue(ctx context.Context, run ...Run) (*Result, error) {
 	if t.a.remote != nil {
-		return nil, errors.New("kiln: Thread.Continue is not supported with WithRunIn")
+		return nil, errors.New("kiln: Thread.Continue is not supported with Config.RunIn")
 	}
 	cp, ts, err := t.load(ctx)
 	if err != nil {
@@ -164,11 +167,11 @@ func (t *Thread) Continue(ctx context.Context, opts ...RunOption) (*Result, erro
 	if n := len(ts.Messages); n == 0 || (ts.Messages[n-1].Role == sdk.RoleAssistant && len(ts.Messages[n-1].ToolCalls) == 0) {
 		return nil, fmt.Errorf("kiln: thread %s has nothing to continue", t.id)
 	}
-	ro := t.a.runOpts(opts)
-	st := t.a.newState(ro)
+	r := one(run)
+	st := t.a.newState(r)
 	st.Thread, st.Values = t.id, ts.Values
-	st.Messages = append([]sdk.Message{}, ts.Messages...)
-	return t.runAndSave(ctx, cp, ts, st, ro)
+	st.Messages = append(append([]sdk.Message{}, ts.Messages...), r.History...)
+	return t.runAndSave(ctx, cp, ts, st, r)
 }
 
 // Fork copies the thread (history, pending approvals and values) to a
@@ -176,7 +179,7 @@ func (t *Thread) Continue(ctx context.Context, opts ...RunOption) (*Result, erro
 // one. It fails if newID already exists.
 func (t *Thread) Fork(ctx context.Context, newID string) (*Thread, error) {
 	if t.a.remote != nil {
-		return nil, errors.New("kiln: Thread.Fork is not supported with WithRunIn")
+		return nil, errors.New("kiln: Thread.Fork is not supported with Config.RunIn")
 	}
 	cp, ts, err := t.load(ctx)
 	if err != nil {
@@ -200,7 +203,7 @@ func (t *Thread) Fork(ctx context.Context, newID string) (*Thread, error) {
 	return t.a.Thread(newID), nil
 }
 
-// Messages returns the stored history.
+// Messages returns the thread's stored history.
 func (t *Thread) Messages(ctx context.Context) ([]sdk.Message, error) {
 	if t.a.remote != nil {
 		ts, err := t.a.remote.threadState(ctx, t.id)

@@ -22,13 +22,13 @@ import (
 //
 // Example:
 //
-//	kiln.WithModuleConfig("secrets_env", map[string]any{
+//	secrets_env.New(map[string]any{
 //		"allow":  []any{"*_API_KEY", "GITHUB_TOKEN"},
 //		"grants": map[string]any{"tool_mcp": []any{"GITHUB_TOKEN"}},
 //	})
 var Permissions = []string{"env", "env:secrets"}
 
-func Apply(p *sdk.Module) error {
+func Apply(p *sdk.Scope) error {
 	allow := p.ConfigStrings("allow")
 	if len(allow) == 0 {
 		allow = []string{"*_API_KEY", "*_TOKEN"}
@@ -79,3 +79,13 @@ func Apply(p *sdk.Module) error {
 
 // Module is the compiled form of "secrets_env". modules/std registers it.
 var Module = engine.Module{Name: "secrets_env", Requires: nil, Provides: []string{"secrets"}, Permissions: Permissions, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}

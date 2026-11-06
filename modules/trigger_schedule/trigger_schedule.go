@@ -25,7 +25,7 @@ import (
 //
 // Example:
 //
-//	kiln.WithModuleConfig("trigger_schedule", map[string]any{
+//	trigger_schedule.New(map[string]any{
 //		"timezone": "Europe/Berlin",
 //		"jobs": []any{map[string]any{"name": "daily-digest", "schedule": "daily 09:00",
 //			"prompt": "Summarize yesterday's tickets", "user": "ops"}},
@@ -40,7 +40,7 @@ type job struct {
 	Running                          bool
 }
 
-func Apply(p *sdk.Module) error {
+func Apply(p *sdk.Scope) error {
 	agent := p.Service("agent").(*sdk.AgentService)
 	store, _ := p.Service("memory").(*sdk.Store)
 	loc, err := time.LoadLocation(p.ConfigString("timezone", "UTC"))
@@ -278,3 +278,13 @@ func nextRun(s string, now time.Time, loc *time.Location) (time.Time, error) {
 
 // Module is the compiled form of "trigger_schedule". modules/std registers it.
 var Module = engine.Module{Name: "trigger_schedule", Requires: Requires, Provides: []string{"jobs"}, Permissions: nil, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}

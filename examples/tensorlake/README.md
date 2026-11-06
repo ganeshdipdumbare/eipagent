@@ -53,5 +53,5 @@ The `sandbox_tensorlake` module also accepts `image`, `workdir`,
 
 The example maps `RunIn.Spec.Network.Mode` to Tensorlake network settings:
 `none` disables internet access, `allowlist` uses `AllowOut`, and `full` allows
-internet access. With `WithRunIn`, the box's HTTP is relayed through the host
+internet access. With `Config.RunIn`, the box's HTTP is relayed through the host
 regardless, so the example still works with `none`.

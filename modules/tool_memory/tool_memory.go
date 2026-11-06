@@ -16,11 +16,11 @@ import (
 //
 // Example:
 //
-//	kiln.WithModules("memory_file", "tool_memory")
+//	kiln.Config{Modules: []kiln.Module{memory_file.New(), tool_memory.New()}}
 //	// "Remember that I prefer window seats" -> remember; later "Book my usual seat" -> recall
 var Requires = []string{"memory"}
 
-func Apply(p *sdk.Module) error {
+func Apply(p *sdk.Scope) error {
 	store := p.Service("memory").(*sdk.Store)
 	base := p.ConfigString("namespace", "memories")
 	ns := func(c context.Context) []string {
@@ -73,3 +73,13 @@ func Apply(p *sdk.Module) error {
 
 // Module is the compiled form of "tool_memory". modules/std registers it.
 var Module = engine.Module{Name: "tool_memory", Requires: Requires, Provides: nil, Permissions: nil, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}

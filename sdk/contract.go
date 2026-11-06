@@ -43,7 +43,7 @@ type contract struct {
 // module's declared Provides, its granted capabilities and the secret
 // names it may resolve. Without the engine's key it does nothing, so a
 // module can't widen its own contract.
-func (c *Module) SetContract(key *TrustKey, provides, grants, secrets []string) {
+func (c *Scope) SetContract(key *TrustKey, provides, grants, secrets []string) {
 	if key == nil || key != engineKey {
 		return
 	}
@@ -58,7 +58,7 @@ func (c *Module) SetContract(key *TrustKey, provides, grants, secrets []string) 
 
 // Grants returns the capabilities this module holds, in KnownPermissions
 // order. Nil for a context the engine did not start (the root).
-func (c *Module) Grants() []string {
+func (c *Scope) Grants() []string {
 	if c.contract == nil {
 		return nil
 	}
@@ -72,22 +72,22 @@ func (c *Module) Grants() []string {
 }
 
 // Granted reports whether the module holds the capability.
-func (c *Module) Granted(perm string) bool {
+func (c *Scope) Granted(perm string) bool {
 	return c.contract != nil && c.contract.grants[perm]
 }
 
 // requireGrant returns an error naming the capability when it is missing.
-func (c *Module) requireGrant(perm string) error {
+func (c *Scope) requireGrant(perm string) error {
 	if c.Granted(perm) {
 		return nil
 	}
-	return fmt.Errorf("module %s: capability %q is not granted (declare it in Permissions and allow it in the policy)", c.PluginName(), perm)
+	return fmt.Errorf("module %s: capability %q is not granted (declare it in Permissions and allow it in the policy)", c.ModuleName(), perm)
 }
 
 // mayProvide reports whether the module may register service name. A
 // context without a contract (the root, or code the engine did not start)
 // is unrestricted.
-func (c *Module) mayProvide(name string) bool {
+func (c *Scope) mayProvide(name string) bool {
 	if c.contract == nil {
 		return true
 	}

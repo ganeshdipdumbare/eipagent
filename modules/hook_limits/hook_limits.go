@@ -21,12 +21,12 @@ import (
 //
 // Example:
 //
-//	kiln.WithModuleConfig("hook_limits", map[string]any{
+//	hook_limits.New(map[string]any{
 //		"model_calls_run": 20,
 //		"tokens_thread":   500000,
 //		"tools":           map[string]any{"web_search": 5},
 //	})
-func Apply(p *sdk.Module) error {
+func Apply(p *sdk.Scope) error {
 	lim := map[string]int{}
 	for _, k := range []string{"model_calls_run", "model_calls_thread", "tool_calls_run", "tool_calls_thread", "tokens_run", "tokens_thread"} {
 		lim[k] = p.ConfigInt(k, 0)
@@ -162,3 +162,13 @@ func Apply(p *sdk.Module) error {
 
 // Module is the compiled form of "hook_limits". modules/std registers it.
 var Module = engine.Module{Name: "hook_limits", Requires: nil, Provides: nil, Permissions: nil, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}

@@ -35,13 +35,13 @@ func fakeServer(t *testing.T, check func(r *http.Request, body map[string]any), 
 	return srv
 }
 
-func newAgent(t *testing.T, model, use, url string, opts ...kiln.Option) *kiln.Agent {
+func newAgent(t *testing.T, model, use, url string, cfgs ...kiln.Config) *kiln.Agent {
 	t.Helper()
 	prov, _, _ := strings.Cut(model, ":")
-	a, err := kiln.New(append([]kiln.Option{
-		kiln.WithModel(model),
-		kiln.WithModuleSpec(kiln.ModuleSpec{Use: use, As: "model_" + prov, Config: map[string]any{"name": prov, "base_url": url}}),
-	}, opts...)...)
+	a, err := startAgent(append([]kiln.Config{
+		withModel(model),
+		withModule(asInstance(module(use, map[string]any{"name": prov, "base_url": url}), "model_"+prov)),
+	}, cfgs...)...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,8 +83,8 @@ func TestAnthropic(t *testing.T) {
 			}, ""
 		}
 	})
-	weather := kiln.Tool("weather", "w", func(ctx context.Context, in weatherIn) (string, error) { return "25C", nil })
-	a := newAgent(t, "anthropic:claude-test", "model_anthropic", srv.URL, kiln.WithTools(weather))
+	weather := kiln.NewTool("weather", "w", func(ctx context.Context, in weatherIn) (string, error) { return "25C", nil })
+	a := newAgent(t, "anthropic:claude-test", "model_anthropic", srv.URL, withTools(weather))
 	res, err := a.Generate(bg, "Rome?")
 	if err != nil || res.Text != "Warm." || res.Usage.TotalTokens != 18 {
 		t.Fatalf("%v %+v", err, res)
@@ -133,8 +133,8 @@ func TestGemini(t *testing.T) {
 			}, ""
 		}
 	})
-	weather := kiln.Tool("weather", "w", func(ctx context.Context, in weatherIn) (string, error) { return "rain", nil })
-	a := newAgent(t, "gemini:gem-test", "model_gemini", srv.URL, kiln.WithTools(weather))
+	weather := kiln.NewTool("weather", "w", func(ctx context.Context, in weatherIn) (string, error) { return "rain", nil })
+	a := newAgent(t, "gemini:gem-test", "model_gemini", srv.URL, withTools(weather))
 	res, err := a.Generate(bg, "Tokyo?")
 	if err != nil || res.Text != "Rainy." {
 		t.Fatalf("%v %+v", err, res)

@@ -16,8 +16,8 @@ import (
 //
 // Example:
 //
-//	kiln.WithModules("memory_inmem", "tool_memory") // lost on exit
-func Apply(p *sdk.Module) error {
+//	kiln.Config{Modules: []kiln.Module{memory_inmem.New(), tool_memory.New()}} // lost on exit
+func Apply(p *sdk.Scope) error {
 	var mu sync.Mutex
 	items := map[string]sdk.StoreItem{}
 	key := func(ns []string, k string) string { return strings.Join(ns, "\x00") + "\x01" + k }
@@ -79,3 +79,13 @@ func Apply(p *sdk.Module) error {
 
 // Module is the compiled form of "memory_inmem". modules/std registers it.
 var Module = engine.Module{Name: "memory_inmem", Requires: nil, Provides: []string{"memory"}, Permissions: nil, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}

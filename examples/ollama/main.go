@@ -25,6 +25,13 @@ import (
 
 	"github.com/ganeshdipdumbare/kiln"
 	"github.com/ganeshdipdumbare/kiln/engine"
+	"github.com/ganeshdipdumbare/kiln/modules/hook_log"
+	"github.com/ganeshdipdumbare/kiln/modules/model_openai"
+	"github.com/ganeshdipdumbare/kiln/modules/sandbox_local"
+	"github.com/ganeshdipdumbare/kiln/modules/tool_fs"
+	"github.com/ganeshdipdumbare/kiln/modules/tool_shell"
+	"github.com/ganeshdipdumbare/kiln/modules/tool_time"
+	"github.com/ganeshdipdumbare/kiln/modules/workspace_sandbox"
 	"github.com/ganeshdipdumbare/kiln/sdk"
 )
 
@@ -63,28 +70,34 @@ func main() {
 }
 
 // newAgent starts an agent on the local Ollama model.
-func newAgent(opts ...kiln.Option) *kiln.Agent {
-	base := []kiln.Option{
-		kiln.WithModel("ollama:" + *model),
-		kiln.WithInstructions("You are a helpful assistant running locally. Be brief. Use tools when they help."),
-		kiln.WithMaxSteps(8),
-		kiln.WithLogger(func(scope, msg string) {
-			if *verbose {
-				fmt.Printf("  · [%s] %s\n", scope, msg)
-			}
-		}),
+func newAgent(mods ...kiln.Module) *kiln.Agent {
+	return newAgentWith(kiln.Config{}, mods...)
+}
+
+func newAgentWith(cfg kiln.Config, mods ...kiln.Module) *kiln.Agent {
+	cfg.Model = "ollama:" + *model
+	cfg.Instructions = "You are a helpful assistant running locally. Be brief. Use tools when they help."
+	if cfg.MaxSteps == 0 {
+		cfg.MaxSteps = 8
 	}
+	cfg.Logger = func(scope, msg string) {
+		if *verbose {
+			fmt.Printf("  · [%s] %s\n", scope, msg)
+		}
+	}
+	cfg.Modules = append(cfg.Modules, mods...)
 	if *verbose {
-		base = append(base, kiln.WithModules("hook_log"))
+		cfg.Modules = append(cfg.Modules, hook_log.New())
 	}
 	if host := os.Getenv("OLLAMA_HOST"); host != "" {
 		if !strings.HasPrefix(host, "http") {
 			host = "http://" + host
 		}
-		base = append(base, kiln.WithModuleSpec(engine.ModuleSpec{Use: "model_openai", As: "llm_ollama",
-			Config: map[string]any{"name": "ollama", "base_url": strings.TrimRight(host, "/") + "/v1", "api_key": ""}}))
+		m := model_openai.New(map[string]any{"name": "ollama", "base_url": strings.TrimRight(host, "/") + "/v1", "api_key": ""})
+		m.As = "llm_ollama"
+		cfg.Modules = append(cfg.Modules, m)
 	}
-	a, err := kiln.New(append(base, opts...)...)
+	a, err := kiln.New(cfg)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -115,16 +128,16 @@ type CityIn struct {
 }
 
 func tools() {
-	weather := kiln.Tool("get_weather", "Current weather for a city", func(ctx context.Context, in CityIn) (map[string]any, error) {
+	weather := kiln.NewTool("get_weather", "Current weather for a city", func(ctx context.Context, in CityIn) (map[string]any, error) {
 		// A real tool would call an API; this one is deterministic.
 		return map[string]any{"city": in.City, "temp_c": 27, "sky": "clear"}, nil
 	})
-	convert := kiln.Tool("celsius_to_fahrenheit", "Convert °C to °F", func(ctx context.Context, in struct {
+	convert := kiln.NewTool("celsius_to_fahrenheit", "Convert °C to °F", func(ctx context.Context, in struct {
 		Celsius float64 `json:"celsius"`
 	}) (string, error) {
 		return fmt.Sprintf("%.1f°F", in.Celsius*9/5+32), nil
 	})
-	a := newAgent(kiln.WithTools(weather, convert), kiln.WithModules("tool_time"))
+	a := newAgentWith(kiln.Config{Tools: []kiln.Tool{weather, convert}}, tool_time.New())
 	defer a.Close()
 
 	res, err := a.Generate(ctx, "What's the weather in Pune right now, in Fahrenheit? Also, what time is it?")
@@ -163,7 +176,7 @@ func stream() {
 // that registers a tool when the agent starts. Nothing is loaded at run
 // time; to change the hours, build the agent with a different module.
 func officeModule(hours string) engine.Module {
-	return engine.Module{Name: "office", Apply: func(p *sdk.Module) error {
+	return engine.Module{Name: "office", Apply: func(p *sdk.Scope) error {
 		p.AddTool(sdk.Tool{
 			Name:        "office_hours",
 			Description: "Returns the office opening hours. Always use this for questions about office hours.",
@@ -177,20 +190,20 @@ func officeModule(hours string) engine.Module {
 }
 
 func modules() {
-	office := func(hours string) []kiln.Option {
-		return []kiln.Option{kiln.WithModule(officeModule(hours)), kiln.WithModules("tool_time")}
+	office := func(hours string) []kiln.Module {
+		return []kiln.Module{officeModule(hours), tool_time.New()}
 	}
 	steps := []struct {
 		label, question string
-		opts            []kiln.Option
+		mods            []kiln.Module
 	}{
 		{"1) No modules: no tools", "What is the exact current time? If you have no tool for it, say so.", nil},
-		{"2) Add the standard tool_time module", "What is the exact current time? Use your tool.", []kiln.Option{kiln.WithModules("tool_time")}},
+		{"2) Add the standard tool_time module", "What is the exact current time? Use your tool.", []kiln.Module{tool_time.New()}},
 		{"3) Add the office module compiled into the program", "When is the office open?", office("Mon-Fri 9:00-17:00")},
 		{"4) Ship new hours: build the agent with the updated module", "When is the office open?", office("Mon-Sat 8:00-20:00 (new winter hours)")},
 	}
 	for _, s := range steps {
-		a := newAgent(s.opts...)
+		a := newAgent(s.mods...)
 		fmt.Printf("\n%s\n   tools: %v\n", s.label, toolNames(a))
 		ask(a, s.question)
 		a.Close()
@@ -198,7 +211,7 @@ func modules() {
 }
 
 func ask(a *kiln.Agent, q string) {
-	res, err := a.Generate(ctx, q, kiln.MaxSteps(4))
+	res, err := a.Generate(ctx, q, kiln.Run{MaxSteps: 4})
 	check(err)
 	var used []string
 	for _, c := range res.ToolCalls() {
@@ -236,7 +249,7 @@ func object() {
 
 func thread() {
 	dir := filepath.Join(os.TempDir(), "kiln-ollama-threads")
-	a := newAgent(kiln.WithPersistence("file", dir))
+	a := newAgent(kiln.Persistence("file", dir)...)
 	defer a.Close()
 	th := a.Thread(fmt.Sprintf("demo-%d", time.Now().Unix()))
 	for _, q := range []string{"Hi! My name is Ganesh and I live in Pune.", "Where do I live, and what's my name?"} {
@@ -251,7 +264,7 @@ func thread() {
 // ---- approve: human in the loop, answered at the terminal ----
 
 func approve() {
-	sendEmail := kiln.Tool("send_email", "Send an email", func(ctx context.Context, in struct {
+	sendEmail := kiln.NewTool("send_email", "Send an email", func(ctx context.Context, in struct {
 		To      string `json:"to"`
 		Subject string `json:"subject"`
 		Body    string `json:"body"`
@@ -259,20 +272,17 @@ func approve() {
 		return "sent to " + in.To, nil // a real tool would send it
 	})
 	in := bufio.NewReader(os.Stdin)
-	a := newAgent(
-		kiln.WithTools(sendEmail),
-		kiln.WithApprovals("send_email"),
-		kiln.WithApprover(func(ctx context.Context, it kiln.Interrupt) (*kiln.Decision, error) {
-			fmt.Printf("  ⚠ the agent wants to call %s %v\n  approve? [y/N] ", it.ToolCall.Name, it.ToolCall.Args)
-			ans, _ := in.ReadString('\n')
-			if strings.TrimSpace(strings.ToLower(ans)) == "y" {
-				d := kiln.Approve(it.ID)
-				return &d, nil
-			}
-			d := kiln.Reject(it.ID, "the user declined")
+	approver := kiln.Approver(func(ctx context.Context, it kiln.Interrupt) (*kiln.Decision, error) {
+		fmt.Printf("  ⚠ the agent wants to call %s %v\n  approve? [y/N] ", it.ToolCall.Name, it.ToolCall.Args)
+		ans, _ := in.ReadString('\n')
+		if strings.TrimSpace(strings.ToLower(ans)) == "y" {
+			d := kiln.Approve(it.ID)
 			return &d, nil
-		}),
-	)
+		}
+		d := kiln.Reject(it.ID, "the user declined")
+		return &d, nil
+	})
+	a := newAgentWith(kiln.Config{Tools: []kiln.Tool{sendEmail}}, append(kiln.Approvals("send_email"), approver...)...)
 	defer a.Close()
 	res, err := a.Generate(ctx, "Email team@example.com with subject 'Standup' saying I'll be 10 minutes late.")
 	check(err)
@@ -284,10 +294,9 @@ func approve() {
 func shell() {
 	root := filepath.Join(os.TempDir(), "kiln-ollama-boxes")
 	a := newAgent(
-		kiln.WithModuleConfig("sandbox_local", map[string]any{"root": root}), // swap for sandbox_docker to isolate
-		kiln.WithModuleConfig("workspace_sandbox", map[string]any{"provider": "local"}),
-		kiln.WithModules("tool_shell", "tool_fs"),
-	)
+		sandbox_local.New(map[string]any{"root": root}), // swap for sandbox_docker to isolate
+		workspace_sandbox.New(map[string]any{"provider": "local"}),
+		tool_shell.New(), tool_fs.New())
 	defer a.Close() // deletes the workspace
 	res, err := a.Generate(ctx, "Create a file hello.py that prints the first 10 squares, run it with python3, and tell me the output.")
 	check(err)
@@ -311,7 +320,7 @@ func vision() {
 	}
 	a := newAgent()
 	defer a.Close()
-	res, err := a.Generate(ctx, "Describe this image in two sentences.", kiln.WithImages(kiln.Image{MediaType: mt, Data: data}))
+	res, err := a.Generate(ctx, "Describe this image in two sentences.", kiln.Run{Images: []kiln.Image{{MediaType: mt, Data: data}}})
 	check(err)
 	fmt.Println(res.Text)
 }

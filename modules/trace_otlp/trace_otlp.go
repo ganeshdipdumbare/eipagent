@@ -35,12 +35,12 @@ import (
 //
 // Example:
 //
-//	kiln.WithModuleConfig("trace_otlp", map[string]any{
+//	trace_otlp.New(map[string]any{
 //		"endpoint":     "https://otlp.example.com",
 //		"headers":      map[string]any{"x-api-key": "secret://OTLP_KEY"},
 //		"service_name": "support-agent",
 //	})
-//	// Shortcut: kiln.WithTracing("http://localhost:4318")
+//	// Shortcut: kiln.Tracing("http://localhost:4318")
 var Permissions = []string{"net"}
 
 var Requires = []string{"?secrets"}
@@ -82,7 +82,7 @@ func attr(k string, v any) map[string]any {
 	return map[string]any{"key": k, "value": map[string]any{"stringValue": sdk.Redact(fmt.Sprint(v))}}
 }
 
-func Apply(p *sdk.Module) error {
+func Apply(p *sdk.Scope) error {
 	endpoint := strings.TrimRight(p.ConfigString("endpoint", "http://localhost:4318"), "/")
 	headers := p.ConfigMap("headers")
 	u, err := url.Parse(endpoint)
@@ -317,3 +317,13 @@ func otlpLocalHost(h string) bool {
 
 // Module is the compiled form of "trace_otlp". modules/std registers it.
 var Module = engine.Module{Name: "trace_otlp", Requires: Requires, Provides: nil, Permissions: Permissions, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}

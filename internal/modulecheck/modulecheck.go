@@ -306,7 +306,7 @@ func (m *moduleSrc) strings(e ast.Expr) ([]string, bool, int) {
 	return nil, false, 0
 }
 
-// receivers are the names of parameters of type *sdk.Module, per file.
+// receivers are the names of parameters of type *sdk.Scope, per file.
 func receivers(f *fileSrc) map[string]bool {
 	out := map[string]bool{}
 	sdkName := ""
@@ -329,7 +329,7 @@ func receivers(f *fileSrc) map[string]bool {
 				continue
 			}
 			sel, ok := star.X.(*ast.SelectorExpr)
-			if !ok || sel.Sel.Name != "Module" {
+			if !ok || sel.Sel.Name != "Scope" {
 				continue
 			}
 			if id, ok := sel.X.(*ast.Ident); !ok || id.Name != sdkName {

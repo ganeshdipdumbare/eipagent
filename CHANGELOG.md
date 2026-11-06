@@ -4,6 +4,65 @@ All notable changes to kiln. Versions follow [semantic versioning](https://semve
 
 ## Unreleased
 
+### Breaking changes — one way to do each thing
+
+The public API had several spellings for the same decision. It now has one.
+
+- **`kiln.New(kiln.Config{...})`.** All construction options are fields:
+  `Model`, `Instructions`, `MaxSteps`, `User`, `Roles`, `Tools`, `Modules`,
+  `Policy`, `Logger`, `SaveEachStep`, `RunIn`. `WithModel`,
+  `WithInstructions`, `WithMaxSteps`, `WithUser`, `WithTools`, `WithLogger`,
+  `WithPolicy`, `WithPolicyFile`, `WithRunIn`, `WithSaveEachStep` and
+  `WithoutDefaults` are removed.
+- **`kiln.Run{...}` for per-run overrides.** `Model`, `Instructions`,
+  `MaxSteps`, `MaxTokens`, `Temperature`, `ToolChoice`, `StopOnTools`,
+  `History`, `Images`, `Tools`, `User`, `Roles`, `OnEvent`, `Schema`,
+  `CaptureResult`. `Model()`, `System()`, `MaxSteps()`, `MaxTokens()`,
+  `Temperature()`, `ToolChoice()`, `StopOnTool()`, `WithHistory()`,
+  `WithImages()`, `OnEvent()`, `AsUser()`, `RunTools()` and
+  `CaptureResult()` are removed. `Generate`, `Stream`, `Resume`, the
+  `Thread` methods and `GenerateObject` take the same struct.
+- **One composition point: `Config.Modules []engine.Module`.**
+  `WithModule`, `WithModules`, `WithModuleConfig` and `WithModuleSpec` are
+  removed, along with `WithProfile` and the profile JSON format. Every
+  standard module package exports `New(cfg ...map[string]any)`; the value
+  goes in the list. `WithModule` also works for standard modules now (the
+  application descriptor replaces the registry one; it used to fail with
+  "registered twice").
+- **Presets are values, not options.** `WithPersistence`, `WithApprovals`,
+  `WithApprover`, `WithSandbox`, `WithAudit`, `WithTracing`, `WithMCP`,
+  `WithWebSearch` and `WithThinking` became `Persistence`, `Approvals`,
+  `Approver`, `Sandbox`, `Audit`, `Tracing`, `MCP`, `WebSearch` and
+  `Thinking`, each returning `[]engine.Module`.
+- **`sdk.Module` → `sdk.Scope`.** Only `engine.Module` is called a module
+  now. `Apply` takes `*sdk.Scope`. `Module.PluginName()` →
+  `ModuleName()`; `Module.OnUnload()` → `OnClose()`.
+- **`kiln.Tool` is the tool type.** The generic constructor is
+  `kiln.NewTool`; `kiln.ToolDef` is gone. `GenerateText` is removed:
+  `New` + `Generate` + `Close` is the one path.
+- **`kiln.ServeBox(..., kiln.Config{})`** takes a `Config` instead of
+  options. `KILN_MODEL` is no longer read by the SDK (the CLI still reads
+  it).
+
+### Fixed
+
+- **A duplicate tool or skill fails the start.** A tool registered by two
+  modules used to be dropped with one log line while `New` returned no
+  error; it now names the conflict and refuses to start. Service
+  registration already worked this way.
+- **A module listed twice merges its configuration** instead of failing
+  with "listed twice", so the order of equal entries no longer changes the
+  result.
+- **Instance configuration no longer leaks.** Two instances of one module
+  (for example a reviewer model and the main model) each keep their own
+  config.
+- **Defaults keep their position.** A module that replaces `secrets_env`
+  or `threads_inmem` starts where the default would have, so modules
+  applying earlier can still use it.
+- **Modules can declare host setup.** `engine.Module.Prepare` runs before
+  any module applies, which is how the file-backed presets create their
+  directories now that options are gone.
+
 ## v0.5.0 — 2026-11-05
 
 ### Added

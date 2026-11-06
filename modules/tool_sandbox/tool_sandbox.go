@@ -22,15 +22,15 @@ import (
 //
 // Example:
 //
-//	kiln.WithModules("sandbox_docker")
-//	kiln.WithModuleConfig("tool_sandbox", map[string]any{
+//	kiln.Config{Modules: []kiln.Module{sandbox_docker.New()}}
+//	tool_sandbox.New(map[string]any{
 //		"provider":  "docker",
 //		"images":    []any{"python:3.12-slim", "node:22-slim"},
 //		"max_boxes": 2,
 //	})
 var Requires = []string{"sandbox/*"}
 
-func Apply(p *sdk.Module) error {
+func Apply(p *sdk.Scope) error {
 	provName := p.ConfigString("provider", "docker")
 	defImage := p.ConfigString("image", "")
 	maxBoxes := p.ConfigInt("max_boxes", 3)
@@ -42,7 +42,7 @@ func Apply(p *sdk.Module) error {
 	}
 	var mu sync.Mutex
 	boxes := map[string]map[string]*sdk.Sandbox{} // thread -> id -> box
-	p.OnUnload(func() {
+	p.OnClose(func() {
 		mu.Lock()
 		defer mu.Unlock()
 		for _, m := range boxes {
@@ -200,3 +200,13 @@ func Apply(p *sdk.Module) error {
 
 // Module is the compiled form of "tool_sandbox". modules/std registers it.
 var Module = engine.Module{Name: "tool_sandbox", Requires: Requires, Provides: nil, Permissions: nil, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}

@@ -12,8 +12,9 @@ import (
 	"github.com/ganeshdipdumbare/kiln/sdk"
 )
 
-// Module is a compiled module descriptor. Each module package exports
-// `var Module = engine.Module{...}`.
+// Module is a compiled module descriptor. A module package exports a
+// constructor, usually `func New(cfg ...map[string]any) engine.Module`, and
+// applications put the value in kiln.Config.Modules.
 type Module struct {
 	// Name identifies the module: letters, digits, '_' and '-'. Standard
 	// modules use their package directory name.
@@ -30,8 +31,20 @@ type Module struct {
 	Permissions []string
 	// Secrets lists the secret names the module may resolve.
 	Secrets []string
+	// Config is the module's configuration, set by its constructor. Keys
+	// are documented by the module package.
+	Config map[string]any
+	// As renames this instance, to load one module twice. Default: Name.
+	As string
+	// Priority overrides the start order. Higher starts earlier; nil keeps
+	// the order of Config.Modules.
+	Priority *int
+	// Prepare runs host setup the module needs before it applies, such as
+	// creating a directory it will be given (modules cannot create them).
+	// It runs before any module starts.
+	Prepare func() error
 	// Apply configures the module. It runs once, in dependency order.
-	Apply func(*sdk.Module) error
+	Apply func(*sdk.Scope) error
 }
 
 // ModuleSpec is one row of a profile or option: which module runs and

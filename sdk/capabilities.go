@@ -50,7 +50,7 @@ type HTTPClient struct {
 
 // HTTP returns an HTTP client limited to opts. It needs the "net"
 // capability.
-func (c *Module) HTTP(opts HTTPOptions) (*HTTPClient, error) {
+func (c *Scope) HTTP(opts HTTPOptions) (*HTTPClient, error) {
 	if err := c.requireGrant(PermNet); err != nil {
 		return nil, err
 	}
@@ -133,7 +133,7 @@ func (h *HTTPClient) Do(req *http.Request) (*http.Response, error) {
 // Listen opens a listener for the module's own server (a webhook). It
 // needs the "net" capability and binds to loopback unless allowAny is
 // true.
-func (c *Module) Listen(addr string, allowAny bool) (net.Listener, error) {
+func (c *Scope) Listen(addr string, allowAny bool) (net.Listener, error) {
 	if err := c.requireGrant(PermNet); err != nil {
 		return nil, err
 	}
@@ -214,7 +214,7 @@ type Dir struct {
 
 // Dir opens root for the module. It needs "fs:read", and "fs:write" when
 // write is true. The root must exist and must not be the filesystem root.
-func (c *Module) Dir(root string, write bool) (*Dir, error) {
+func (c *Scope) Dir(root string, write bool) (*Dir, error) {
 	if err := c.requireGrant(PermFSRead); err != nil {
 		return nil, err
 	}
@@ -367,7 +367,7 @@ type ProcResult struct {
 }
 
 // Exec returns a runner that may start the named programs.
-func (c *Module) Exec(programs ...string) (*Exec, error) {
+func (c *Scope) Exec(programs ...string) (*Exec, error) {
 	if err := c.requireGrant(PermExec); err != nil {
 		return nil, err
 	}
@@ -507,7 +507,7 @@ func childEnv(opts ProcOptions) []string {
 
 // Env reads an environment variable. It needs "env". Secret-looking names
 // (SecretLike) also need "env:secrets".
-func (c *Module) Env(name string) (string, error) {
+func (c *Scope) Env(name string) (string, error) {
 	if !c.Granted(PermEnv) && !c.Granted(PermEnvSecrets) {
 		return "", c.requireGrant(PermEnv)
 	}
@@ -568,7 +568,7 @@ func (d *DB) Query(ctx context.Context, query string, args ...any) ([]map[string
 }
 
 // DB returns the "db" service. It needs the "db" capability.
-func (c *Module) DB() (*DB, error) {
+func (c *Scope) DB() (*DB, error) {
 	if err := c.requireGrant(PermDB); err != nil {
 		return nil, err
 	}

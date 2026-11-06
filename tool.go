@@ -15,10 +15,10 @@ import (
 //	type WeatherIn struct {
 //		City string `json:"city" desc:"city name"`
 //	}
-//	weather := kiln.Tool("weather", "Get the weather", func(ctx context.Context, in WeatherIn) (string, error) {
+//	weather := kiln.NewTool("weather", "Get the weather", func(ctx context.Context, in WeatherIn) (string, error) {
 //		return "sunny in " + in.City, nil
 //	})
-func Tool[In, Out any](name, description string, fn func(ctx context.Context, in In) (Out, error)) sdk.Tool {
+func NewTool[In, Out any](name, description string, fn func(ctx context.Context, in In) (Out, error)) sdk.Tool {
 	var zero In
 	return sdk.Tool{
 		Name:        name,

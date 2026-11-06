@@ -27,14 +27,14 @@ import (
 //
 // Example:
 //
-//	kiln.WithModuleConfig("tool_subagents", map[string]any{"agents": []any{
+//	tool_subagents.New(map[string]any{"agents": []any{
 //		map[string]any{"name": "researcher", "description": "Finds facts on the web",
 //			"instructions": "Cite your sources.", "tools": []any{"web_search", "http_fetch"}, "max_steps": 8},
 //		map[string]any{"name": "billing", "description": "Handles refunds", "mode": "handoff"},
 //	}})
 var Requires = []string{"loop"}
 
-func Apply(p *sdk.Module) error {
+func Apply(p *sdk.Scope) error {
 	agents := p.ConfigList("agents")
 	if len(agents) == 0 {
 		return fmt.Errorf("agents: config agents is empty")
@@ -135,7 +135,7 @@ func handoffTool(name string, a map[string]any) sdk.Tool {
 	}
 }
 
-func subagentTool(p *sdk.Module, name string, a map[string]any) sdk.Tool {
+func subagentTool(p *sdk.Scope, name string, a map[string]any) sdk.Tool {
 	desc, _ := a["description"].(string)
 	instructions, _ := a["instructions"].(string)
 	model, _ := a["model"].(string)
@@ -193,3 +193,13 @@ func subagentTool(p *sdk.Module, name string, a map[string]any) sdk.Tool {
 
 // Module is the compiled form of "tool_subagents". modules/std registers it.
 var Module = engine.Module{Name: "tool_subagents", Requires: Requires, Provides: nil, Permissions: nil, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}

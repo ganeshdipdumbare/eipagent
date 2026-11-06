@@ -13,6 +13,10 @@ import (
 	"log"
 
 	"github.com/ganeshdipdumbare/kiln"
+	"github.com/ganeshdipdumbare/kiln/modules/model_mock"
+	"github.com/ganeshdipdumbare/kiln/modules/sandbox_local"
+	"github.com/ganeshdipdumbare/kiln/modules/tool_shell"
+	"github.com/ganeshdipdumbare/kiln/modules/workspace_sandbox"
 	"github.com/ganeshdipdumbare/kiln/sdk"
 )
 
@@ -21,7 +25,7 @@ func main() {
 		Name:     "sandbox_audited",
 		Requires: []string{"sandbox/local"},
 		Provides: []string{"sandbox/audited"},
-		Apply: func(p *sdk.Module) error {
+		Apply: func(p *sdk.Scope) error {
 			inner := p.Service("sandbox/local").(*sdk.SandboxProvider)
 			return p.Provide("sandbox/audited", &sdk.SandboxProvider{
 				Name:      "audited",
@@ -42,17 +46,19 @@ func main() {
 			})
 		},
 	}
-	a, err := kiln.New(
-		kiln.WithModel("mock:demo"),
-		kiln.WithModuleConfig("model_mock", map[string]any{"script": []any{
-			map[string]any{"tool": "bash", "args": map[string]any{"command": "echo hello from the sandbox"}},
-			map[string]any{"text": "done"},
-		}}),
-		kiln.WithModules("sandbox_local"),
-		kiln.WithModule(provider),
-		kiln.WithModuleConfig("workspace_sandbox", map[string]any{"provider": "audited"}),
-		kiln.WithModules("tool_shell"),
-	)
+	a, err := kiln.New(kiln.Config{
+		Model: "mock:demo",
+		Modules: []kiln.Module{
+			model_mock.New(map[string]any{"script": []any{
+				map[string]any{"tool": "bash", "args": map[string]any{"command": "echo hello from the sandbox"}},
+				map[string]any{"text": "done"},
+			}}),
+			sandbox_local.New(),
+			provider,
+			workspace_sandbox.New(map[string]any{"provider": "audited"}),
+			tool_shell.New(),
+		},
+	})
 	if err != nil {
 		log.Fatal(err)
 	}

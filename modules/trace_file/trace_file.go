@@ -22,23 +22,23 @@ import (
 //
 // Example:
 //
-//	kiln.WithModuleConfig("trace_file", map[string]any{"path": ".kiln/trace.jsonl", "content": true})
+//	trace_file.New(map[string]any{"path": ".kiln/trace.jsonl", "content": true})
 //	// then: kiln trace view .kiln/trace.jsonl > trace.html
 var Permissions = []string{"fs:read", "fs:write"}
 
-func Apply(p *sdk.Module) error {
+func Apply(p *sdk.Scope) error {
 	logPath := p.ConfigString("path", ".kiln/trace.jsonl")
 	content := p.ConfigBool("content", false)
 	d, err := p.Dir(filepath.Dir(logPath), true)
 	if err != nil {
 		return err
 	}
-	p.OnUnload(func() { d.Close() })
+	p.OnClose(func() { d.Close() })
 	f, err := d.AppendFile(filepath.Base(logPath), 0o600)
 	if err != nil {
 		return err
 	}
-	p.OnUnload(func() { f.Close() })
+	p.OnClose(func() { f.Close() })
 	var mu sync.Mutex
 	seq := 0
 	runs := map[*sdk.RunState]string{}
@@ -130,3 +130,13 @@ func Apply(p *sdk.Module) error {
 
 // Module is the compiled form of "trace_file". modules/std registers it.
 var Module = engine.Module{Name: "trace_file", Requires: nil, Provides: nil, Permissions: Permissions, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}

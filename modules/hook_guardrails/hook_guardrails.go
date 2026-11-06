@@ -34,14 +34,14 @@ import (
 //
 // Example:
 //
-//	kiln.WithModuleConfig("hook_guardrails", map[string]any{"rules": []any{
+//	hook_guardrails.New(map[string]any{"rules": []any{
 //		map[string]any{"on": "output", "detect": "secrets", "action": "redact"},
 //		map[string]any{"on": "tool_args", "keywords": []any{"DROP TABLE"}, "action": "block",
 //			"message": "Destructive SQL is not allowed."},
 //		map[string]any{"on": "output", "regex": `(?i)as an ai`, "action": "retry",
 //			"message": "Answer directly, without talking about being an AI."},
 //	}})
-func Apply(p *sdk.Module) error {
+func Apply(p *sdk.Scope) error {
 	maxRetries := p.ConfigInt("max_retries", 1)
 
 	type rule struct {
@@ -215,3 +215,13 @@ func Apply(p *sdk.Module) error {
 
 // Module is the compiled form of "hook_guardrails". modules/std registers it.
 var Module = engine.Module{Name: "hook_guardrails", Requires: nil, Provides: nil, Permissions: nil, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}

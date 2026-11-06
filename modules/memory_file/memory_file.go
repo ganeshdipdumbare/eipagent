@@ -24,17 +24,17 @@ import (
 //
 // Example:
 //
-//	kiln.WithModuleConfig("memory_file", map[string]any{"path": ".kiln/memory.json"})
-//	kiln.WithModules("tool_memory") // lets the model remember and recall
+//	memory_file.New(map[string]any{"path": ".kiln/memory.json"})
+//	kiln.Config{Modules: []kiln.Module{tool_memory.New()}} // lets the model remember and recall
 var Permissions = []string{"fs:read", "fs:write"}
 
-func Apply(p *sdk.Module) error {
+func Apply(p *sdk.Scope) error {
 	path := p.ConfigString("path", ".kiln/store.json")
 	d, err := p.Dir(filepath.Dir(path), true)
 	if err != nil {
 		return err
 	}
-	p.OnUnload(func() { d.Close() })
+	p.OnClose(func() { d.Close() })
 	name := filepath.Base(path)
 	var mu sync.Mutex
 	key := func(ns []string, k string) string { return strings.Join(ns, "\x1f") + "\x1e" + k }
@@ -133,3 +133,13 @@ func Apply(p *sdk.Module) error {
 
 // Module is the compiled form of "memory_file". modules/std registers it.
 var Module = engine.Module{Name: "memory_file", Requires: nil, Provides: []string{"memory"}, Permissions: Permissions, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}

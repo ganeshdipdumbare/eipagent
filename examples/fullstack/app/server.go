@@ -17,6 +17,12 @@ import (
 
 	"github.com/ganeshdipdumbare/kiln"
 	"github.com/ganeshdipdumbare/kiln/audit"
+	"github.com/ganeshdipdumbare/kiln/modules/audit_file"
+	"github.com/ganeshdipdumbare/kiln/modules/hook_approval"
+	"github.com/ganeshdipdumbare/kiln/modules/hook_limits"
+	"github.com/ganeshdipdumbare/kiln/modules/hook_pii"
+	"github.com/ganeshdipdumbare/kiln/modules/secrets_env"
+	"github.com/ganeshdipdumbare/kiln/modules/threads_file"
 	"github.com/ganeshdipdumbare/kiln/sdk"
 )
 
@@ -74,33 +80,35 @@ func New(cfg Config) (*Server, error) {
 	if err := os.MkdirAll(filepath.Join(cfg.DataDir, "threads"), 0o700); err != nil {
 		return nil, err
 	}
-	opts := []kiln.Option{
-		kiln.WithModel(cfg.Model),
-		kiln.WithInstructions(instructions),
-		kiln.WithMaxSteps(8),
-		kiln.WithTools(Tools(shop)...),
-		// Business rule: refunds above the limit wait for a supervisor.
-		kiln.WithModule(RefundPolicy(cfg.RefundLimit)),
-		// Email goes out through a module that alone may read the relay token.
-		kiln.WithModuleConfig("secrets_env", map[string]any{"allow": []any{"MAIL_RELAY_TOKEN"}, "grants": map[string]any{"mailer": []any{"MAIL_RELAY_TOKEN"}}}),
-		kiln.WithModule(Mailer(shop)),
-		// Every outgoing email needs a human OK.
-		kiln.WithModuleConfig("hook_approval", map[string]any{"interrupt_on": map[string]any{
-			"send_email": map[string]any{"allowed": []any{"approve", "edit", "reject"}, "description": "Send this email to the customer?"},
-		}}),
-		// Card numbers never reach the model.
-		kiln.WithModuleConfig("hook_pii", map[string]any{"types": []any{"credit_card"}, "strategy": "mask"}),
-		kiln.WithModuleConfig("hook_limits", map[string]any{"tool_calls_run": 12}),
-		// Durable threads (pauses survive restarts) and a tamper-evident log.
-		kiln.WithModuleConfig("threads_file", map[string]any{"dir": filepath.Join(cfg.DataDir, "threads")}),
-		kiln.WithModuleConfig("audit_file", map[string]any{"path": filepath.Join(cfg.DataDir, "audit.jsonl")}),
-		kiln.WithModule(Inspector()),
-		kiln.WithLogger(func(scope, msg string) {}),
+	cfg2 := kiln.Config{
+		Model:        cfg.Model,
+		Instructions: instructions,
+		MaxSteps:     8,
+		Tools:        Tools(shop),
+		Modules: []kiln.Module{
+			// Business rule: refunds above the limit wait for a supervisor.
+			RefundPolicy(cfg.RefundLimit),
+			// Email goes out through a module that alone may read the relay token.
+			secrets_env.New(map[string]any{"allow": []any{"MAIL_RELAY_TOKEN"}, "grants": map[string]any{"mailer": []any{"MAIL_RELAY_TOKEN"}}}),
+			Mailer(shop),
+			// Every outgoing email needs a human OK.
+			hook_approval.New(map[string]any{"interrupt_on": map[string]any{
+				"send_email": map[string]any{"allowed": []any{"approve", "edit", "reject"}, "description": "Send this email to the customer?"},
+			}}),
+			// Card numbers never reach the model.
+			hook_pii.New(map[string]any{"types": []any{"credit_card"}, "strategy": "mask"}),
+			hook_limits.New(map[string]any{"tool_calls_run": 12}),
+			// Durable threads (pauses survive restarts) and a tamper-evident log.
+			threads_file.New(map[string]any{"dir": filepath.Join(cfg.DataDir, "threads")}),
+			audit_file.New(map[string]any{"path": filepath.Join(cfg.DataDir, "audit.jsonl")}),
+			Inspector(),
+		},
+		Logger: func(scope, msg string) {},
 	}
 	if strings.HasPrefix(cfg.Model, "demo:") {
-		opts = append(opts, kiln.WithModule(DemoModel()))
+		cfg2.Modules = append(cfg2.Modules, DemoModel())
 	}
-	agent, err := kiln.New(opts...)
+	agent, err := kiln.New(cfg2)
 	if err != nil {
 		return nil, err
 	}
@@ -261,7 +269,7 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 401, errors.New("unknown user"))
 		return
 	}
-	stream := s.agent.Thread(r.PathValue("id")).Stream(r.Context(), body.Text, kiln.AsUser(body.User, u.Role))
+	stream := s.agent.Thread(r.PathValue("id")).Stream(r.Context(), body.Text, kiln.Run{User: body.User, Roles: []string{u.Role}})
 	sendSSE(w, stream)
 }
 
@@ -285,7 +293,7 @@ func (s *Server) postDecisions(w http.ResponseWriter, r *http.Request) {
 	for i := range body.Decisions {
 		body.Decisions[i].By = body.User // recorded in the audit log
 	}
-	stream := s.agent.Thread(r.PathValue("id")).ResumeStream(r.Context(), body.Decisions, kiln.AsUser(body.User, u.Role))
+	stream := s.agent.Thread(r.PathValue("id")).ResumeStream(r.Context(), body.Decisions, kiln.Run{User: body.User, Roles: []string{u.Role}})
 	sendSSE(w, stream)
 }
 

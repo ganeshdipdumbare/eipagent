@@ -17,7 +17,7 @@ import (
 // childVars splits the configured child variables: a secret:// reference
 // is resolved through the secrets service and goes to Secrets; any other
 // value goes to Env. A credential-looking name must use a reference.
-func childVars(p *sdk.Module, raw map[string]any) (env, secrets map[string]string, err error) {
+func childVars(p *sdk.Scope, raw map[string]any) (env, secrets map[string]string, err error) {
 	env, secrets = map[string]string{}, map[string]string{}
 	for k, v := range raw {
 		s, ok := v.(string)
@@ -60,15 +60,15 @@ func childVars(p *sdk.Module, raw map[string]any) (env, secrets map[string]strin
 //
 // Example:
 //
-//	kiln.WithModuleConfig("sandbox_microsandbox", map[string]any{"image": "python"})
-//	kiln.WithModuleConfig("workspace_sandbox", map[string]any{"provider": "microsandbox"})
-//	kiln.WithModules("tool_shell", "tool_fs")
+//	sandbox_microsandbox.New(map[string]any{"image": "python"})
+//	workspace_sandbox.New(map[string]any{"provider": "microsandbox"})
+//	kiln.Config{Modules: []kiln.Module{tool_shell.New(), tool_fs.New()}}
 var Permissions = []string{"exec"}
 
 // Requires: the secrets service is optional, needed only for secret:// refs.
 var Requires = []string{"?secrets"}
 
-func Apply(p *sdk.Module) error {
+func Apply(p *sdk.Scope) error {
 	bin := p.ConfigString("binary", "msb")
 	image := p.ConfigString("image", "alpine")
 	name := p.ConfigString("name", "microsandbox")
@@ -308,3 +308,13 @@ func vm(id, provider, wd string, run runner, start starter) *sdk.Sandbox {
 
 // Module is the compiled form of "sandbox_microsandbox". modules/std registers it.
 var Module = engine.Module{Name: "sandbox_microsandbox", Requires: Requires, Provides: []string{"sandbox/*"}, Permissions: Permissions, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}

@@ -100,6 +100,19 @@ func Compose(opts Options) (*Plan, error) {
 			if contains(requiredNames(pol), s.Name()) {
 				continue // the policy's row wins
 			}
+			// The same module listed again is configuration, not a second
+			// instance: merge it so option order never changes the result.
+			merged := false
+			for i := range rows {
+				if rows[i].spec.Name() == s.Name() && rows[i].spec.Use == s.Use {
+					rows[i].spec.Config = mergeConfig(rows[i].spec.Config, s.Config)
+					merged = true
+					break
+				}
+			}
+			if merged {
+				continue
+			}
 			return nil, fmt.Errorf("module %s listed twice", s.Name())
 		}
 		seen[s.Name()] = true
@@ -128,6 +141,7 @@ func Compose(opts Options) (*Plan, error) {
 		if !pol.allowed(name) {
 			return nil, fmt.Errorf("module %s is not allowed by policy", name)
 		}
+		r.spec.Config = mergeConfig(mod.Config, r.spec.Config)
 		if pol.Rules != nil && name == "policy" {
 			cfg := map[string]any{}
 			for k, v := range r.spec.Config {
@@ -215,6 +229,21 @@ func Compose(opts Options) (*Plan, error) {
 		planned = append(planned, nodes[i])
 	}
 	return &Plan{pol: pol, logger: opts.Logger, nodes: planned}, nil
+}
+
+// mergeConfig returns base with over applied on top (over wins).
+func mergeConfig(base, over map[string]any) map[string]any {
+	if len(base) == 0 && len(over) == 0 {
+		return nil
+	}
+	out := map[string]any{}
+	for k, v := range base {
+		out[k] = v
+	}
+	for k, v := range over {
+		out[k] = v
+	}
+	return out
 }
 
 func requiredNames(p *Policy) []string {

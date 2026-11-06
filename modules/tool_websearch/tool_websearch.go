@@ -33,16 +33,16 @@ import (
 //
 // Example:
 //
-//	kiln.WithModuleConfig("tool_websearch", map[string]any{"backend": "tavily", "max_results": 8})
-//	kiln.WithModuleConfig("tool_fetch", map[string]any{"allow_hosts": []any{"*"}}) // to read the results
-//	// Shortcut: kiln.WithWebSearch("duckduckgo")
+//	tool_websearch.New(map[string]any{"backend": "tavily", "max_results": 8})
+//	tool_fetch.New(map[string]any{"allow_hosts": []any{"*"}}) // to read the results
+//	// Shortcut: kiln.WebSearch("duckduckgo")
 var Permissions = []string{"net"}
 
 var Requires = []string{"?secrets"} // secret:// keys/headers are optional
 
 type hit struct{ Title, URL, Snippet string }
 
-func Apply(p *sdk.Module) error {
+func Apply(p *sdk.Scope) error {
 	backend := strings.ToLower(p.ConfigString("backend", "duckduckgo"))
 	maxResults := p.ConfigInt("max_results", 5)
 	allowInsecure := p.ConfigBool("allow_insecure", false)
@@ -245,3 +245,13 @@ func parseDDG(page string) []hit {
 
 // Module is the compiled form of "tool_websearch". modules/std registers it.
 var Module = engine.Module{Name: "tool_websearch", Requires: Requires, Provides: nil, Permissions: Permissions, Secrets: []string{"TAVILY_API_KEY", "BRAVE_API_KEY"}, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}

@@ -13,7 +13,7 @@ import (
 
 // contracted returns a module context holding the given grants, the way
 // the engine would set it up.
-func contracted(t *testing.T, provides []string, grants ...string) *Module {
+func contracted(t *testing.T, provides []string, grants ...string) *Scope {
 	t.Helper()
 	key := ClaimTrustKey()
 	if key == nil {

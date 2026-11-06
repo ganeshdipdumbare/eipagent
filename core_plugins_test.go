@@ -16,7 +16,7 @@ import (
 // searcher is a compiled provider that calls web_search once, then
 // answers with the tool's result.
 func searcher(query string) kiln.Module {
-	return kiln.Module{Name: "searcher", Provides: []string{"model/searcher"}, Apply: func(ctx *sdk.Module) error {
+	return kiln.Module{Name: "searcher", Provides: []string{"model/searcher"}, Apply: func(ctx *sdk.Scope) error {
 		return ctx.Provide("model/searcher", &sdk.Provider{Name: "searcher", Generate: func(c context.Context, req *sdk.ModelRequest) (*sdk.ModelResponse, error) {
 			last := req.Messages[len(req.Messages)-1]
 			if last.Role == sdk.RoleTool {
@@ -31,7 +31,7 @@ func searcher(query string) kiln.Module {
 // capture is a compiled provider that records each request and answers
 // with the replies in turn (the last one repeats).
 func capture(name string, got *[]*sdk.ModelRequest, replies ...string) kiln.Module {
-	return kiln.Module{Name: "capture_" + name, Provides: []string{"model/" + name}, Apply: func(ctx *sdk.Module) error {
+	return kiln.Module{Name: "capture_" + name, Provides: []string{"model/" + name}, Apply: func(ctx *sdk.Scope) error {
 		return ctx.Provide("model/"+name, &sdk.Provider{Name: name, Generate: func(c context.Context, req *sdk.ModelRequest) (*sdk.ModelResponse, error) {
 			cp := *req
 			cp.Messages = append([]sdk.Message(nil), req.Messages...)
@@ -47,9 +47,9 @@ func capture(name string, got *[]*sdk.ModelRequest, replies ...string) kiln.Modu
 
 func TestThinkingAndCacheHooks(t *testing.T) {
 	var got []*sdk.ModelRequest
-	a, err := kiln.New(kiln.WithModel("cap:m"), kiln.WithModule(capture("cap", &got, "ok")),
-		kiln.WithModuleConfig("hook_thinking", map[string]any{"effort": "high"}),
-		kiln.WithModuleConfig("hook_cache", map[string]any{"ttl": "1h"}))
+	a, err := startAgent(withModel("cap:m"), withModule(capture("cap", &got, "ok")),
+		withModuleConfig("hook_thinking", map[string]any{"effort": "high"}),
+		withModuleConfig("hook_cache", map[string]any{"ttl": "1h"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,8 +63,8 @@ func TestThinkingAndCacheHooks(t *testing.T) {
 		t.Fatalf("extra not set: %v", got[0].Extra)
 	}
 
-	if _, err := kiln.New(kiln.WithModel("cap:m"), kiln.WithModule(capture("cap", &got, "ok")),
-		kiln.WithModuleConfig("hook_thinking", map[string]any{"effort": "extreme"})); err == nil {
+	if _, err := startAgent(withModel("cap:m"), withModule(capture("cap", &got, "ok")),
+		withModuleConfig("hook_thinking", map[string]any{"effort": "extreme"})); err == nil {
 		t.Fatal("bad effort accepted")
 	}
 }
@@ -76,9 +76,9 @@ func TestThinkingAndCacheOnAnthropic(t *testing.T) {
 		return nil, `{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`
 	})
 	a := newAgent(t, "anthropic:claude-opus-5-5", "model_anthropic", srv.URL,
-		kiln.WithInstructions("Be brief."),
-		kiln.WithModuleConfig("hook_thinking", map[string]any{"effort": "max", "display": "summarized"}),
-		kiln.WithModuleConfig("hook_cache", nil))
+		withInstructions("Be brief."),
+		withModuleConfig("hook_thinking", map[string]any{"effort": "max", "display": "summarized"}),
+		withModuleConfig("hook_cache", nil))
 	if _, err := a.Generate(bg, "hi"); err != nil {
 		t.Fatal(err)
 	}
@@ -108,8 +108,8 @@ func TestThinkingOnOpenAIAndGemini(t *testing.T) {
 	gsrv := fakeServer(t, func(r *http.Request, b map[string]any) { gb = b }, func(int, map[string]any) ([]string, string) {
 		return nil, `{"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]},"finishReason":"STOP"}]}`
 	})
-	thinking := kiln.WithModuleConfig("hook_thinking", map[string]any{"effort": "low"})
-	if _, err := newAgent(t, "openai:o9", "model_openai", osrv.URL, thinking, kiln.WithModuleConfig("hook_cache", nil)).Thread("t1").Generate(bg, "hi"); err != nil {
+	thinking := withModuleConfig("hook_thinking", map[string]any{"effort": "low"})
+	if _, err := newAgent(t, "openai:o9", "model_openai", osrv.URL, thinking, withModuleConfig("hook_cache", nil)).Thread("t1").Generate(bg, "hi"); err != nil {
 		t.Fatal(err)
 	}
 	if ob["reasoning_effort"] != "low" || ob["prompt_cache_key"] != "t1" {
@@ -131,9 +131,9 @@ func TestOutputValidate(t *testing.T) {
 		Population int    `json:"population"`
 	}
 	var got []*sdk.ModelRequest
-	a, err := kiln.New(kiln.WithModel("cap:m"),
-		kiln.WithModule(capture("cap", &got, `{"name":"Rome"}`, `{"name":"Rome","population":2800000}`)),
-		kiln.WithModuleConfig("hook_output_validate", nil))
+	a, err := startAgent(withModel("cap:m"),
+		withModule(capture("cap", &got, `{"name":"Rome"}`, `{"name":"Rome","population":2800000}`)),
+		withModuleConfig("hook_output_validate", nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,8 +148,8 @@ func TestOutputValidate(t *testing.T) {
 	}
 
 	got = nil
-	b, err := kiln.New(kiln.WithModel("cap:m"), kiln.WithModule(capture("cap", &got, `not json`)),
-		kiln.WithModuleConfig("hook_output_validate", map[string]any{"max_retries": 1}))
+	b, err := startAgent(withModel("cap:m"), withModule(capture("cap", &got, `not json`)),
+		withModuleConfig("hook_output_validate", map[string]any{"max_retries": 1}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,8 +167,8 @@ func TestWebSearch(t *testing.T) {
 	}))
 	defer srv.Close()
 	t.Setenv("TAVILY_API_KEY", "tk")
-	a, err := kiln.New(kiln.WithModel("searcher:x"), kiln.WithModule(searcher("golang")),
-		kiln.WithModuleConfig("tool_websearch", map[string]any{"backend": "tavily", "base_url": srv.URL, "max_results": 1}))
+	a, err := startAgent(withModel("searcher:x"), withModule(searcher("golang")),
+		withModuleConfig("tool_websearch", map[string]any{"backend": "tavily", "base_url": srv.URL, "max_results": 1}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,8 +190,8 @@ func TestWebSearch(t *testing.T) {
 <a class="result__snippet" href="x">An <b>example</b> page</a></div>`)
 	}))
 	defer ddg.Close()
-	b, err := kiln.New(kiln.WithModel("searcher:x"), kiln.WithModule(searcher("example")),
-		kiln.WithModuleConfig("tool_websearch", map[string]any{"base_url": ddg.URL}))
+	b, err := startAgent(withModel("searcher:x"), withModule(searcher("example")),
+		withModuleConfig("tool_websearch", map[string]any{"base_url": ddg.URL}))
 	if err != nil {
 		t.Fatal(err)
 	}

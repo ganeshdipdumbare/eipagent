@@ -29,9 +29,9 @@ import (
 //
 // Example:
 //
-//	kiln.WithModuleConfig("hook_thinking", map[string]any{"effort": "high", "models": []any{"anthropic:*", "openai:*"}})
-//	// Shortcut: kiln.WithThinking("high")
-func Apply(p *sdk.Module) error {
+//	hook_thinking.New(map[string]any{"effort": "high", "models": []any{"anthropic:*", "openai:*"}})
+//	// Shortcut: kiln.Thinking("high")
+func Apply(p *sdk.Scope) error {
 	effort := p.ConfigString("effort", "")
 	budget := p.ConfigInt("budget_tokens", 0)
 	display := p.ConfigString("display", "")
@@ -79,3 +79,13 @@ func Apply(p *sdk.Module) error {
 
 // Module is the compiled form of "hook_thinking". modules/std registers it.
 var Module = engine.Module{Name: "hook_thinking", Requires: nil, Provides: nil, Permissions: nil, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}

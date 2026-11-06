@@ -110,8 +110,8 @@ func Load(path string) (*Dataset, error) {
 
 // Options for Run.
 type Options struct {
-	Parallel int              // cases run at once (default 4)
-	RunOpts  []kiln.RunOption // passed to every run
+	Parallel int       // cases run at once (default 4)
+	Run      *kiln.Run // passed to every run
 }
 
 // Run runs every case on the agent and grades it.
@@ -131,7 +131,7 @@ func Run(ctx context.Context, a *kiln.Agent, ds *Dataset, opt ...Options) (*Repo
 		sem <- struct{}{}
 		go func(i int, c Case) {
 			defer func() { <-sem; wg.Done() }()
-			rep.Results[i] = runCase(ctx, a, ds, c, o.RunOpts)
+			rep.Results[i] = runCase(ctx, a, ds, c, o.Run)
 		}(i, c)
 	}
 	wg.Wait()
@@ -148,14 +148,18 @@ func Run(ctx context.Context, a *kiln.Agent, ds *Dataset, opt ...Options) (*Repo
 	return rep, nil
 }
 
-func runCase(ctx context.Context, a *kiln.Agent, ds *Dataset, c Case, runOpts []kiln.RunOption) Result {
+func runCase(ctx context.Context, a *kiln.Agent, ds *Dataset, c Case, run *kiln.Run) Result {
 	name := c.Name
 	if name == "" {
 		name = c.Prompt
 	}
 	r := Result{Case: name}
 	start := time.Now()
-	res, err := a.Generate(ctx, c.Prompt, runOpts...)
+	var ro []kiln.Run
+	if run != nil {
+		ro = append(ro, *run)
+	}
+	res, err := a.Generate(ctx, c.Prompt, ro...)
 	r.Duration = time.Since(start)
 	if err != nil {
 		r.Error = err.Error()
@@ -217,15 +221,12 @@ type verdict struct {
 }
 
 func judge(ctx context.Context, a *kiln.Agent, model, prompt, answer, rubric string) (string, bool, error) {
-	opts := []kiln.RunOption{
-		kiln.System("You grade an AI assistant's answer against a rubric. Be strict: pass only when the rubric is clearly met."),
-		kiln.ToolChoice("none"), kiln.MaxSteps(1),
-	}
-	if model != "" {
-		opts = append(opts, kiln.Model(model))
+	run := kiln.Run{
+		Instructions: "You grade an AI assistant's answer against a rubric. Be strict: pass only when the rubric is clearly met.",
+		ToolChoice:   "none", MaxSteps: 1, Model: model,
 	}
 	q := fmt.Sprintf("Rubric:\n%s\n\nThe user asked:\n%s\n\nThe assistant answered:\n%s", rubric, prompt, answer)
-	v, err := kiln.GenerateObject[verdict](ctx, a, q, opts...)
+	v, err := kiln.GenerateObject[verdict](ctx, a, q, run)
 	if err != nil {
 		return "", false, err
 	}

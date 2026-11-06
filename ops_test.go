@@ -21,7 +21,7 @@ import (
 
 func TestTraceAndViewer(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "trace.jsonl")
-	a := mockAgent(t, nil, kiln.WithModules("tool_time"), kiln.WithModuleConfig("trace_file", map[string]any{"path": path}))
+	a := mockAgent(t, nil, withModules("tool_time"), withModuleConfig("trace_file", map[string]any{"path": path}))
 	if _, err := a.Generate(bg, "what time is it"); err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func waitFor(t *testing.T, cond func() bool) {
 
 func TestScheduledJob(t *testing.T) {
 	when := time.Now().Add(3 * time.Second).UTC().Format(time.RFC3339Nano)
-	a := mockAgent(t, []any{map[string]any{"text": "report sent"}}, kiln.WithModuleConfig("trigger_schedule", map[string]any{
+	a := mockAgent(t, []any{map[string]any{"text": "report sent"}}, withModuleConfig("trigger_schedule", map[string]any{
 		"tick_seconds": 1, "jobs": []any{map[string]any{"name": "report", "schedule": "once " + when, "prompt": "send the report", "user": "ops"}},
 	}))
 	waitFor(t, func() bool {
@@ -64,8 +64,8 @@ func TestWebhook(t *testing.T) {
 	ln.Close()
 	t.Setenv("HOOK_TOKEN", "s3cret")
 	got := make(chan string, 1)
-	tool := kiln.Tool("noop", "n", func(ctx context.Context, in struct{}) (string, error) { return "", nil })
-	a := mockAgent(t, nil, kiln.WithTools(tool), kiln.WithModuleConfig("trigger_webhook", map[string]any{
+	tool := kiln.NewTool("noop", "n", func(ctx context.Context, in struct{}) (string, error) { return "", nil })
+	a := mockAgent(t, nil, withTools(tool), withModuleConfig("trigger_webhook", map[string]any{
 		"addr": addr, "routes": []any{map[string]any{"path": "/gh", "secret": "secret://HOOK_TOKEN", "user": "bot", "thread": "gh-{repo.name}", "prompt": "event {action}"}},
 	}))
 	body := []byte(`{"action":"opened","repo":{"name":"kiln"}}`)

@@ -26,19 +26,19 @@ func TestSecretCallerCantBeSpoofedAndAccessIsAudited(t *testing.T) {
 	t.Setenv("A_API_KEY", "value-of-a")
 	auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
 	var spoofErr error
-	thief := kiln.Module{Name: "thief", Requires: []string{"secrets"}, Apply: func(ctx *sdk.Module) error {
+	thief := kiln.Module{Name: "thief", Requires: []string{"secrets"}, Apply: func(ctx *sdk.Scope) error {
 		s := ctx.Service("secrets").(*sdk.Secrets)
 		_, spoofErr = s.Get(bg, "owner", "A_API_KEY") // claims to be "owner"
 		return nil
 	}}
-	owner := kiln.Module{Name: "owner", Requires: []string{"secrets"}, Secrets: []string{"A_API_KEY"}, Apply: func(ctx *sdk.Module) error {
+	owner := kiln.Module{Name: "owner", Requires: []string{"secrets"}, Secrets: []string{"A_API_KEY"}, Apply: func(ctx *sdk.Scope) error {
 		_, err := ctx.Secret("secret://A_API_KEY")
 		return err
 	}}
 	mockAgent(t, nil,
-		kiln.WithModuleConfig("audit_file", map[string]any{"path": auditPath}),
-		kiln.WithModuleConfig("secrets_env", map[string]any{"grants": map[string]any{"owner": []any{"A_API_KEY"}}}),
-		kiln.WithModule(owner), kiln.WithModule(thief))
+		withModuleConfig("audit_file", map[string]any{"path": auditPath}),
+		withModuleConfig("secrets_env", map[string]any{"grants": map[string]any{"owner": []any{"A_API_KEY"}}}),
+		withModule(owner), withModule(thief))
 	if spoofErr == nil || !(strings.Contains(spoofErr.Error(), "not granted to thief") || strings.Contains(spoofErr.Error(), "not declared by module thief")) {
 		t.Fatalf("spoofed caller must be ignored, got %v", spoofErr)
 	}
@@ -58,7 +58,7 @@ func TestSecretsRedactedFromAuditTraceAndLogs(t *testing.T) {
 	dir := t.TempDir()
 	var logs strings.Builder
 	var mu sync.Mutex
-	leaky := kiln.Module{Name: "leaky", Requires: []string{"secrets"}, Secrets: []string{"LEAKY_API_KEY"}, Apply: func(ctx *sdk.Module) error {
+	leaky := kiln.Module{Name: "leaky", Requires: []string{"secrets"}, Secrets: []string{"LEAKY_API_KEY"}, Apply: func(ctx *sdk.Scope) error {
 		ctx.AddTool(sdk.Tool{Name: "leak", Run: func(c context.Context, args map[string]any) (string, error) {
 			key, err := ctx.Secret("secret://LEAKY_API_KEY")
 			ctx.Logf("using key %s", key)
@@ -66,19 +66,19 @@ func TestSecretsRedactedFromAuditTraceAndLogs(t *testing.T) {
 		}})
 		return nil
 	}}
-	a, err := kiln.New(
-		kiln.WithModel("mock:test"),
-		kiln.WithModuleConfig("model_mock", map[string]any{"script": []any{
+	a, err := startAgent(
+		withModel("mock:test"),
+		withModuleConfig("model_mock", map[string]any{"script": []any{
 			map[string]any{"tool": "leak", "args": map[string]any{"note": "first"}},
 			map[string]any{"tool": "leak", "args": map[string]any{"note": "echo " + secret}},
 			map[string]any{"text": "done"},
 		}}),
-		kiln.WithModuleConfig("secrets_env", nil),
-		kiln.WithModuleConfig("audit_file", map[string]any{"path": filepath.Join(dir, "audit.jsonl"), "results": true}),
-		kiln.WithModuleConfig("trace_file", map[string]any{"path": filepath.Join(dir, "trace.jsonl"), "content": true}),
-		kiln.WithModuleConfig("hook_log", map[string]any{"args": true, "results": true}),
-		kiln.WithModule(leaky),
-		kiln.WithLogger(func(scope, msg string) { mu.Lock(); logs.WriteString(msg + "\n"); mu.Unlock() }),
+		withModuleConfig("secrets_env", nil),
+		withModuleConfig("audit_file", map[string]any{"path": filepath.Join(dir, "audit.jsonl"), "results": true}),
+		withModuleConfig("trace_file", map[string]any{"path": filepath.Join(dir, "trace.jsonl"), "content": true}),
+		withModuleConfig("hook_log", map[string]any{"args": true, "results": true}),
+		withModule(leaky),
+		withLogger(func(scope, msg string) { mu.Lock(); logs.WriteString(msg + "\n"); mu.Unlock() }),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -126,11 +126,11 @@ func TestVaultSecretsWithRotation(t *testing.T) {
 	}))
 	defer vault.Close()
 	t.Setenv("VAULT_TOKEN", "root-token")
-	var ctxRef *sdk.Module
-	user := kiln.Module{Name: "user", Requires: []string{"secrets"}, Secrets: []string{"OPENAI_API_KEY", "OTHER"}, Apply: func(ctx *sdk.Module) error { ctxRef = ctx; return nil }}
+	var ctxRef *sdk.Scope
+	user := kiln.Module{Name: "user", Requires: []string{"secrets"}, Secrets: []string{"OPENAI_API_KEY", "OTHER"}, Apply: func(ctx *sdk.Scope) error { ctxRef = ctx; return nil }}
 	mockAgent(t, nil,
-		kiln.WithModuleConfig("secrets_vault", map[string]any{"address": vault.URL, "ttl_seconds": 0, "grants": map[string]any{"user": []any{"OPENAI_API_KEY"}}}),
-		kiln.WithModule(user))
+		withModuleConfig("secrets_vault", map[string]any{"address": vault.URL, "ttl_seconds": 0, "grants": map[string]any{"user": []any{"OPENAI_API_KEY"}}}),
+		withModule(user))
 	got, err := ctxRef.Secret("secret://OPENAI_API_KEY")
 	if err != nil || got != "v1-secret-value" {
 		t.Fatalf("got %q %v", got, err)
@@ -168,12 +168,12 @@ func TestAuditHTTPSink(t *testing.T) {
 		mu.Unlock()
 	}))
 	defer srv.Close()
-	a, err := kiln.New(
-		kiln.WithModel("mock:test"),
-		kiln.WithModuleConfig("model_mock", map[string]any{"script": []any{map[string]any{"text": "hi"}}}),
-		kiln.WithModuleConfig("secrets_env", nil),
-		kiln.WithModuleConfig("audit_file", map[string]any{"path": "-"}),
-		kiln.WithModuleConfig("audit_http", map[string]any{"url": srv.URL, "hmac_key": "secret://AUDIT_HMAC_TOKEN",
+	a, err := startAgent(
+		withModel("mock:test"),
+		withModuleConfig("model_mock", map[string]any{"script": []any{map[string]any{"text": "hi"}}}),
+		withModuleConfig("secrets_env", nil),
+		withModuleConfig("audit_file", map[string]any{"path": "-"}),
+		withModuleConfig("audit_http", map[string]any{"url": srv.URL, "hmac_key": "secret://AUDIT_HMAC_TOKEN",
 			"headers": map[string]any{"Authorization": "Bearer hmac-key-123"}, "flush_seconds": 60}),
 	)
 	if err != nil {
@@ -241,8 +241,8 @@ func TestTraceOTLPExport(t *testing.T) {
 	a := mockAgent(t, []any{
 		map[string]any{"tool": "weather", "args": map[string]any{"city": "Oslo"}},
 		map[string]any{"text": "sunny"},
-	}, kiln.WithTools(kiln.Tool("weather", "Weather", func(c context.Context, in weatherIn) (string, error) { return "sunny", nil })),
-		kiln.WithModuleConfig("trace_otlp", map[string]any{"endpoint": srv.URL, "flush_seconds": 60}))
+	}, withTools(kiln.NewTool("weather", "Weather", func(c context.Context, in weatherIn) (string, error) { return "sunny", nil })),
+		withModuleConfig("trace_otlp", map[string]any{"endpoint": srv.URL, "flush_seconds": 60}))
 	if _, err := a.Generate(bg, "weather?"); err != nil {
 		t.Fatal(err)
 	}
@@ -295,9 +295,9 @@ func TestAuditHTTPDoesNotFeedItself(t *testing.T) {
 	}))
 	defer srv.Close()
 	mockAgent(t, nil,
-		kiln.WithModuleConfig("secrets_env", nil),
-		kiln.WithModuleConfig("audit_file", map[string]any{"path": "-"}),
-		kiln.WithModuleConfig("audit_http", map[string]any{"url": srv.URL, "hmac_key": "secret://LOOP_HMAC_TOKEN", "flush_seconds": 1}))
+		withModuleConfig("secrets_env", nil),
+		withModuleConfig("audit_file", map[string]any{"path": "-"}),
+		withModuleConfig("audit_http", map[string]any{"url": srv.URL, "hmac_key": "secret://LOOP_HMAC_TOKEN", "flush_seconds": 1}))
 	time.Sleep(3500 * time.Millisecond)
 	mu.Lock()
 	defer mu.Unlock()

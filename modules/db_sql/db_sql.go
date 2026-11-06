@@ -24,10 +24,10 @@ import (
 // Example:
 //
 //	// import _ "github.com/ganeshdipdumbare/kiln/drivers/postgres"
-//	kiln.WithModuleConfig("db_sql", map[string]any{"dsn": "secret://DATABASE_URL", "max_open": 20})
+//	db_sql.New(map[string]any{"dsn": "secret://DATABASE_URL", "max_open": 20})
 var Permissions = []string{"db"}
 
-func Apply(p *sdk.Module) error {
+func Apply(p *sdk.Scope) error {
 	driver := p.ConfigString("driver", "pgx")
 	dsn, err := p.SecretValue(p.ConfigString("dsn", "secret://KILN_DATABASE_URL"))
 	if err != nil {
@@ -46,7 +46,7 @@ func Apply(p *sdk.Module) error {
 		db.Close()
 		return fmt.Errorf("db_sql: ping: %w", err)
 	}
-	p.OnUnload(func() { db.Close() })
+	p.OnClose(func() { db.Close() })
 	name := "db"
 	if n := p.ConfigString("name", ""); n != "" {
 		name = "db/" + n
@@ -56,3 +56,13 @@ func Apply(p *sdk.Module) error {
 
 // Module is the compiled form of "db_sql". modules/std registers it.
 var Module = engine.Module{Name: "db_sql", Requires: nil, Provides: []string{"db", "db/*"}, Permissions: Permissions, Secrets: []string{"KILN_DATABASE_URL"}, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}

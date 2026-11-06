@@ -63,6 +63,16 @@ import (
 	"github.com/ganeshdipdumbare/kiln/modules/workspace_sandbox"
 )
 
+// Get returns one standard module by name.
+func Get(name string) (engine.Module, bool) {
+	for _, m := range All() {
+		if m.Name == name {
+			return m, true
+		}
+	}
+	return engine.Module{}, false
+}
+
 // All returns the standard modules, in a fixed order.
 func All() []engine.Module {
 	return []engine.Module{

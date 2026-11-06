@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/ganeshdipdumbare/kiln/engine"
-	"github.com/ganeshdipdumbare/kiln/modules/std"
 	"github.com/ganeshdipdumbare/kiln/rpc"
 	"github.com/ganeshdipdumbare/kiln/sdk"
 )
@@ -27,8 +26,8 @@ const (
 	boxBinary = "kiln/agent"
 )
 
-// InBox reports whether this process is a sandbox box started by WithRunIn.
-// A program that uses WithRunIn checks it first and, when true, calls
+// InBox reports whether this process is a sandbox box started by Config.RunIn.
+// A program that uses Config.RunIn checks it first and, when true, calls
 // ServeBox with the same options instead of creating an agent.
 func InBox() bool { return os.Getenv(boxEnv) == "1" }
 
@@ -49,12 +48,12 @@ type RunIn struct {
 	ProviderConfig map[string]any      // config for sandbox_<Provider>
 	Spec           sdk.SandboxSpec     // image, limits, network
 	Binary         string              // the program, built for the box's OS/arch (GOOS=linux for containers); default: this binary
-	HostPlugins    []engine.ModuleSpec // extra modules that stay on the host (e.g. a retry hook for model calls)
+	HostModules    []engine.Module     // extra modules that stay on the host (e.g. a retry hook for model calls)
 	NoBridgeTools  bool                // don't expose host Go tools to the box
 	BridgedTools   []string            // host tools the box may call (nil = all; [] = none)
 	SecretHosts    map[string][]string // secret name -> rules for where its placeholder may be sent: "host", "*.host", "GET host/path/*"
 	Egress         []string            // rules for where the box may go without secrets, same form (none by default)
-	// AllowUnsafeLocal permits the "local" provider for WithRunIn. It is
+	// AllowUnsafeLocal permits the "local" provider for Config.RunIn. It is
 	// not an isolation boundary: the "box" is a host process that can read
 	// host files (including credentials). Use only for development.
 	AllowUnsafeLocal bool
@@ -62,9 +61,6 @@ type RunIn struct {
 	// link-local addresses on behalf of the box. Off by default (SSRF).
 	AllowPrivateEgress bool
 }
-
-// WithRunIn starts the agent inside a sandbox; the API is unchanged.
-func WithRunIn(r RunIn) Option { return func(c *config) { c.runIn = &r } }
 
 type remote struct {
 	host    *Agent
@@ -109,8 +105,8 @@ func boxSecretGrants(reg []engine.Module, rows []engine.ModuleSpec) map[string][
 	return out
 }
 
-func newRemote(cfg *config) (*Agent, error) {
-	ri := cfg.runIn
+func newRemote(cfg Config) (*Agent, error) {
+	ri := cfg.RunIn
 	if ri.Binary == "" {
 		exe, err := os.Executable()
 		if err != nil {
@@ -137,14 +133,14 @@ func newRemote(cfg *config) (*Agent, error) {
 	}
 
 	// Split the rows. Host: the sandbox provider that creates the box, the
-	// model and secret providers, and RunIn.HostPlugins. Box: everything
+	// model and secret providers, and RunIn.HostModules. Box: everything
 	// else, including sandbox modules the box's own tools use.
 	providerUse := "sandbox_" + ri.Provider
 	hostRows := []engine.ModuleSpec{{Use: providerUse, Config: ri.ProviderConfig}}
-	hostRows = append(hostRows, ri.HostPlugins...)
 	hostOnlyNames := map[string]bool{} // host module rows never run in the box
-	for _, s := range ri.HostPlugins {
-		hostOnlyNames[s.Name()] = true
+	for _, m := range ri.HostModules {
+		hostRows = append(hostRows, specOf(m))
+		hostOnlyNames[m.Name] = true
 	}
 	hostNames := map[string]bool{} // host rows already present (for the store)
 	for _, s := range hostRows {
@@ -171,11 +167,11 @@ func newRemote(cfg *config) (*Agent, error) {
 	}
 
 	// Host side: the same registry and policy, only the host rows.
-	hostCfg := *cfg
-	hostCfg.runIn, hostCfg.profiles, hostCfg.specs, hostCfg.noDefaults = nil, nil, nil, true
-	a := newAgent(&hostCfg, prof)
+	hostCfg := cfg
+	hostCfg.RunIn = nil
+	a := newAgent(hostCfg, prof)
 	hostProf := &engine.Profile{Model: prof.Model, Instructions: prof.Instructions, MaxSteps: prof.MaxSteps, Modules: hostRows}
-	plan, err := compose(&hostCfg, hostProf, pol, a)
+	plan, err := compose(hostCfg, hostProf, pol, a)
 	if err != nil {
 		return nil, fmt.Errorf("kiln: host: %w", err)
 	}
@@ -191,13 +187,13 @@ func newRemote(cfg *config) (*Agent, error) {
 	boxPol := *pol
 	boxPol.Require = dropSpecs(pol.Require, func(s engine.ModuleSpec) bool { return hostOnly(s) || hostOnlyNames[s.Name()] })
 
-	reg := append(std.All(), cfg.modules...)
+	reg := registry(cfg.Modules)
 	snap := hostEng.Root()
 	prov, ok := snap.Service("sandbox/" + ri.Provider).(*sdk.SandboxProvider)
 	if !ok {
 		return fail(fmt.Errorf("kiln: no sandbox/%s provider on the host", ri.Provider))
 	}
-	r := &remote{host: a, prov: prov, ri: ri, hostTools: cfg.tools, subs: map[string]func(sdk.Event){}, runs: map[string]*sdk.RunState{}, runSeen: map[string]time.Time{},
+	r := &remote{host: a, prov: prov, ri: ri, hostTools: cfg.Tools, subs: map[string]func(sdk.Event){}, runs: map[string]*sdk.RunState{}, runSeen: map[string]time.Time{},
 		configs: map[string]any{boxDir + "/profile.json": boxProf, boxDir + "/policy.json": &boxPol},
 		uploads: map[string]string{ri.Binary: boxBinary}}
 	r.broker, _ = newBroker(a, ri) // rules checked above
@@ -555,7 +551,7 @@ func toWire(st *sdk.RunState, id string, streaming bool) wireRun {
 		Pending: st.Pending, Decisions: st.Decisions, Values: st.Values, Streaming: streaming}
 }
 
-func (r *remote) run(ctx context.Context, st *sdk.RunState, ro *runOptions) (*Result, error) {
+func (r *remote) run(ctx context.Context, st *sdk.RunState, run Run) (*Result, error) {
 	if st.ID == "" {
 		st.ID = sdk.NewRunID()
 	}
@@ -565,10 +561,10 @@ func (r *remote) run(ctx context.Context, st *sdk.RunState, ro *runOptions) (*Re
 		r.endHostRun(ctx, st, nil, err)
 		return nil, err
 	}
-	done := r.subscribe(st.ID, ro.onEvent)
+	done := r.subscribe(st.ID, run.OnEvent)
 	defer done()
 	var res Result
-	err := r.call(ctx, "agent.run", toWire(st, st.ID, ro.onEvent != nil), &res)
+	err := r.call(ctx, "agent.run", toWire(st, st.ID, run.OnEvent != nil), &res)
 	r.endHostRun(ctx, st, &res, err)
 	if err != nil {
 		return nil, err
@@ -588,16 +584,15 @@ func (r *remote) endHostRun(ctx context.Context, st *sdk.RunState, res *Result, 
 	r.host.eng.Root().Snapshot().AgentEnd(ctx, st, out)
 }
 
-func (r *remote) thread(ctx context.Context, thread, prompt string, decisions []sdk.Decision, opts []RunOption) (*Result, error) {
-	ro := &runOptions{}
-	for _, o := range opts {
-		o(ro)
-	}
+func (r *remote) thread(ctx context.Context, thread, prompt string, decisions []sdk.Decision, run Run) (*Result, error) {
 	runID := sdk.NewRunID()
-	st := &sdk.RunState{ID: runID, Thread: thread, User: ro.user, Roles: ro.roles, Model: r.host.model,
+	st := &sdk.RunState{ID: runID, Thread: thread, User: run.User, Roles: run.Roles, Model: r.host.model,
 		Values: map[string]any{}}
-	if ro.model != "" {
-		st.Model = ro.model
+	if run.User == "" {
+		st.User, st.Roles = r.host.user, r.host.roles
+	}
+	if run.Model != "" {
+		st.Model = run.Model
 	}
 	r.setRun(st)
 	defer r.endRun(runID)
@@ -605,10 +600,10 @@ func (r *remote) thread(ctx context.Context, thread, prompt string, decisions []
 		r.endHostRun(ctx, st, nil, err)
 		return nil, err
 	}
-	done := r.subscribe(runID, ro.onEvent)
+	done := r.subscribe(runID, run.OnEvent)
 	defer done()
-	wr := wireRun{RunID: runID, Thread: thread, Prompt: prompt, Decisions: decisions, User: ro.user, Roles: ro.roles,
-		MaxSteps: ro.maxSteps, Streaming: ro.onEvent != nil}
+	wr := wireRun{RunID: runID, Thread: thread, Prompt: prompt, Decisions: decisions, User: st.User, Roles: st.Roles,
+		MaxSteps: run.MaxSteps, Streaming: run.OnEvent != nil}
 	var res Result
 	err := r.call(ctx, "agent.thread", wr, &res)
 	r.endHostRun(ctx, st, &res, err)

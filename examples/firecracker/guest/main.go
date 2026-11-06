@@ -17,7 +17,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "guest runs inside a sandbox box (KILN_BOX=1)")
 		os.Exit(2)
 	}
-	if err := kiln.ServeBox(context.Background(), os.Stdin, os.Stdout, kiln.WithModule(callapi.CallAPI)); err != nil {
+	if err := kiln.ServeBox(context.Background(), os.Stdin, os.Stdout, kiln.Config{Modules: []kiln.Module{callapi.CallAPI}}); err != nil {
 		fmt.Fprintln(os.Stderr, "guest:", err)
 		os.Exit(1)
 	}

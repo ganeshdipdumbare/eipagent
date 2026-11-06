@@ -99,7 +99,7 @@ type ExecWorld struct {
 // same provider, but its sandboxes have no Upload / Download and it
 // refuses host mounts. Both move files between a host path and the box,
 // so a module without fs permissions could use them to read or write
-// anywhere on the host. Only the host application (WithRunIn) moves files
+// anywhere on the host. Only the host application (Config.RunIn) moves files
 // across that boundary; modules use ReadFile / WriteFile inside the box.
 func moduleSandboxes(p *SandboxProvider, allowAttach bool) *SandboxProvider {
 	strip := func(b *Sandbox, err error) (*Sandbox, error) {

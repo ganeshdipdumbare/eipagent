@@ -23,6 +23,11 @@ import (
 	"sync"
 
 	"github.com/ganeshdipdumbare/kiln"
+	"github.com/ganeshdipdumbare/kiln/modules/audit_file"
+	"github.com/ganeshdipdumbare/kiln/modules/audit_http"
+	"github.com/ganeshdipdumbare/kiln/modules/model_mock"
+	"github.com/ganeshdipdumbare/kiln/modules/secrets_env"
+	"github.com/ganeshdipdumbare/kiln/modules/trace_otlp"
 )
 
 func main() {
@@ -84,22 +89,24 @@ func main() {
 	type CityIn struct {
 		City string `json:"city"`
 	}
-	a, err := kiln.New(
-		kiln.WithModel("mock:demo"),
-		kiln.WithModuleConfig("model_mock", map[string]any{"script": []any{
-			map[string]any{"tool": "weather", "args": map[string]any{"city": "Oslo"}},
-			map[string]any{"text": "It is 4°C and windy in Oslo."},
-		}}),
-		kiln.WithTools(kiln.Tool("weather", "Current weather", func(c context.Context, in CityIn) (string, error) {
+	a, err := kiln.New(kiln.Config{
+		Model: "mock:demo",
+		Tools: []kiln.Tool{kiln.NewTool("weather", "Current weather", func(c context.Context, in CityIn) (string, error) {
 			return "4°C, wind 9 m/s", nil
-		})),
-		kiln.WithModules("secrets_env"),
-		kiln.WithModuleConfig("audit_file", map[string]any{"path": "-"}), // records only go to sinks
-		kiln.WithModuleConfig("audit_http", map[string]any{"url": siem.URL, "hmac_key": "secret://SIEM_HMAC_TOKEN"}),
-		kiln.WithModuleConfig("trace_otlp", map[string]any{"endpoint": otel.URL, "service_name": "support-bot"}),
-		kiln.WithUser("u-1001"),
-		kiln.WithLogger(func(string, string) {}),
-	)
+		})},
+		Modules: []kiln.Module{
+			model_mock.New(map[string]any{"script": []any{
+				map[string]any{"tool": "weather", "args": map[string]any{"city": "Oslo"}},
+				map[string]any{"text": "It is 4°C and windy in Oslo."},
+			}}),
+			secrets_env.New(),
+			audit_file.New(map[string]any{"path": "-"}), // records only go to sinks
+			audit_http.New(map[string]any{"url": siem.URL, "hmac_key": "secret://SIEM_HMAC_TOKEN"}),
+			trace_otlp.New(map[string]any{"endpoint": otel.URL, "service_name": "support-bot"}),
+		},
+		User:   "u-1001",
+		Logger: func(string, string) {},
+	})
 	check(err)
 	res, err := a.Thread("t-weather").Generate(ctx, "What's the weather in Oslo?")
 	check(err)

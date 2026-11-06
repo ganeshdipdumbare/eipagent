@@ -6,18 +6,20 @@ import (
 	"testing"
 
 	"github.com/ganeshdipdumbare/kiln"
+	"github.com/ganeshdipdumbare/kiln/modules/model_mock"
 )
 
 func TestModuleIsConfigured(t *testing.T) {
-	a, err := kiln.New(
-		kiln.WithModel("mock:test"),
-		kiln.WithModuleConfig("model_mock", map[string]any{"script": []any{
-			map[string]any{"tool": "weather", "args": map[string]any{"city": "Oslo"}},
-			map[string]any{"text": "done"},
-		}}),
-		kiln.WithModule(Module),
-		kiln.WithModuleConfig("weather", map[string]any{"unit": "fahrenheit"}),
-	)
+	a, err := kiln.New(kiln.Config{
+		Model: "mock:test",
+		Modules: []kiln.Module{
+			model_mock.New(map[string]any{"script": []any{
+				map[string]any{"tool": "weather", "args": map[string]any{"city": "Oslo"}},
+				map[string]any{"text": "done"},
+			}}),
+			New(map[string]any{"unit": "fahrenheit"}),
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

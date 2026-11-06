@@ -13,18 +13,18 @@ import (
 
 func TestSubagentAsTool(t *testing.T) {
 	var calledBy string
-	secret := kiln.Tool("lookup_secret", "only the researcher may use this", func(ctx context.Context, in struct{}) (string, error) {
+	secret := kiln.NewTool("lookup_secret", "only the researcher may use this", func(ctx context.Context, in struct{}) (string, error) {
 		calledBy = "researcher"
 		return "42", nil
 	})
-	other := kiln.Tool("other", "not shared", func(ctx context.Context, in struct{}) (string, error) { return "", nil })
+	other := kiln.NewTool("other", "not shared", func(ctx context.Context, in struct{}) (string, error) { return "", nil })
 	// Main agent calls researcher; researcher (same mock script) calls lookup_secret, answers, main answers.
 	a := mockAgent(t, []any{
 		map[string]any{"tool": "researcher", "args": map[string]any{"task": "find the number"}},
 		map[string]any{"tool": "lookup_secret"},
 		map[string]any{"text": "the number is 42"},
 		map[string]any{"text": "Researcher says 42."},
-	}, kiln.WithTools(secret, other), kiln.WithModuleConfig("tool_subagents", map[string]any{"agents": []any{
+	}, withTools(secret, other), withModuleConfig("tool_subagents", map[string]any{"agents": []any{
 		map[string]any{"name": "researcher", "description": "finds facts", "instructions": "You research.", "tools": []any{"lookup_secret"}},
 	}}))
 	res, err := a.Generate(bg, "what is the number?")
@@ -38,7 +38,7 @@ func TestSubagentAsTool(t *testing.T) {
 
 func TestHandoff(t *testing.T) {
 	var sysSeen []string
-	spy := kiln.Module{Name: "spy", Apply: func(ctx *sdk.Module) error {
+	spy := kiln.Module{Name: "spy", Apply: func(ctx *sdk.Scope) error {
 		ctx.WrapModel(func(c context.Context, req *kiln.ModelRequest, next kiln.ModelHandler) (*kiln.ModelResponse, error) {
 			sysSeen = append(sysSeen, req.System)
 			return next(c, req)
@@ -49,7 +49,7 @@ func TestHandoff(t *testing.T) {
 		map[string]any{"tool": "transfer_to_billing"},
 		map[string]any{"text": "Billing here."},
 		map[string]any{"text": "still billing"},
-	}, kiln.WithModule(spy), kiln.WithModuleConfig("tool_subagents", map[string]any{"agents": []any{
+	}, withModule(spy), withModuleConfig("tool_subagents", map[string]any{"agents": []any{
 		map[string]any{"name": "billing", "description": "invoices", "instructions": "You are billing.", "mode": "handoff"},
 	}}))
 	th := a.Thread("h")
@@ -67,7 +67,7 @@ func TestHandoff(t *testing.T) {
 func TestAgentAsTool(t *testing.T) {
 	inner := mockAgent(t, []any{map[string]any{"text": "inner answer"}})
 	outer := mockAgent(t, []any{map[string]any{"tool": "expert", "args": map[string]any{"task": "q"}}, map[string]any{"text": "ok"}},
-		kiln.WithTools(inner.AsTool("expert", "an expert")))
+		withTools(inner.AsTool("expert", "an expert")))
 	res, err := outer.Generate(bg, "ask")
 	if err != nil || res.Steps[0].ToolResults[0].Content != "inner answer" {
 		t.Fatalf("%v %+v", err, res)
@@ -81,7 +81,7 @@ func TestSkills(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "pdf", "ref.md"), []byte("reference"), 0o644)
 	os.WriteFile(filepath.Join(dir, "secret.txt"), []byte("nope"), 0o644)
 	var sys string
-	spy := kiln.Module{Name: "spy", Apply: func(ctx *sdk.Module) error {
+	spy := kiln.Module{Name: "spy", Apply: func(ctx *sdk.Scope) error {
 		ctx.WrapModel(func(c context.Context, req *kiln.ModelRequest, next kiln.ModelHandler) (*kiln.ModelResponse, error) {
 			sys = req.System
 			return next(c, req)
@@ -93,7 +93,7 @@ func TestSkills(t *testing.T) {
 		map[string]any{"tool": "read_skill_file", "args": map[string]any{"name": "pdf", "path": "ref.md"}},
 		map[string]any{"tool": "read_skill_file", "args": map[string]any{"name": "pdf", "path": "../secret.txt"}},
 		map[string]any{"text": "done"},
-	}, kiln.WithModule(spy), kiln.WithModuleConfig("tool_skills", map[string]any{"dirs": []any{dir}}))
+	}, withModule(spy), withModuleConfig("tool_skills", map[string]any{"dirs": []any{dir}}))
 	res, err := a.Generate(bg, "read a pdf")
 	if err != nil {
 		t.Fatal(err)

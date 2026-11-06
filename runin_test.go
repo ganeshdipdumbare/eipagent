@@ -34,21 +34,21 @@ func TestRunInSandbox(t *testing.T) {
 		return 200, `{"choices":[{"message":{"tool_calls":[{"id":"c1","type":"function","function":{"name":"bash","arguments":"{\"command\":\"echo key=$OPENAI_API_KEY; pwd\"}"}}]},"finish_reason":"tool_calls"}]}`, nil
 	})
 	_ = seenKey
-	hostTool := kiln.Tool("host_secret", "runs on the host", func(ctx context.Context, in struct{}) (string, error) {
+	hostTool := kiln.NewTool("host_secret", "runs on the host", func(ctx context.Context, in struct{}) (string, error) {
 		h, _ := os.Hostname()
 		return "from host " + h, nil
 	})
 	root := t.TempDir()
-	a, err := kiln.New(
-		kiln.WithModel("openai:gpt-test"),
-		kiln.WithModuleSpec(kiln.ModuleSpec{Use: "model_openai", As: "model_openai", Config: map[string]any{"base_url": srv.URL}}),
-		kiln.WithTools(hostTool),
+	a, err := startAgent(
+		withModel("openai:gpt-test"),
+		withModuleSpec(kiln.ModuleSpec{Use: "model_openai", As: "model_openai", Config: map[string]any{"base_url": srv.URL}}),
+		withTools(hostTool),
 		// Inside the box: a shell over the box's own workspace.
-		kiln.WithModuleConfig("sandbox_local", map[string]any{"root": "boxes"}),
-		kiln.WithModuleConfig("workspace_sandbox", map[string]any{"provider": "local"}),
-		kiln.WithModules("tool_shell"),
-		kiln.WithRunIn(kiln.RunIn{Provider: "local", AllowUnsafeLocal: true, ProviderConfig: map[string]any{"root": root}, Binary: bin}),
-		kiln.WithLogger(func(scope, msg string) { t.Logf("[%s] %s", scope, msg) }),
+		withModuleConfig("sandbox_local", map[string]any{"root": "boxes"}),
+		withModuleConfig("workspace_sandbox", map[string]any{"provider": "local"}),
+		withModules("tool_shell"),
+		withRunIn(kiln.RunIn{Provider: "local", AllowUnsafeLocal: true, ProviderConfig: map[string]any{"root": root}, Binary: bin}),
+		withLogger(func(scope, msg string) { t.Logf("[%s] %s", scope, msg) }),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -84,9 +84,9 @@ func TestRunInStreaming(t *testing.T) {
 	if out, err := exec.Command("go", "build", "-o", bin, "./cmd/kiln").CombinedOutput(); err != nil {
 		t.Fatalf("build kiln: %v %s", err, out)
 	}
-	a, err := kiln.New(kiln.WithModel("mock:m"),
-		kiln.WithModuleConfig("model_mock", map[string]any{"script": []any{map[string]any{"text": "streamed from the host model"}}}),
-		kiln.WithRunIn(kiln.RunIn{Provider: "local", AllowUnsafeLocal: true, ProviderConfig: map[string]any{"root": t.TempDir()}, Binary: bin}))
+	a, err := startAgent(withModel("mock:m"),
+		withModuleConfig("model_mock", map[string]any{"script": []any{map[string]any{"text": "streamed from the host model"}}}),
+		withRunIn(kiln.RunIn{Provider: "local", AllowUnsafeLocal: true, ProviderConfig: map[string]any{"root": t.TempDir()}, Binary: bin}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,14 +119,14 @@ func TestRunInRestartsExitedBox(t *testing.T) {
 		}
 		return 200, `{"choices":[{"message":{"content":"alive"},"finish_reason":"stop"}]}`, nil
 	})
-	a, err := kiln.New(
-		kiln.WithModel("openai:gpt-test"),
-		kiln.WithModuleSpec(kiln.ModuleSpec{Use: "model_openai", As: "model_openai", Config: map[string]any{"base_url": srv.URL}}),
-		kiln.WithModuleConfig("sandbox_local", map[string]any{"root": "boxes"}),
-		kiln.WithModuleConfig("workspace_sandbox", map[string]any{"provider": "local"}),
-		kiln.WithModules("tool_shell"),
-		kiln.WithRunIn(kiln.RunIn{Provider: "local", AllowUnsafeLocal: true, ProviderConfig: map[string]any{"root": t.TempDir()}, Binary: bin}),
-		kiln.WithLogger(func(scope, msg string) { t.Logf("[%s] %s", scope, msg) }),
+	a, err := startAgent(
+		withModel("openai:gpt-test"),
+		withModuleSpec(kiln.ModuleSpec{Use: "model_openai", As: "model_openai", Config: map[string]any{"base_url": srv.URL}}),
+		withModuleConfig("sandbox_local", map[string]any{"root": "boxes"}),
+		withModuleConfig("workspace_sandbox", map[string]any{"provider": "local"}),
+		withModules("tool_shell"),
+		withRunIn(kiln.RunIn{Provider: "local", AllowUnsafeLocal: true, ProviderConfig: map[string]any{"root": t.TempDir()}, Binary: bin}),
+		withLogger(func(scope, msg string) { t.Logf("[%s] %s", scope, msg) }),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -149,23 +149,23 @@ func TestRunInHostToolIgnoresForgedIdentity(t *testing.T) {
 	if out, err := exec.Command("go", "build", "-o", bin, "./examples/boxprobe").CombinedOutput(); err != nil {
 		t.Fatalf("build box: %v %s", err, out)
 	}
-	hostWho := kiln.Tool("host_who", "who is running", func(ctx context.Context, in struct{}) (string, error) {
+	hostWho := kiln.NewTool("host_who", "who is running", func(ctx context.Context, in struct{}) (string, error) {
 		ri := sdk.RunInfoFrom(ctx)
 		return ri.User + "/" + strings.Join(ri.Roles, ","), nil
 	})
-	a, err := kiln.New(
-		kiln.WithModel("mock:m"),
-		kiln.WithModuleConfig("model_mock", map[string]any{"script": []any{
+	a, err := startAgent(
+		withModel("mock:m"),
+		withModuleConfig("model_mock", map[string]any{"script": []any{
 			map[string]any{"tool": "forge"}, map[string]any{"text": "done"},
 		}}),
-		kiln.WithTools(hostWho), kiln.WithModule(boxtest.Forge),
-		kiln.WithRunIn(kiln.RunIn{Provider: "local", AllowUnsafeLocal: true, Binary: bin}),
+		withTools(hostWho), withModule(boxtest.Forge),
+		withRunIn(kiln.RunIn{Provider: "local", AllowUnsafeLocal: true, Binary: bin}),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer a.Close()
-	res, err := a.Generate(bg, "go", kiln.AsUser("alice", "support"))
+	res, err := a.Generate(bg, "go", kiln.Run{User: "alice", Roles: []string{"support"}})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -24,9 +24,9 @@ import (
 //
 // Example:
 //
-//	kiln.WithModuleConfig("hook_output_validate", map[string]any{"max_retries": 2})
+//	hook_output_validate.New(map[string]any{"max_retries": 2})
 //	// then: invoice, err := kiln.GenerateObject[Invoice](ctx, agent, "Extract the invoice")
-func Apply(p *sdk.Module) error {
+func Apply(p *sdk.Scope) error {
 	maxRetries := p.ConfigInt("max_retries", 2)
 	onFail := p.ConfigString("on_fail", "error")
 
@@ -232,3 +232,13 @@ func num(v any) (float64, bool) {
 
 // Module is the compiled form of "hook_output_validate". modules/std registers it.
 var Module = engine.Module{Name: "hook_output_validate", Requires: nil, Provides: nil, Permissions: nil, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}

@@ -51,7 +51,7 @@ func firecracker() kiln.Module {
 	return kiln.Module{
 		Name:     "sandbox_firecracker",
 		Provides: []string{"sandbox/firecracker"},
-		Apply: func(p *sdk.Module) error {
+		Apply: func(p *sdk.Scope) error {
 			cfg := fcConfig{
 				bin:        envOr("FC_BIN", "/usr/local/bin/firecracker"),
 				kernel:     envOr("FC_KERNEL", ".kiln/firecracker/vmlinux"),
@@ -155,7 +155,7 @@ func (c fcConfig) check() error {
 	return nil
 }
 
-func createVM(ctx context.Context, p *sdk.Module, cfg fcConfig, spec sdk.SandboxSpec) (*sdk.Sandbox, error) {
+func createVM(ctx context.Context, p *sdk.Scope, cfg fcConfig, spec sdk.SandboxSpec) (*sdk.Sandbox, error) {
 	if len(spec.Mounts) > 0 {
 		return nil, errors.New("firecracker: host mounts are not supported")
 	}
@@ -306,7 +306,7 @@ func writeMeta(ctx context.Context, cfg fcConfig, m *meta) error {
 	return os.WriteFile(filepath.Join(m.Dir, "meta.json"), b, 0o644)
 }
 
-func attachVM(ctx context.Context, p *sdk.Module, cfg fcConfig, id string) (*sdk.Sandbox, error) {
+func attachVM(ctx context.Context, p *sdk.Scope, cfg fcConfig, id string) (*sdk.Sandbox, error) {
 	path := filepath.Join(cfg.workdir, id, "meta.json")
 	var b []byte
 	var err error

@@ -18,14 +18,14 @@ import (
 
 var bg = context.Background()
 
-func mockAgent(t *testing.T, script []any, opts ...kiln.Option) *kiln.Agent {
+func mockAgent(t *testing.T, script []any, cfgs ...kiln.Config) *kiln.Agent {
 	t.Helper()
-	base := []kiln.Option{
-		kiln.WithModel("mock:test"),
-		kiln.WithModuleConfig("model_mock", map[string]any{"script": script}),
-		kiln.WithLogger(func(scope, msg string) { t.Logf("[%s] %s", scope, msg) }),
+	base := kiln.Config{
+		Model:   "mock:test",
+		Modules: []kiln.Module{module("model_mock", map[string]any{"script": script})},
+		Logger:  func(scope, msg string) { t.Logf("[%s] %s", scope, msg) },
 	}
-	a, err := kiln.New(append(base, opts...)...)
+	a, err := startAgent(append([]kiln.Config{base}, cfgs...)...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,14 +40,14 @@ type weatherIn struct {
 
 func TestGenerateWithTypedTool(t *testing.T) {
 	var got weatherIn
-	weather := kiln.Tool("weather", "Get weather", func(ctx context.Context, in weatherIn) (map[string]any, error) {
+	weather := kiln.NewTool("weather", "Get weather", func(ctx context.Context, in weatherIn) (map[string]any, error) {
 		got = in
 		return map[string]any{"city": in.City, "temp": 21}, nil
 	})
 	a := mockAgent(t, []any{
 		map[string]any{"tool": "weather", "args": map[string]any{"city": "Paris"}},
 		map[string]any{"text": "It is 21 degrees in Paris."},
-	}, kiln.WithTools(weather))
+	}, withTools(weather))
 
 	res, err := a.Generate(bg, "Weather in Paris?")
 	if err != nil {
@@ -132,17 +132,17 @@ func TestThreadPersistsHistory(t *testing.T) {
 }
 
 func TestMaxSteps(t *testing.T) {
-	loopTool := kiln.Tool("again", "loops", func(ctx context.Context, in struct{}) (string, error) { return "ok", nil })
+	loopTool := kiln.NewTool("again", "loops", func(ctx context.Context, in struct{}) (string, error) { return "ok", nil })
 	var script []any
 	for i := 0; i < 10; i++ {
 		script = append(script, map[string]any{"tool": "again"})
 	}
-	a := mockAgent(t, script, kiln.WithTools(loopTool))
-	res, err := a.Generate(bg, "go", kiln.MaxSteps(3))
+	a := mockAgent(t, script, withTools(loopTool))
+	res, err := a.Generate(bg, "go", kiln.Run{MaxSteps: 3})
 	if err != nil || res.FinishReason != "max_steps" || len(res.Steps) != 3 {
 		t.Fatalf("got %v %+v", err, res)
 	}
-	res, err = a.Generate(bg, "go", kiln.StopOnTool("again"))
+	res, err = a.Generate(bg, "go", kiln.Run{StopOnTools: []string{"again"}})
 	if err != nil || res.FinishReason != "tool:again" || len(res.Steps) != 1 {
 		t.Fatalf("stop on tool: %v %+v", err, res)
 	}
@@ -150,7 +150,7 @@ func TestMaxSteps(t *testing.T) {
 
 func TestNoModel(t *testing.T) {
 	t.Setenv("KILN_MODEL", "")
-	if _, err := kiln.New(); err == nil {
+	if _, err := startAgent(); err == nil {
 		t.Fatal("New without a model should fail clearly")
 	}
 }
@@ -158,7 +158,7 @@ func TestNoModel(t *testing.T) {
 func TestCompiledPluginAndMiddleware(t *testing.T) {
 	var seen []string
 	var mu sync.Mutex
-	p := kiln.Module{Name: "spy", Apply: func(ctx *sdk.Module) error {
+	p := kiln.Module{Name: "spy", Apply: func(ctx *sdk.Scope) error {
 		ctx.WrapModel(func(c context.Context, req *kiln.ModelRequest, next kiln.ModelHandler) (*kiln.ModelResponse, error) {
 			mu.Lock()
 			seen = append(seen, req.Model)
@@ -167,7 +167,7 @@ func TestCompiledPluginAndMiddleware(t *testing.T) {
 		})
 		return nil
 	}}
-	a := mockAgent(t, nil, kiln.WithModule(p))
+	a := mockAgent(t, nil, withModule(p))
 	if _, err := a.Generate(bg, "hi"); err != nil {
 		t.Fatal(err)
 	}
@@ -203,12 +203,14 @@ func fakeOpenAI(t *testing.T, handle func(body map[string]any) (status int, repl
 	return srv
 }
 
-func openaiAgent(t *testing.T, url string, opts ...kiln.Option) *kiln.Agent {
+func openaiAgent(t *testing.T, url string, cfgs ...kiln.Config) *kiln.Agent {
 	t.Setenv("OPENAI_API_KEY", "sk-test")
-	a, err := kiln.New(append([]kiln.Option{
-		kiln.WithModel("openai:gpt-test"),
-		kiln.WithModuleSpec(kiln.ModuleSpec{Use: "model_openai", As: "model_openai", Config: map[string]any{"base_url": url}}),
-	}, opts...)...)
+	m := module("model_openai", map[string]any{"base_url": url})
+	m.As = "model_openai"
+	a, err := startAgent(append([]kiln.Config{
+		withModel("openai:gpt-test"),
+		withModule(m),
+	}, cfgs...)...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,8 +235,8 @@ func TestOpenAIToolRoundTrip(t *testing.T) {
 		}
 		return 200, `{"choices":[{"message":{"content":"Cold in Oslo."},"finish_reason":"stop"}],"usage":{"prompt_tokens":20,"completion_tokens":4,"total_tokens":24}}`, nil
 	})
-	weather := kiln.Tool("weather", "w", func(ctx context.Context, in weatherIn) (string, error) { return "-3C in " + in.City, nil })
-	a := openaiAgent(t, srv.URL, kiln.WithTools(weather))
+	weather := kiln.NewTool("weather", "w", func(ctx context.Context, in weatherIn) (string, error) { return "-3C in " + in.City, nil })
+	a := openaiAgent(t, srv.URL, withTools(weather))
 	res, err := a.Generate(bg, "Weather in Oslo?")
 	if err != nil {
 		t.Fatal(err)
@@ -283,8 +285,8 @@ func TestOpenAIStructuredAndErrors(t *testing.T) {
 	}
 	// Plugins see the environment as it was when they loaded.
 	t.Setenv("OPENAI_API_KEY", "wrong")
-	b, err := kiln.New(kiln.WithModel("openai:gpt-test"),
-		kiln.WithModuleSpec(kiln.ModuleSpec{Use: "model_openai", As: "model_openai", Config: map[string]any{"base_url": srv.URL}}))
+	b, err := startAgent(withModel("openai:gpt-test"),
+		withModuleSpec(kiln.ModuleSpec{Use: "model_openai", As: "model_openai", Config: map[string]any{"base_url": srv.URL}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,7 +302,7 @@ func TestRunLifecycleAlwaysCloses(t *testing.T) {
 	var log []string
 	var mu sync.Mutex
 	rec := func(s string) { mu.Lock(); log = append(log, s); mu.Unlock() }
-	spy := kiln.Module{Name: "lifecycle_spy", Apply: func(ctx *sdk.Module) error {
+	spy := kiln.Module{Name: "lifecycle_spy", Apply: func(ctx *sdk.Scope) error {
 		ctx.OnRunStart(func(c context.Context, st *sdk.RunState) error { rec("start"); return nil })
 		ctx.OnRunEnd(func(c context.Context, st *sdk.RunState, res *sdk.RunResult) error {
 			rec("end:" + res.FinishReason)
@@ -313,10 +315,10 @@ func TestRunLifecycleAlwaysCloses(t *testing.T) {
 		})
 		return nil
 	}}
-	failing := kiln.Tool("boom", "b", func(ctx context.Context, in struct{}) (string, error) {
+	failing := kiln.NewTool("boom", "b", func(ctx context.Context, in struct{}) (string, error) {
 		return "", sdk.Fatal(errors.New("disk on fire"))
 	})
-	a := mockAgent(t, []any{map[string]any{"text": "fine"}, map[string]any{"tool": "boom"}}, kiln.WithModule(spy), kiln.WithTools(failing))
+	a := mockAgent(t, []any{map[string]any{"text": "fine"}, map[string]any{"tool": "boom"}}, withModule(spy), withTools(failing))
 	if _, err := a.Generate(bg, "one"); err != nil {
 		t.Fatal(err)
 	}

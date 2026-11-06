@@ -17,7 +17,7 @@ import (
 // real model would for the demo's flows, so the app and the website replay
 // work offline. Swap in a real model with -model ollama:qwen3.5:4b.
 func DemoModel() kiln.Module {
-	return kiln.Module{Name: "llm_demo", Provides: []string{"model/*"}, Apply: func(p *sdk.Module) error {
+	return kiln.Module{Name: "llm_demo", Provides: []string{"model/*"}, Apply: func(p *sdk.Scope) error {
 		return p.Provide("model/demo", &sdk.Provider{
 			Name:         "demo",
 			Capabilities: map[string]bool{"tools": true, "streaming": true},

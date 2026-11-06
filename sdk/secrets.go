@@ -308,7 +308,7 @@ type grantMark struct {
 // auditGrant reports whether a granted read should be recorded now. The
 // marks live on the agent's root registry, so two agents in one process
 // each audit their own reads.
-func (c *Module) auditGrant(caller, name, v string) bool {
+func (c *Scope) auditGrant(caller, name, v string) bool {
 	r := c.reg
 	for r.parent != nil {
 		r = r.parent
@@ -330,7 +330,7 @@ func (c *Module) auditGrant(caller, name, v string) bool {
 
 // rawService looks a service up without the per-module binding (for
 // records the core itself writes).
-func (c *Module) rawService(name string) any {
+func (c *Scope) rawService(name string) any {
 	v, _ := c.reg.service(name)
 	return v
 }
@@ -339,8 +339,8 @@ func (c *Module) rawService(name string) any {
 // submits is stamped writer="module:<name>" (overwriting any writer the
 // module set), so a module can't pass its own records off as the core's
 // or another module's. Records the core writes carry writer="core".
-func (c *Module) boundAudit(a *Audit) *Audit {
-	writer := "module:" + c.PluginName()
+func (c *Scope) boundAudit(a *Audit) *Audit {
+	writer := "module:" + c.ModuleName()
 	return &Audit{Record: func(kind string, data map[string]any) {
 		d := make(map[string]any, len(data)+1)
 		for k, v := range data {
@@ -354,8 +354,8 @@ func (c *Module) boundAudit(a *Audit) *Audit {
 // boundSecrets is what Service("secrets") hands a module: the caller is
 // fixed to the module's identity (a module can't ask as someone else),
 // values are registered for redaction and every access is audited.
-func (c *Module) boundSecrets(s *Secrets) *Secrets {
-	caller := c.PluginName()
+func (c *Scope) boundSecrets(s *Secrets) *Secrets {
+	caller := c.ModuleName()
 	return &Secrets{Get: func(ctx context.Context, _ string, name string) (string, error) {
 		var err error
 		if c.restrictSecrets && !secretAllowed(c.secretGrants, name) {
@@ -426,7 +426,7 @@ func SecretLike(name string) bool {
 	return false
 }
 
-// Placeholders: inside a WithRunIn sandbox the "secrets" service hands
+// Placeholders: inside a Config.RunIn sandbox the "secrets" service hands
 // out fake tokens of this form. Only the host maps them back to real
 // values, and only on requests to the hosts allowed for that secret.
 

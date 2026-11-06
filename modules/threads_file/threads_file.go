@@ -24,17 +24,17 @@ import (
 //
 // Example:
 //
-//	kiln.WithModuleConfig("threads_file", map[string]any{"dir": ".kiln/threads"})
-//	// Shortcut with memory_file too: kiln.WithPersistence("file", ".kiln")
+//	threads_file.New(map[string]any{"dir": ".kiln/threads"})
+//	// Shortcut with memory_file too: kiln.Persistence("file", ".kiln")
 var Permissions = []string{"fs:read", "fs:write"}
 
-func Apply(p *sdk.Module) error {
+func Apply(p *sdk.Scope) error {
 	dir := p.ConfigString("dir", ".kiln/threads")
 	d, err := p.Dir(dir, true)
 	if err != nil {
 		return err
 	}
-	p.OnUnload(func() { d.Close() })
+	p.OnClose(func() { d.Close() })
 	path := func(id string) string { return url.PathEscape(id) + ".json" }
 	lock := func(c context.Context, id string) (func(), error) {
 		lp := path(id) + ".lock"
@@ -132,3 +132,13 @@ func Apply(p *sdk.Module) error {
 
 // Module is the compiled form of "threads_file". modules/std registers it.
 var Module = engine.Module{Name: "threads_file", Requires: nil, Provides: []string{"threads"}, Permissions: Permissions, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}

@@ -12,6 +12,20 @@ import (
 	"os"
 
 	"github.com/ganeshdipdumbare/kiln"
+	"github.com/ganeshdipdumbare/kiln/modules/hook_approval"
+	"github.com/ganeshdipdumbare/kiln/modules/hook_fallback"
+	"github.com/ganeshdipdumbare/kiln/modules/hook_limits"
+	"github.com/ganeshdipdumbare/kiln/modules/hook_pii"
+	"github.com/ganeshdipdumbare/kiln/modules/hook_retry"
+	"github.com/ganeshdipdumbare/kiln/modules/hook_summarize"
+	"github.com/ganeshdipdumbare/kiln/modules/model_mock"
+	"github.com/ganeshdipdumbare/kiln/modules/sandbox_local"
+	"github.com/ganeshdipdumbare/kiln/modules/tool_fs"
+	"github.com/ganeshdipdumbare/kiln/modules/tool_memory"
+	"github.com/ganeshdipdumbare/kiln/modules/tool_shell"
+	"github.com/ganeshdipdumbare/kiln/modules/tool_subagents"
+	"github.com/ganeshdipdumbare/kiln/modules/tool_time"
+	"github.com/ganeshdipdumbare/kiln/modules/workspace_sandbox"
 	"github.com/ganeshdipdumbare/kiln/sdk"
 )
 
@@ -24,12 +38,12 @@ func check(err error) {
 }
 
 // mock scripts the offline model so each example is deterministic.
-func mock(steps ...map[string]any) kiln.Option {
+func mock(steps ...map[string]any) kiln.Module {
 	script := make([]any, len(steps))
 	for i, s := range steps {
 		script[i] = s
 	}
-	return kiln.WithModuleConfig("model_mock", map[string]any{"script": script})
+	return model_mock.New(map[string]any{"script": script})
 }
 
 func main() {
@@ -64,18 +78,20 @@ type WeatherIn struct {
 }
 
 func generateWithTool(string) {
-	weather := kiln.Tool("weather", "Current weather for a city",
+	weather := kiln.NewTool("weather", "Current weather for a city",
 		func(ctx context.Context, in WeatherIn) (string, error) {
 			return "18°C and light rain in " + in.City, nil
 		})
 
-	agent, err := kiln.New(
-		kiln.WithModel("mock:demo"), // e.g. "anthropic:claude-sonnet-5-5"
-		kiln.WithInstructions("You are a concise travel assistant."),
-		kiln.WithTools(weather),
-		mock(map[string]any{"tool": "weather", "args": map[string]any{"city": "Lisbon"}},
-			map[string]any{"text": "Bring an umbrella: 18°C and rain."}),
-	)
+	agent, err := kiln.New(kiln.Config{
+		Model:        "mock:demo", // e.g. "anthropic:claude-sonnet-5-5"
+		Instructions: "You are a concise travel assistant.",
+		Tools:        []kiln.Tool{weather},
+		Modules: []kiln.Module{mock(
+			map[string]any{"tool": "weather", "args": map[string]any{"city": "Lisbon"}},
+			map[string]any{"text": "Bring an umbrella: 18°C and rain."},
+		)},
+	})
 	check(err)
 	defer agent.Close()
 
@@ -90,7 +106,10 @@ func generateWithTool(string) {
 // ---- 2. Streaming ----
 
 func streaming(string) {
-	agent, err := kiln.New(kiln.WithModel("mock:demo"), mock(map[string]any{"text": "Rain on red roofs"}))
+	agent, err := kiln.New(kiln.Config{
+		Model:   "mock:demo",
+		Modules: []kiln.Module{mock(map[string]any{"text": "Rain on red roofs"})},
+	})
 	check(err)
 	defer agent.Close()
 
@@ -126,7 +145,7 @@ type Trip struct {
 }
 
 func structured(string) {
-	agent, err := kiln.New(kiln.WithModel("mock:demo"))
+	agent, err := kiln.New(kiln.Config{Model: "mock:demo"})
 	check(err)
 	defer agent.Close()
 
@@ -138,10 +157,10 @@ func structured(string) {
 // ---- 4. Threads (durable conversations) ----
 
 func threads(dir string) {
-	agent, err := kiln.New(
-		kiln.WithModel("mock:demo"),
-		kiln.WithPersistence("file", dir), // threads_file + memory_file; or "postgres"
-	)
+	agent, err := kiln.New(kiln.Config{
+		Model:   "mock:demo",
+		Modules: kiln.Persistence("file", dir), // threads_file + memory_file; or "postgres"
+	})
 	check(err)
 	defer agent.Close()
 
@@ -158,18 +177,22 @@ func threads(dir string) {
 // ---- 5. Human in the loop ----
 
 func humanInTheLoop(dir string) {
-	refund := kiln.Tool("refund", "Refund an order", func(ctx context.Context, in struct {
+	refund := kiln.NewTool("refund", "Refund an order", func(ctx context.Context, in struct {
 		Order string `json:"order"`
 	}) (string, error) {
 		return "refunded " + in.Order, nil
 	})
-	agent, err := kiln.New(
-		kiln.WithModel("mock:demo"),
-		kiln.WithTools(refund),
-		kiln.WithModuleConfig("hook_approval", map[string]any{"interrupt_on": map[string]any{"refund": true}}),
-		mock(map[string]any{"tool": "refund", "args": map[string]any{"order": "A-17"}},
-			map[string]any{"text": "Refund done."}),
-	)
+	agent, err := kiln.New(kiln.Config{
+		Model: "mock:demo",
+		Tools: []kiln.Tool{refund},
+		Modules: append([]kiln.Module{
+			hook_approval.New(map[string]any{"interrupt_on": map[string]any{"refund": true}}),
+			mock(
+				map[string]any{"tool": "refund", "args": map[string]any{"order": "A-17"}},
+				map[string]any{"text": "Refund done."},
+			),
+		}, kiln.Persistence("file", dir)...),
+	})
 	check(err)
 	defer agent.Close()
 
@@ -179,7 +202,7 @@ func humanInTheLoop(dir string) {
 	for res.Interrupted() { // paused before the tool ran; state is saved
 		in := res.Interrupts[0]
 		fmt.Println("approve?", in.Message)
-		res, err = th.Resume(ctx, kiln.Approve(in.ID)) // or Reject / Edit / Respond
+		res, err = th.Resume(ctx, []kiln.Decision{kiln.Approve(in.ID)}) // or Reject / Edit / Respond
 		check(err)
 	}
 	fmt.Println(res.Text)
@@ -188,14 +211,16 @@ func humanInTheLoop(dir string) {
 // ---- 6. Middleware from the standard modules ----
 
 func middleware(string) {
-	agent, err := kiln.New(
-		kiln.WithModel("mock:demo"),
-		kiln.WithModuleConfig("hook_retry", map[string]any{"max_retries": 3}),
-		kiln.WithModuleConfig("hook_fallback", map[string]any{"models": []any{"mock:backup"}}),
-		kiln.WithModuleConfig("hook_limits", map[string]any{"model_calls_run": 20, "tool_calls_run": 50}),
-		kiln.WithModuleConfig("hook_pii", map[string]any{"types": []any{"email", "credit_card"}}),
-		kiln.WithModuleConfig("hook_summarize", map[string]any{"trigger_messages": 40, "keep_messages": 10}),
-	)
+	agent, err := kiln.New(kiln.Config{
+		Model: "mock:demo",
+		Modules: []kiln.Module{
+			hook_retry.New(map[string]any{"max_retries": 3}),
+			hook_fallback.New(map[string]any{"models": []any{"mock:backup"}}),
+			hook_limits.New(map[string]any{"model_calls_run": 20, "tool_calls_run": 50}),
+			hook_pii.New(map[string]any{"types": []any{"email", "credit_card"}}),
+			hook_summarize.New(map[string]any{"trigger_messages": 40, "keep_messages": 10}),
+		},
+	})
 	check(err)
 	defer agent.Close()
 	res, err := agent.Generate(ctx, "my email is ada@example.com")
@@ -206,7 +231,7 @@ func middleware(string) {
 // ---- 7. Your own middleware (a compiled application module) ----
 
 func customMiddleware(string) {
-	timing := kiln.Module{Name: "timing", Apply: func(p *sdk.Module) error {
+	timing := kiln.Module{Name: "timing", Apply: func(p *sdk.Scope) error {
 		p.WrapModel(func(c context.Context, req *kiln.ModelRequest, next kiln.ModelHandler) (*kiln.ModelResponse, error) {
 			resp, err := next(c, req) // call the model (and inner middleware)
 			if err == nil {
@@ -222,8 +247,11 @@ func customMiddleware(string) {
 		})
 		return nil
 	}}
-	agent, err := kiln.New(kiln.WithModel("mock:demo"), kiln.WithModule(timing),
-		kiln.WithLogger(func(scope, msg string) { fmt.Printf("[%s] %s\n", scope, msg) }))
+	agent, err := kiln.New(kiln.Config{
+		Model:   "mock:demo",
+		Modules: []kiln.Module{timing},
+		Logger:  func(scope, msg string) { fmt.Printf("[%s] %s\n", scope, msg) },
+	})
 	check(err)
 	defer agent.Close()
 	_, err = agent.Generate(ctx, "hi")
@@ -235,25 +263,28 @@ func customMiddleware(string) {
 // There is no runtime load, unload or reload, no module directory and no
 // lock file: the module set is composed once. A requirement nobody provides
 // is filled by a default module, or New refuses it by name. Application
-// code is compiled in with WithModule.
+// code is compiled in by putting its descriptor in Config.Modules.
 func modulesAtStart(string) {
-	// Without defaults, nothing provides "memory": New refuses tool_memory.
-	_, err := kiln.New(kiln.WithModel("mock:demo"), kiln.WithoutDefaults(),
-		kiln.WithModules("tool_memory"))
-	fmt.Println("refused without memory:", err)
-
-	// With defaults, New adds memory_inmem for tool_memory.
-	greeter := kiln.Module{Name: "greeter", Apply: func(p *sdk.Module) error {
-		p.AddTool(kiln.Tool("greet", "Say hello", func(ctx context.Context, in struct{}) (string, error) {
-			return "hello", nil
-		}))
+	// A requirement nobody provides is refused by name.
+	needs := kiln.Module{Name: "needs", Requires: []string{"vector_store"}, Apply: func(p *sdk.Scope) error {
 		return nil
 	}}
-	agent, err := kiln.New(
-		kiln.WithModel("mock:demo"),
-		kiln.WithModules("tool_memory"),
-		kiln.WithModule(greeter),
-	)
+	_, err := kiln.New(kiln.Config{Model: "mock:demo", Modules: []kiln.Module{needs}})
+	fmt.Println("refused:", err)
+
+	// Defaults fill the memory that tool_memory needs.
+	greeter := kiln.Module{Name: "greeter", Apply: func(p *sdk.Scope) error {
+		if err := p.AddTool(kiln.NewTool("greet", "Say hello", func(ctx context.Context, in struct{}) (string, error) {
+			return "hello", nil
+		})); err != nil {
+			return err
+		}
+		return nil
+	}}
+	agent, err := kiln.New(kiln.Config{
+		Model:   "mock:demo",
+		Modules: []kiln.Module{tool_memory.New(), greeter},
+	})
 	check(err)
 	defer agent.Close()
 	for _, s := range agent.Status() {
@@ -264,20 +295,24 @@ func modulesAtStart(string) {
 // ---- 9. Subagents ----
 
 func subagents(string) {
-	agent, err := kiln.New(
-		kiln.WithModel("mock:demo"),
-		kiln.WithModules("tool_time"),
-		kiln.WithModuleConfig("tool_subagents", map[string]any{"agents": []any{
-			map[string]any{"name": "researcher", "description": "Finds facts",
-				"instructions": "Research carefully.", "tools": []any{"current_time"}},
-			map[string]any{"name": "billing", "description": "Invoices and refunds",
-				"instructions": "You are billing support.", "mode": "handoff"},
-		}}),
-		mock(map[string]any{"tool": "researcher", "args": map[string]any{"task": "What time is it?"}},
-			map[string]any{"tool": "current_time"}, // the researcher's own steps
-			map[string]any{"text": "It is noon."},
-			map[string]any{"text": "The researcher says it is noon."}),
-	)
+	agent, err := kiln.New(kiln.Config{
+		Model: "mock:demo",
+		Modules: []kiln.Module{
+			tool_time.New(),
+			tool_subagents.New(map[string]any{"agents": []any{
+				map[string]any{"name": "researcher", "description": "Finds facts",
+					"instructions": "Research carefully.", "tools": []any{"current_time"}},
+				map[string]any{"name": "billing", "description": "Invoices and refunds",
+					"instructions": "You are billing support.", "mode": "handoff"},
+			}}),
+			mock(
+				map[string]any{"tool": "researcher", "args": map[string]any{"task": "What time is it?"}},
+				map[string]any{"tool": "current_time"}, // the researcher's own steps
+				map[string]any{"text": "It is noon."},
+				map[string]any{"text": "The researcher says it is noon."},
+			),
+		},
+	})
 	check(err)
 	defer agent.Close()
 	res, err := agent.Generate(ctx, "Ask the researcher for the time")
@@ -285,24 +320,28 @@ func subagents(string) {
 	fmt.Println(res.Text)
 
 	// A whole agent (own modules, model, policy) can be a tool too:
-	expert, err := kiln.New(kiln.WithModel("mock:demo"))
+	expert, err := kiln.New(kiln.Config{Model: "mock:demo"})
 	check(err)
 	defer expert.Close()
-	_ = kiln.WithTools(expert.AsTool("legal_expert", "Answers legal questions"))
+	_ = expert.AsTool("legal_expert", "Answers legal questions")
 }
 
 // ---- 10. Shell and file tools in a sandbox ----
 
 func sandboxedTools(dir string) {
-	agent, err := kiln.New(
-		kiln.WithModel("mock:demo"),
-		kiln.WithModuleConfig("sandbox_local", map[string]any{"root": dir + "/boxes"}),  // or sandbox_docker
-		kiln.WithModuleConfig("workspace_sandbox", map[string]any{"provider": "local"}), // one box per thread
-		kiln.WithModules("tool_shell", "tool_fs"),
-		mock(map[string]any{"tool": "write_file", "args": map[string]any{"path": "notes.md", "content": "hello\n"}},
-			map[string]any{"tool": "bash", "args": map[string]any{"command": "wc -l notes.md"}},
-			map[string]any{"text": "Wrote notes.md."}),
-	)
+	agent, err := kiln.New(kiln.Config{
+		Model: "mock:demo",
+		Modules: []kiln.Module{
+			sandbox_local.New(map[string]any{"root": dir + "/boxes"}),  // or sandbox_docker
+			workspace_sandbox.New(map[string]any{"provider": "local"}), // one box per thread
+			tool_shell.New(), tool_fs.New(),
+			mock(
+				map[string]any{"tool": "write_file", "args": map[string]any{"path": "notes.md", "content": "hello\n"}},
+				map[string]any{"tool": "bash", "args": map[string]any{"command": "wc -l notes.md"}},
+				map[string]any{"text": "Wrote notes.md."},
+			),
+		},
+	})
 	check(err)
 	defer agent.Close() // destroys the sandboxes
 	res, err := agent.Generate(ctx, "Write notes.md")
@@ -316,7 +355,7 @@ func sandboxedTools(dir string) {
 // ---- 11. Lifecycle hooks ----
 
 func lifecycleHooks(string) {
-	observer := kiln.Module{Name: "observer", Apply: func(p *sdk.Module) error {
+	observer := kiln.Module{Name: "observer", Apply: func(p *sdk.Scope) error {
 		p.OnRunStart(func(c context.Context, st *sdk.RunState) error {
 			fmt.Println("run start, user:", st.User)
 			return nil // returning an error refuses the run
@@ -346,12 +385,15 @@ func lifecycleHooks(string) {
 		})
 		return nil
 	}}
-	boom := kiln.Tool("boom", "fails hard", func(ctx context.Context, in struct{}) (string, error) {
+	boom := kiln.NewTool("boom", "fails hard", func(ctx context.Context, in struct{}) (string, error) {
 		return "", sdk.Fatal(errors.New("disk on fire")) // sdk.Fatal aborts the run; plain errors go to the model
 	})
-	agent, err := kiln.New(kiln.WithModel("mock:demo"), kiln.WithUser("ada"),
-		kiln.WithModule(observer), kiln.WithTools(boom),
-		mock(map[string]any{"text": "hello"}, map[string]any{"tool": "boom"}))
+	agent, err := kiln.New(kiln.Config{
+		Model:   "mock:demo",
+		User:    "ada",
+		Tools:   []kiln.Tool{boom},
+		Modules: []kiln.Module{observer, mock(map[string]any{"text": "hello"}, map[string]any{"tool": "boom"})},
+	})
 	check(err)
 	_, err = agent.Generate(ctx, "hi")
 	check(err)

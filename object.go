@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+
+	"github.com/ganeshdipdumbare/kiln/sdk"
 )
 
 var ErrNoObject = errors.New("kiln: model did not produce a valid object")
@@ -20,7 +22,7 @@ var ErrNoObject = errors.New("kiln: model did not produce a valid object")
 //		Ingredients []string `json:"ingredients"`
 //	}
 //	r, err := kiln.GenerateObject[Recipe](ctx, agent, "A pancake recipe")
-func GenerateObject[T any](ctx context.Context, a *Agent, prompt string, opts ...RunOption) (T, error) {
+func GenerateObject[T any](ctx context.Context, a *Agent, prompt string, run ...Run) (T, error) {
 	var zero T
 	name := strings.ToLower(reflect.TypeOf(zero).Name())
 	if name == "" {
@@ -31,14 +33,11 @@ func GenerateObject[T any](ctx context.Context, a *Agent, prompt string, opts ..
 	if wrapped {
 		schema = map[string]any{"type": "object", "properties": map[string]any{"value": schema}, "required": []any{"value"}, "additionalProperties": false}
 	}
-	so := func(r *runOptions) { r.schema, r.schemaName = schema, name }
-	ro := &runOptions{}
-	for _, o := range opts {
-		o(ro)
-	}
-	capture := ro.result
+	r := one(run)
+	r.Schema, r.SchemaName = schema, name
+	capture := r.CaptureResult
 
-	res, err := a.Generate(ctx, prompt, append(opts, so)...)
+	res, err := a.Generate(ctx, prompt, r)
 	for attempt := 0; ; attempt++ {
 		if err != nil {
 			return zero, err
@@ -54,7 +53,9 @@ func GenerateObject[T any](ctx context.Context, a *Agent, prompt string, opts ..
 			return zero, fmt.Errorf("%w: %v", ErrNoObject, perr)
 		}
 		fix := fmt.Sprintf("Your reply was not valid JSON for the required schema (%v). Reply with only the JSON object.", perr)
-		res, err = a.Generate(ctx, fix, append(opts, so, WithHistory(res.Messages...))...)
+		next := r
+		next.History = append(append([]sdk.Message{}, r.History...), res.Messages...)
+		res, err = a.Generate(ctx, fix, next)
 	}
 }
 

@@ -19,8 +19,8 @@ import (
 //
 // Example:
 //
-//	kiln.WithModuleConfig("loop", map[string]any{"max_steps": 30, "parallel_tools": true})
-func Apply(p *sdk.Module) error {
+//	loop.New(map[string]any{"max_steps": 30, "parallel_tools": true})
+func Apply(p *sdk.Scope) error {
 	defMax := p.ConfigInt("max_steps", 20)
 	parallel := p.ConfigBool("parallel_tools", false)
 	return p.Provide("loop", &sdk.Loop{
@@ -381,3 +381,13 @@ func steps(c context.Context, snap *sdk.Snapshot, st *sdk.RunState, defMax int, 
 
 // Module is the compiled form of "loop". modules/std registers it.
 var Module = engine.Module{Name: "loop", Requires: nil, Provides: []string{"loop"}, Permissions: nil, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}

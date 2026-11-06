@@ -19,11 +19,11 @@ import (
 //
 // Example:
 //
-//	kiln.WithModuleConfig("hook_tool_errors", map[string]any{
+//	hook_tool_errors.New(map[string]any{
 //		"on_error": "message",
 //		"template": "{tool} failed: {error}. Try another way.",
 //	})
-func Apply(p *sdk.Module) error {
+func Apply(p *sdk.Scope) error {
 	mode := p.ConfigString("on_error", "message")
 	tmpl := p.ConfigString("template", "Tool {tool} failed: {error}. Check the arguments and try again, or use another approach.")
 	only := p.ConfigStrings("tools")
@@ -52,3 +52,13 @@ func Apply(p *sdk.Module) error {
 
 // Module is the compiled form of "hook_tool_errors". modules/std registers it.
 var Module = engine.Module{Name: "hook_tool_errors", Requires: nil, Provides: nil, Permissions: nil, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}

@@ -16,11 +16,11 @@ import (
 //
 // Example:
 //
-//	kiln.WithModuleConfig("tool_shell", map[string]any{"timeout_seconds": 60, "max_output": 10000})
-//	kiln.WithSandbox("docker") // run it in a container instead of on the host
+//	tool_shell.New(map[string]any{"timeout_seconds": 60, "max_output": 10000})
+//	kiln.Sandbox("docker") // run it in a container instead of on the host
 var Requires = []string{"workspace"}
 
-func Apply(p *sdk.Module) error {
+func Apply(p *sdk.Scope) error {
 	world := p.Service("workspace").(*sdk.ExecWorld)
 	timeout := p.ConfigInt("timeout_seconds", 120)
 	max := p.ConfigInt("max_output", 30000)
@@ -63,3 +63,13 @@ func Apply(p *sdk.Module) error {
 
 // Module is the compiled form of "tool_shell". modules/std registers it.
 var Module = engine.Module{Name: "tool_shell", Requires: Requires, Provides: nil, Permissions: nil, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}

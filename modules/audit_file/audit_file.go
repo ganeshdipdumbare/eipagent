@@ -47,17 +47,17 @@ import (
 //
 // Example:
 //
-//	kiln.WithModuleConfig("audit_file", map[string]any{
+//	audit_file.New(map[string]any{
 //		"path":    ".kiln/audit.jsonl",
 //		"results": true,                      // also record tool results
 //		"key":     "secret://AUDIT_HMAC_KEY", // sign each line
 //	})
-//	// Shortcut: kiln.WithAudit(".kiln/audit.jsonl")
+//	// Shortcut: kiln.Audit(".kiln/audit.jsonl")
 var Permissions = []string{"fs:read", "fs:write"}
 
 var Requires = []string{"?secrets"} // only for key
 
-func Apply(p *sdk.Module) error {
+func Apply(p *sdk.Scope) error {
 	p.SetPriority(sdk.PriorityReserved + 1) // outermost when locked: sees everything
 	logPath := p.ConfigString("path", ".kiln/audit.jsonl")
 	logArgs := p.ConfigBool("args", true)
@@ -80,7 +80,7 @@ func Apply(p *sdk.Module) error {
 		if d, err = p.Dir(filepath.Dir(logPath), true); err != nil {
 			return err
 		}
-		p.OnUnload(func() { d.Close() })
+		p.OnClose(func() { d.Close() })
 		if old, err := d.Open(base); err == nil { // continue an existing chain
 			// A partial trailing line (a crash mid-write) can't be
 			// continued safely: appending would fuse it with the next
@@ -129,7 +129,7 @@ func Apply(p *sdk.Module) error {
 			return err
 		}
 		f = nf
-		p.OnUnload(func() { f.Close() })
+		p.OnClose(func() { f.Close() })
 	}
 	var mu sync.Mutex
 	lastErr := ""
@@ -282,3 +282,13 @@ func Apply(p *sdk.Module) error {
 
 // Module is the compiled form of "audit_file". modules/std registers it.
 var Module = engine.Module{Name: "audit_file", Requires: Requires, Provides: []string{"audit"}, Permissions: Permissions, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}

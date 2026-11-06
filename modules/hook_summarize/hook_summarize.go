@@ -23,12 +23,12 @@ import (
 //
 // Example:
 //
-//	kiln.WithModuleConfig("hook_summarize", map[string]any{
+//	hook_summarize.New(map[string]any{
 //		"trigger_messages": 60,
 //		"keep_messages":    12,
 //		"model":            "anthropic:claude-haiku-5-5",
 //	})
-func Apply(p *sdk.Module) error {
+func Apply(p *sdk.Scope) error {
 	trigMsgs := p.ConfigInt("trigger_messages", 40)
 	trigTokens := p.ConfigInt("trigger_tokens", 0)
 	keep := p.ConfigInt("keep_messages", 10)
@@ -108,3 +108,13 @@ func Apply(p *sdk.Module) error {
 
 // Module is the compiled form of "hook_summarize". modules/std registers it.
 var Module = engine.Module{Name: "hook_summarize", Requires: nil, Provides: nil, Permissions: nil, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}

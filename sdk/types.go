@@ -335,7 +335,7 @@ type Approver struct {
 }
 
 // Audit records security-relevant events, provided as "audit". The core
-// engine also reports module lifecycle (load, fail, unload) to it.
+// engine also reports module lifecycle (start, fail, close) to it.
 type Audit struct {
 	Record func(kind string, data map[string]any)
 }

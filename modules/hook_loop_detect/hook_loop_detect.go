@@ -19,8 +19,8 @@ import (
 //
 // Example:
 //
-//	kiln.WithModuleConfig("hook_loop_detect", map[string]any{"max_repeats": 2, "stop_after": 4})
-func Apply(p *sdk.Module) error {
+//	hook_loop_detect.New(map[string]any{"max_repeats": 2, "stop_after": 4})
+func Apply(p *sdk.Scope) error {
 	maxRepeats := p.ConfigInt("max_repeats", 3)
 	stopAfter := p.ConfigInt("stop_after", 6)
 
@@ -62,3 +62,13 @@ func Apply(p *sdk.Module) error {
 
 // Module is the compiled form of "hook_loop_detect". modules/std registers it.
 var Module = engine.Module{Name: "hook_loop_detect", Requires: nil, Provides: nil, Permissions: nil, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}

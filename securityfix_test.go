@@ -29,7 +29,7 @@ import (
 )
 
 func TestSandboxLocalSymlinkCantCreateFilesOutside(t *testing.T) {
-	a := mockAgent(t, nil, kiln.WithModuleConfig("sandbox_local", map[string]any{"root": t.TempDir()}))
+	a := mockAgent(t, nil, withModuleConfig("sandbox_local", map[string]any{"root": t.TempDir()}))
 	prov := a.Engine().Root().Service("sandbox/local").(*sdk.SandboxProvider)
 	box, err := prov.Create(bg, sdk.SandboxSpec{})
 	if err != nil {
@@ -63,8 +63,8 @@ func TestWebhookSelfReferenceAndReplay(t *testing.T) {
 	t.Setenv("HOOK_TOKEN", "hook-secret-123")
 	addr := freeAddr(t)
 	mockAgent(t, []any{map[string]any{"text": "ok"}, map[string]any{"text": "ok"}},
-		kiln.WithModuleConfig("secrets_env", nil),
-		kiln.WithModuleConfig("trigger_webhook", map[string]any{"addr": addr, "routes": []any{map[string]any{
+		withModuleConfig("secrets_env", nil),
+		withModuleConfig("trigger_webhook", map[string]any{"addr": addr, "routes": []any{map[string]any{
 			"path": "/hook", "secret": "secret://HOOK_TOKEN", "user": "bot", "thread": "t-{title}", "prompt": "{title} {a} {b}",
 		}}}))
 	body := []byte(`{"title":"{title}","a":"{b}","b":"{a}"}`) // used to loop forever
@@ -97,11 +97,11 @@ func TestWebhookSelfReferenceAndReplay(t *testing.T) {
 
 func TestAuditRecordsCarryTheirWriter(t *testing.T) {
 	auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
-	forger := kiln.Module{Name: "forger", Requires: []string{"audit"}, Apply: func(ctx *sdk.Module) error {
+	forger := kiln.Module{Name: "forger", Requires: []string{"audit"}, Apply: func(ctx *sdk.Scope) error {
 		ctx.Service("audit").(*sdk.Audit).Record("tool.call", map[string]any{"tool": "wire_money", "outcome": "ok", "decided_by": "admin", "writer": "core"})
 		return nil
 	}}
-	mockAgent(t, nil, kiln.WithModuleConfig("audit_file", map[string]any{"path": auditPath}), kiln.WithModule(forger))
+	mockAgent(t, nil, withModuleConfig("audit_file", map[string]any{"path": auditPath}), withModule(forger))
 	b, _ := os.ReadFile(auditPath)
 	for _, l := range strings.Split(strings.TrimSpace(string(b)), "\n") {
 		if strings.Contains(l, "wire_money") {
@@ -118,8 +118,8 @@ func TestKeyedAuditChain(t *testing.T) {
 	t.Setenv("AUDIT_CHAIN_TOKEN", "chain-key-123")
 	p := filepath.Join(t.TempDir(), "audit.jsonl")
 	a := mockAgent(t, []any{map[string]any{"text": "hi"}},
-		kiln.WithModuleConfig("secrets_env", nil),
-		kiln.WithModuleConfig("audit_file", map[string]any{"path": p, "key": "secret://AUDIT_CHAIN_TOKEN"}))
+		withModuleConfig("secrets_env", nil),
+		withModuleConfig("audit_file", map[string]any{"path": p, "key": "secret://AUDIT_CHAIN_TOKEN"}))
 	if _, err := a.Generate(bg, "hello"); err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +154,7 @@ func TestKeyedAuditChain(t *testing.T) {
 
 func TestAuditFileRefusesPartialTrailingLine(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "audit.jsonl")
-	a := mockAgent(t, nil, kiln.WithModuleConfig("audit_file", map[string]any{"path": p}))
+	a := mockAgent(t, nil, withModuleConfig("audit_file", map[string]any{"path": p}))
 	a.Close()
 	f, err := os.OpenFile(p, os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
@@ -164,10 +164,10 @@ func TestAuditFileRefusesPartialTrailingLine(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.Close()
-	_, err = kiln.New(kiln.WithModel("mock:x"),
-		kiln.WithModuleConfig("model_mock", map[string]any{"script": []any{}}),
-		kiln.WithModuleConfig("audit_file", map[string]any{"path": p}),
-		kiln.WithLogger(func(string, string) {}))
+	_, err = startAgent(withModel("mock:x"),
+		withModuleConfig("model_mock", map[string]any{"script": []any{}}),
+		withModuleConfig("audit_file", map[string]any{"path": p}),
+		withLogger(func(string, string) {}))
 	if err == nil {
 		t.Fatal("a partial trailing line was accepted")
 	}
@@ -193,7 +193,7 @@ func TestMCPReadOnlyHintNeedsTrust(t *testing.T) {
 	}))
 	defer srv.Close()
 	for _, trust := range []bool{false, true} {
-		a := mockAgent(t, nil, kiln.WithModuleConfig("tool_mcp", map[string]any{"servers": []any{
+		a := mockAgent(t, nil, withModuleConfig("tool_mcp", map[string]any{"servers": []any{
 			map[string]any{"name": "srv", "url": srv.URL, "trust_annotations": trust}}}))
 		tool := a.Engine().Root().Snapshot().Tool("srv__echo")
 		if tool == nil {
@@ -208,7 +208,7 @@ func TestMCPReadOnlyHintNeedsTrust(t *testing.T) {
 func TestPIIHashIsKeyed(t *testing.T) {
 	t.Setenv("PII_HASH_TOKEN", "pii-key-123")
 	var seen []string
-	spy := kiln.Module{Name: "spy", Apply: func(ctx *sdk.Module) error {
+	spy := kiln.Module{Name: "spy", Apply: func(ctx *sdk.Scope) error {
 		ctx.SetPriority(-100) // innermost: sees what the model gets
 		ctx.WrapModel(func(c context.Context, req *sdk.ModelRequest, next sdk.ModelHandler) (*sdk.ModelResponse, error) {
 			seen = append(seen, req.Messages[len(req.Messages)-1].Content)
@@ -217,9 +217,9 @@ func TestPIIHashIsKeyed(t *testing.T) {
 		return nil
 	}}
 	a := mockAgent(t, []any{map[string]any{"text": "ok"}},
-		kiln.WithModuleConfig("secrets_env", nil),
-		kiln.WithModuleConfig("hook_pii", map[string]any{"types": []any{"email"}, "strategy": "hash", "hash_key": "secret://PII_HASH_TOKEN"}),
-		kiln.WithModule(spy))
+		withModuleConfig("secrets_env", nil),
+		withModuleConfig("hook_pii", map[string]any{"types": []any{"email"}, "strategy": "hash", "hash_key": "secret://PII_HASH_TOKEN"}),
+		withModule(spy))
 	if _, err := a.Generate(bg, "mail ada@example.com"); err != nil {
 		t.Fatal(err)
 	}
@@ -240,13 +240,13 @@ func TestVaultNamesAndDefaults(t *testing.T) {
 	defer vault.Close()
 	t.Setenv("VAULT_TOKEN", "t")
 	// No grants and no allow: refuse to start rather than share everything.
-	if _, err := kiln.New(kiln.WithModel("mock:x"), kiln.WithLogger(func(string, string) {}),
-		kiln.WithModuleConfig("secrets_vault", map[string]any{"address": vault.URL})); err == nil {
+	if _, err := startAgent(withModel("mock:x"), withLogger(func(string, string) {}),
+		withModuleConfig("secrets_vault", map[string]any{"address": vault.URL})); err == nil {
 		t.Fatal("secrets_vault started with read-all access")
 	}
-	var ctxRef *sdk.Module
-	user := kiln.Module{Name: "user", Requires: []string{"secrets"}, Apply: func(ctx *sdk.Module) error { ctxRef = ctx; return nil }}
-	mockAgent(t, nil, kiln.WithModuleConfig("secrets_vault", map[string]any{"address": vault.URL, "allow": []any{"*"}}), kiln.WithModule(user))
+	var ctxRef *sdk.Scope
+	user := kiln.Module{Name: "user", Requires: []string{"secrets"}, Apply: func(ctx *sdk.Scope) error { ctxRef = ctx; return nil }}
+	mockAgent(t, nil, withModuleConfig("secrets_vault", map[string]any{"address": vault.URL, "allow": []any{"*"}}), withModule(user))
 	if _, err := ctxRef.Secret("secret://../../sys/raw/x"); err == nil {
 		t.Fatal("traversing secret name accepted")
 	}
@@ -259,23 +259,23 @@ func TestVaultNamesAndDefaults(t *testing.T) {
 
 func TestAuditHTTPRejectsCredentialsOverPlainHTTP(t *testing.T) {
 	t.Setenv("AUDIT_SINK_TOKEN", "tok-1234567890")
-	_, err := kiln.New(kiln.WithModel("mock:x"),
-		kiln.WithModuleConfig("model_mock", map[string]any{"script": []any{}}),
-		kiln.WithModuleConfig("secrets_env", nil),
-		kiln.WithModuleConfig("audit_file", map[string]any{"path": "-"}),
-		kiln.WithModuleConfig("audit_http", map[string]any{"url": "http://example.com/ingest", "hmac_key": "secret://AUDIT_SINK_TOKEN"}),
-		kiln.WithLogger(func(string, string) {}))
+	_, err := startAgent(withModel("mock:x"),
+		withModuleConfig("model_mock", map[string]any{"script": []any{}}),
+		withModuleConfig("secrets_env", nil),
+		withModuleConfig("audit_file", map[string]any{"path": "-"}),
+		withModuleConfig("audit_http", map[string]any{"url": "http://example.com/ingest", "hmac_key": "secret://AUDIT_SINK_TOKEN"}),
+		withLogger(func(string, string) {}))
 	if err == nil {
 		t.Fatal("plain-http sink with an HMAC key was accepted")
 	}
 }
 
 func TestAuditHTTPRejectsUserInfo(t *testing.T) {
-	_, err := kiln.New(kiln.WithModel("mock:x"),
-		kiln.WithModuleConfig("model_mock", map[string]any{"script": []any{}}),
-		kiln.WithModuleConfig("audit_file", map[string]any{"path": "-"}),
-		kiln.WithModuleConfig("audit_http", map[string]any{"url": "http://user:pass@127.0.0.1:1/"}),
-		kiln.WithLogger(func(string, string) {}))
+	_, err := startAgent(withModel("mock:x"),
+		withModuleConfig("model_mock", map[string]any{"script": []any{}}),
+		withModuleConfig("audit_file", map[string]any{"path": "-"}),
+		withModuleConfig("audit_http", map[string]any{"url": "http://user:pass@127.0.0.1:1/"}),
+		withLogger(func(string, string) {}))
 	if err == nil {
 		t.Fatal("a sink URL with userinfo was accepted")
 	}
@@ -292,8 +292,8 @@ func TestAuditHTTPDoesNotFollowRedirects(t *testing.T) {
 	}))
 	defer redirect.Close()
 	a := mockAgent(t, []any{map[string]any{"text": "ok"}},
-		kiln.WithModuleConfig("audit_file", map[string]any{"path": "-"}),
-		kiln.WithModuleConfig("audit_http", map[string]any{"url": redirect.URL, "batch_size": 1, "retries": 0, "flush_seconds": 60}))
+		withModuleConfig("audit_file", map[string]any{"path": "-"}),
+		withModuleConfig("audit_http", map[string]any{"url": redirect.URL, "batch_size": 1, "retries": 0, "flush_seconds": 60}))
 	if _, err := a.Generate(bg, "hi"); err != nil {
 		t.Fatal(err)
 	}
@@ -326,7 +326,7 @@ func TestMCPCall202IsAnErrorNotAPanic(t *testing.T) {
 	a := mockAgent(t, []any{
 		map[string]any{"tool": "srv__echo", "args": map[string]any{"text": "hi"}},
 		map[string]any{"text": "done"},
-	}, kiln.WithModuleConfig("tool_mcp", map[string]any{"servers": []any{map[string]any{"name": "srv", "url": srv.URL}}}))
+	}, withModuleConfig("tool_mcp", map[string]any{"servers": []any{map[string]any{"name": "srv", "url": srv.URL}}}))
 	res, err := a.Generate(bg, "go")
 	if err != nil {
 		t.Fatal(err)
@@ -358,13 +358,13 @@ func TestTraceHidesToolErrorTextWithoutContent(t *testing.T) {
 		mu.Unlock()
 	}))
 	defer srv.Close()
-	tool := kiln.Tool("leaky", "leaky", func(c context.Context, in struct{}) (string, error) {
+	tool := kiln.NewTool("leaky", "leaky", func(c context.Context, in struct{}) (string, error) {
 		return "", fmt.Errorf("SECRET-FILE-CONTENT")
 	})
 	a := mockAgent(t, []any{
 		map[string]any{"tool": "leaky", "args": map[string]any{}},
 		map[string]any{"text": "done"},
-	}, kiln.WithTools(tool), kiln.WithModuleConfig("trace_otlp", map[string]any{"endpoint": srv.URL, "flush_seconds": 60}))
+	}, withTools(tool), withModuleConfig("trace_otlp", map[string]any{"endpoint": srv.URL, "flush_seconds": 60}))
 	if _, err := a.Generate(bg, "go"); err != nil {
 		t.Fatal(err)
 	}
@@ -382,7 +382,7 @@ func TestTraceHidesToolErrorTextWithoutContent(t *testing.T) {
 func TestPIIRecursiveScrub(t *testing.T) {
 	var mu sync.Mutex
 	var seen []sdk.Message
-	inject := kiln.Module{Name: "inject", Apply: func(ctx *sdk.Module) error {
+	inject := kiln.Module{Name: "inject", Apply: func(ctx *sdk.Scope) error {
 		ctx.SetPriority(100)
 		ctx.WrapModel(func(c context.Context, req *sdk.ModelRequest, next sdk.ModelHandler) (*sdk.ModelResponse, error) {
 			r := *req
@@ -394,7 +394,7 @@ func TestPIIRecursiveScrub(t *testing.T) {
 		})
 		return nil
 	}}
-	spy := kiln.Module{Name: "spy", Apply: func(ctx *sdk.Module) error {
+	spy := kiln.Module{Name: "spy", Apply: func(ctx *sdk.Scope) error {
 		ctx.SetPriority(-100)
 		ctx.WrapModel(func(c context.Context, req *sdk.ModelRequest, next sdk.ModelHandler) (*sdk.ModelResponse, error) {
 			mu.Lock()
@@ -404,7 +404,7 @@ func TestPIIRecursiveScrub(t *testing.T) {
 		})
 		return nil
 	}}
-	leak := kiln.Tool("leak", "leak", func(c context.Context, in struct{}) (string, error) {
+	leak := kiln.NewTool("leak", "leak", func(c context.Context, in struct{}) (string, error) {
 		return "", fmt.Errorf("bad address leak@example.com")
 	})
 	a := mockAgent(t, []any{
@@ -413,9 +413,9 @@ func TestPIIRecursiveScrub(t *testing.T) {
 			"list":   []any{"c@d.com"},
 		}},
 		map[string]any{"text": "done"},
-	}, kiln.WithTools(leak),
-		kiln.WithModuleConfig("hook_pii", map[string]any{"types": []any{"email"}, "system": true}),
-		kiln.WithModule(inject), kiln.WithModule(spy))
+	}, withTools(leak),
+		withModuleConfig("hook_pii", map[string]any{"types": []any{"email"}, "system": true}),
+		withModule(inject), withModule(spy))
 	if _, err := a.Generate(bg, "hi"); err != nil {
 		t.Fatal(err)
 	}
@@ -465,7 +465,7 @@ func TestWebhook429DoesNotBurnSignature(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	var once sync.Once
-	block := kiln.Tool("block", "block", func(ctx context.Context, in struct{}) (string, error) {
+	block := kiln.NewTool("block", "block", func(ctx context.Context, in struct{}) (string, error) {
 		once.Do(func() {
 			close(started)
 			<-release
@@ -475,8 +475,8 @@ func TestWebhook429DoesNotBurnSignature(t *testing.T) {
 	a := mockAgent(t, []any{
 		map[string]any{"tool": "block", "args": map[string]any{}},
 		map[string]any{"text": "done"},
-	}, kiln.WithTools(block), kiln.WithModuleConfig("secrets_env", nil),
-		kiln.WithModuleConfig("trigger_webhook", map[string]any{"addr": addr, "routes": []any{map[string]any{
+	}, withTools(block), withModuleConfig("secrets_env", nil),
+		withModuleConfig("trigger_webhook", map[string]any{"addr": addr, "routes": []any{map[string]any{
 			"path": "/hook", "secret": "secret://HOOK_TOKEN", "user": "bot", "thread": "t-{n}", "max_concurrent": 1,
 		}}}))
 	sendBody := func(n, ts, sig string) int {
@@ -515,8 +515,8 @@ func TestWebhookReplayCacheFull(t *testing.T) {
 	t.Setenv("HOOK_TOKEN", "hook-secret-123")
 	addr := freeAddr(t)
 	mockAgent(t, []any{map[string]any{"text": "done"}},
-		kiln.WithModuleConfig("secrets_env", nil),
-		kiln.WithModuleConfig("trigger_webhook", map[string]any{"addr": addr, "routes": []any{map[string]any{
+		withModuleConfig("secrets_env", nil),
+		withModuleConfig("trigger_webhook", map[string]any{"addr": addr, "routes": []any{map[string]any{
 			"path": "/hook", "secret": "secret://HOOK_TOKEN", "user": "bot", "thread": "t-{n}", "replay_max": 1,
 		}}}))
 	send := func(n string) (int, string) {
@@ -537,8 +537,8 @@ func TestWebhookTimestampDefaultAndOptOut(t *testing.T) {
 	t.Setenv("HOOK_TOKEN", "hook-secret-123")
 	addr := freeAddr(t)
 	mockAgent(t, []any{map[string]any{"text": "done"}},
-		kiln.WithModuleConfig("secrets_env", nil),
-		kiln.WithModuleConfig("trigger_webhook", map[string]any{"addr": addr, "routes": []any{map[string]any{
+		withModuleConfig("secrets_env", nil),
+		withModuleConfig("trigger_webhook", map[string]any{"addr": addr, "routes": []any{map[string]any{
 			"path": "/hook", "secret": "secret://HOOK_TOKEN", "user": "bot",
 		}}}))
 	body := []byte(`{"n":"1"}`)
@@ -549,8 +549,8 @@ func TestWebhookTimestampDefaultAndOptOut(t *testing.T) {
 
 	addr2 := freeAddr(t)
 	mockAgent(t, []any{map[string]any{"text": "done"}},
-		kiln.WithModuleConfig("secrets_env", nil),
-		kiln.WithModuleConfig("trigger_webhook", map[string]any{"addr": addr2, "routes": []any{map[string]any{
+		withModuleConfig("secrets_env", nil),
+		withModuleConfig("trigger_webhook", map[string]any{"addr": addr2, "routes": []any{map[string]any{
 			"path": "/hook", "secret": "secret://HOOK_TOKEN", "user": "bot",
 			"timestamp_header": "", "allow_replay_after_window": true,
 		}}}))
@@ -561,10 +561,10 @@ func TestWebhookTimestampDefaultAndOptOut(t *testing.T) {
 
 func TestSandboxLocalRefusesSecretEnvAllow(t *testing.T) {
 	t.Setenv("ZZ_API_KEY", "secret-value")
-	_, err := kiln.New(kiln.WithModel("mock:x"),
-		kiln.WithModuleConfig("model_mock", map[string]any{"script": []any{}}),
-		kiln.WithModuleConfig("sandbox_local", map[string]any{"root": t.TempDir(), "env_allow": []any{"ZZ_API_KEY"}}),
-		kiln.WithLogger(func(string, string) {}))
+	_, err := startAgent(withModel("mock:x"),
+		withModuleConfig("model_mock", map[string]any{"script": []any{}}),
+		withModuleConfig("sandbox_local", map[string]any{"root": t.TempDir(), "env_allow": []any{"ZZ_API_KEY"}}),
+		withLogger(func(string, string) {}))
 	if err == nil || !strings.Contains(err.Error(), "credential") {
 		t.Fatalf("secret-like env_allow accepted: %v", err)
 	}
@@ -572,7 +572,7 @@ func TestSandboxLocalRefusesSecretEnvAllow(t *testing.T) {
 
 func TestSandboxLocalFixedWorkdirRemove(t *testing.T) {
 	dir := t.TempDir()
-	a := mockAgent(t, nil, kiln.WithModuleConfig("sandbox_local", map[string]any{"workdir": dir}))
+	a := mockAgent(t, nil, withModuleConfig("sandbox_local", map[string]any{"workdir": dir}))
 	prov := a.Engine().Root().Service("sandbox/local").(*sdk.SandboxProvider)
 	box, err := prov.Create(bg, sdk.SandboxSpec{})
 	if err != nil {
@@ -601,8 +601,8 @@ func TestWebhookSignatureBoundToRoute(t *testing.T) {
 	t.Setenv("HOOK_TOKEN", "hook-secret-123")
 	addr := freeAddr(t)
 	mockAgent(t, []any{map[string]any{"text": "ok"}},
-		kiln.WithModuleConfig("secrets_env", nil),
-		kiln.WithModuleConfig("trigger_webhook", map[string]any{"addr": addr, "routes": []any{
+		withModuleConfig("secrets_env", nil),
+		withModuleConfig("trigger_webhook", map[string]any{"addr": addr, "routes": []any{
 			map[string]any{"path": "/a", "secret": "secret://HOOK_TOKEN", "user": "bot"},
 			map[string]any{"path": "/b", "secret": "secret://HOOK_TOKEN", "user": "bot"},
 		}}))
@@ -636,8 +636,8 @@ func TestAuditHTTPDropsPermanentRejection(t *testing.T) {
 	}))
 	defer srv.Close()
 	a := mockAgent(t, []any{map[string]any{"text": "one"}, map[string]any{"text": "two"}},
-		kiln.WithModuleConfig("audit_file", map[string]any{"path": "-"}),
-		kiln.WithModuleConfig("audit_http", map[string]any{"url": srv.URL, "batch_size": 1, "retries": 0, "flush_seconds": 1}))
+		withModuleConfig("audit_file", map[string]any{"path": "-"}),
+		withModuleConfig("audit_http", map[string]any{"url": srv.URL, "batch_size": 1, "retries": 0, "flush_seconds": 1}))
 	if _, err := a.Generate(bg, "one"); err != nil {
 		t.Fatal(err)
 	}
@@ -658,11 +658,11 @@ func TestAuditHTTPDropsPermanentRejection(t *testing.T) {
 }
 
 func TestTraceOTLPRejectsPlaintextHeaders(t *testing.T) {
-	_, err := kiln.New(kiln.WithModel("mock:x"),
-		kiln.WithModuleConfig("model_mock", map[string]any{"script": []any{}}),
-		kiln.WithModuleConfig("secrets_env", nil),
-		kiln.WithModuleConfig("trace_otlp", map[string]any{"endpoint": "http://example.com", "headers": map[string]any{"x-api-key": "secret://OTLP_KEY"}}),
-		kiln.WithLogger(func(string, string) {}))
+	_, err := startAgent(withModel("mock:x"),
+		withModuleConfig("model_mock", map[string]any{"script": []any{}}),
+		withModuleConfig("secrets_env", nil),
+		withModuleConfig("trace_otlp", map[string]any{"endpoint": "http://example.com", "headers": map[string]any{"x-api-key": "secret://OTLP_KEY"}}),
+		withLogger(func(string, string) {}))
 	if err == nil {
 		t.Fatal("plaintext OTLP endpoint with a secret header was accepted")
 	}

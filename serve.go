@@ -25,7 +25,7 @@ import (
 // (KILN_BOX_DIR), so it cannot run anything the host did not allow.
 // Model calls, secrets, HTTP and host-only tools are bridged back to the
 // host, so API keys and other secrets never enter the box.
-func ServeBox(ctx context.Context, r io.Reader, w io.Writer, opts ...Option) error {
+func ServeBox(ctx context.Context, r io.Reader, w io.Writer, cfg Config) error {
 	// Keep module prints off the JSON-RPC stream.
 	oldStdout := os.Stdout
 	os.Stdout = os.Stderr
@@ -58,12 +58,8 @@ func ServeBox(ctx context.Context, r io.Reader, w io.Writer, opts ...Option) err
 		return nil, nil
 	})
 
-	cfg := &config{}
-	for _, o := range opts {
-		o(cfg)
-	}
-	cfg.runIn = nil
-	cfg.tools = nil // host-only tools come back through bridge_tools
+	cfg.RunIn = nil
+	cfg.Tools = nil // host-only tools come back through bridge_tools
 	prof, pol, err := boxInputs(cfg)
 	if err != nil {
 		conn.Notify("box.error", err.Error())
@@ -79,7 +75,7 @@ func ServeBox(ctx context.Context, r io.Reader, w io.Writer, opts ...Option) err
 	if hello.Secrets {
 		bridges = append(bridges, bridgeSecrets(conn))
 	}
-	cfg.modules = append(cfg.modules, bridges...)
+	cfg.Modules = append(cfg.Modules, bridges...)
 	var bridgeRows []engine.ModuleSpec
 	for _, b := range bridges {
 		bridgeRows = append(bridgeRows, engine.ModuleSpec{Use: b.Name})
@@ -111,9 +107,9 @@ func ServeBox(ctx context.Context, r io.Reader, w io.Writer, opts ...Option) err
 		if err := json.Unmarshal(raw, &wr); err != nil {
 			return nil, err
 		}
-		ro := &runOptions{}
+		var run Run
 		if wr.Streaming {
-			ro.onEvent = func(e sdk.Event) { conn.Notify("agent.event", wireEvent{RunID: wr.RunID, Event: e}) }
+			run.OnEvent = func(e sdk.Event) { conn.Notify("agent.event", wireEvent{RunID: wr.RunID, Event: e}) }
 		}
 		st := stateFromWire(wr)
 		if st.Model == "" {
@@ -122,7 +118,7 @@ func ServeBox(ctx context.Context, r io.Reader, w io.Writer, opts ...Option) err
 		if st.System == "" {
 			st.System = a.instructions
 		}
-		return a.run(c, st, ro)
+		return a.exec(c, st, run)
 	})
 	conn.Handle("agent.thread", func(c context.Context, raw json.RawMessage) (any, error) {
 		var wr wireRun
@@ -131,20 +127,13 @@ func ServeBox(ctx context.Context, r io.Reader, w io.Writer, opts ...Option) err
 		}
 		th := a.Thread(wr.Thread)
 		if len(wr.Decisions) > 0 {
-			return th.Resume(c, wr.Decisions...)
+			return th.Resume(c, wr.Decisions)
 		}
-		var ro []RunOption
-		ro = append(ro, withRunID(wr.RunID))
+		run := Run{User: wr.User, Roles: wr.Roles, MaxSteps: wr.MaxSteps, RunID: wr.RunID}
 		if wr.Streaming {
-			ro = append(ro, OnEvent(func(e sdk.Event) { conn.Notify("agent.event", wireEvent{RunID: wr.RunID, Event: e}) }))
+			run.OnEvent = func(e sdk.Event) { conn.Notify("agent.event", wireEvent{RunID: wr.RunID, Event: e}) }
 		}
-		if wr.User != "" {
-			ro = append(ro, AsUser(wr.User, wr.Roles...))
-		}
-		if wr.MaxSteps > 0 {
-			ro = append(ro, MaxSteps(wr.MaxSteps))
-		}
-		return th.Generate(c, wr.Prompt, ro...)
+		return th.Generate(c, wr.Prompt, run)
 	})
 	conn.Handle("thread.get", func(c context.Context, raw json.RawMessage) (any, error) {
 		var wr wireRun
@@ -208,7 +197,7 @@ var callSeq atomic.Int64
 // bridgeLLM provides model/<p> for every provider the host offers; calls
 // run on the host, through the host's own middleware and policy.
 func bridgeLLM(conn *rpc.Conn, chunks *chunkRouter, providers []string) engine.Module {
-	return engine.Module{Name: "bridge_llm", Provides: []string{"model/*"}, Apply: func(ctx *sdk.Module) error {
+	return engine.Module{Name: "bridge_llm", Provides: []string{"model/*"}, Apply: func(ctx *sdk.Scope) error {
 		for _, p := range providers {
 			name := p
 			err := ctx.Provide("model/"+name, &sdk.Provider{Name: "bridge:" + name, Capabilities: map[string]bool{"streaming": true, "tools": true, "structured_output": true},
@@ -241,7 +230,7 @@ func bridgeLLM(conn *rpc.Conn, chunks *chunkRouter, providers []string) engine.M
 
 // bridgeTools exposes host-only tools (inline Go tools) inside the box.
 func bridgeTools(conn *rpc.Conn, tools []wireTool) engine.Module {
-	return engine.Module{Name: "bridge_tools", Apply: func(ctx *sdk.Module) error {
+	return engine.Module{Name: "bridge_tools", Apply: func(ctx *sdk.Scope) error {
 		for _, t := range tools {
 			name := t.Name
 			ctx.AddTool(sdk.Tool{Name: name, Description: t.Description, Schema: t.Schema, Meta: t.Meta,
@@ -262,7 +251,7 @@ func bridgeTools(conn *rpc.Conn, tools []wireTool) engine.Module {
 // bridgeSecrets provides "secrets" in the box: each lookup returns a
 // placeholder from the host, never a value.
 func bridgeSecrets(conn *rpc.Conn) engine.Module {
-	return engine.Module{Name: "bridge_secrets", Provides: []string{"secrets"}, Apply: func(ctx *sdk.Module) error {
+	return engine.Module{Name: "bridge_secrets", Provides: []string{"secrets"}, Apply: func(ctx *sdk.Scope) error {
 		return ctx.Provide("secrets", &sdk.Secrets{Get: func(c context.Context, caller, name string) (string, error) {
 			var ph string
 			err := conn.Call(c, "host.secret", wireSecretReq{Caller: caller, Name: name}, &ph)
@@ -305,7 +294,7 @@ func (t *hostTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 // boxInputs returns the profile and policy the box runs. The host uploads
 // its resolved ones; without that (a box started by hand) they are resolved
 // from the same options.
-func boxInputs(cfg *config) (*engine.Profile, *engine.Policy, error) {
+func boxInputs(cfg Config) (*engine.Profile, *engine.Policy, error) {
 	dir := os.Getenv(boxDirEnv)
 	if dir == "" {
 		return resolve(cfg)

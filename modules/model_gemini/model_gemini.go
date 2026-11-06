@@ -29,13 +29,13 @@ import (
 //
 // Example:
 //
-//	kiln.WithModel("gemini:gemini-2.5-pro") // loads model_gemini by itself
-//	kiln.WithModuleConfig("model_gemini", map[string]any{"api_key": "secret://GEMINI_KEY_TEAM_A"})
+//	kiln.Config{Model: "gemini:gemini-2.5-pro"} // loads model_gemini by itself
+//	model_gemini.New(map[string]any{"api_key": "secret://GEMINI_KEY_TEAM_A"})
 var Permissions = []string{"net"}
 
 var Requires = []string{"?secrets"} // secret:// keys/headers are optional
 
-func Apply(p *sdk.Module) error {
+func Apply(p *sdk.Scope) error {
 	name := p.ConfigString("name", "gemini")
 	base := strings.TrimRight(p.ConfigString("base_url", "https://generativelanguage.googleapis.com/v1beta"), "/")
 	keyRef := p.ConfigString("api_key", "secret://GEMINI_API_KEY")
@@ -309,3 +309,13 @@ func (a *accum) response() *sdk.ModelResponse {
 
 // Module is the compiled form of "model_gemini". modules/std registers it.
 var Module = engine.Module{Name: "model_gemini", Requires: Requires, Provides: []string{"model/*"}, Permissions: Permissions, Secrets: []string{"GEMINI_API_KEY"}, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}
