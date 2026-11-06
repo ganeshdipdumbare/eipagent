@@ -4,6 +4,7 @@
     { title: "Getting Started", pages: ["installation", "quickstart", "concepts", "ollama", "troubleshooting"] },
     { title: "Foundations", pages: ["providers", "generating-text", "streaming", "tools", "structured-output", "threads", "human-in-the-loop"] },
     { title: "Agents", pages: ["agent-loop", "multi-agent", "evals", "lifecycles"] },
+    { title: "Examples", pages: ["fullstack", "production-examples"] },
     { title: "Modules", pages: ["modules", "custom-modules", "modules-choose", "kind-tools", "kind-hooks", "kind-models", "kind-threads-memory", "kind-sandboxes", "kind-triggers", "kind-telemetry", "kind-secrets", "kind-policy", "module-permissions", "module-api"] },
     { title: "Security", pages: ["security", "production-checklist"] },
     { title: "Reference", pages: ["reference-options", "reference-run", "reference-result", "cli"] }

@@ -4,6 +4,81 @@ All notable changes to kiln. Versions follow [semantic versioning](https://semve
 
 ## Unreleased
 
+### Added
+
+- **One-package modules.** `kiln.Scope`, `kiln.HTTPOptions`, `kiln.Object`,
+  `kiln.Str` and `kiln.ArgString` are re-exported, and the capability names
+  are available as `kiln.PermNet`, `kiln.PermExec`, `kiln.PermFSRead`,
+  `kiln.PermFSWrite`, `kiln.PermEnv`, `kiln.PermEnvSecrets` and `kiln.PermDB`.
+  Common tool and module code can now import only `kiln`; `sdk` stays for deep
+  integration.
+- **ADK Go parity example.** `examples/adk-parity` maps the ADK agent,
+  typed tool, session, streaming, structured output and sub-agent shape to
+  kiln in one offline program. `docs/adk-parity.md` has the side-by-side
+  table.
+- **Docs guards.** `docs_test.go` fails the build when `docs/site.html`
+  mentions a removed option, omits a page from the sidebar, skips a heading
+  level, or ships a complete Go example that is not gofmt-clean.
+- **CI security gates.** The test job now builds the docs, runs short fuzz
+  passes over the broker URL/path rules, and runs `govulncheck`; a separate
+  job runs the full suite with the race detector.
+
+### Changed
+
+- `Config.Modules` and every preset (`Persistence`, `Approvals`, `Sandbox`,
+  `Audit`, `Tracing`, `MCP`, `WebSearch`, `Thinking`) are declared as
+  `[]kiln.Module` instead of `[]engine.Module`. Both are the same type, so
+  this is source-compatible.
+
+### Security
+
+- **Audit verification fails closed.** `VerifyKeyed` returns a hard error when a
+  keyed log has no `.head`, and `VerifyKeyedWithAnchor` rejects an anchor
+  without a MAC. `audit_file` validates the existing chain (prev, hash, seq)
+  before appending and refuses to append a keyed log whose tail does not
+  match its signed head.
+- **Audit records can't be rewritten after the fact.** `audit_file` snapshots
+  tool arguments before the tool runs and only records failed results when
+  `results` is enabled. `audit_http` counts permanently rejected and
+  shutdown-lost batches instead of dropping them silently.
+- **Secret redaction fails closed.** A full redaction registry now refuses new
+  values instead of evicting live secrets. `SecretLike` covers access keys,
+  JWTs, webhook secrets and connection strings, and `Scope.Env` audits and
+  registers credential-looking environment reads.
+- **SSRF and child-process hardening.** Cloud metadata and link-local
+  addresses are refused even with `AllowPrivate`. Child environments reject
+  loader/interpreter hooks (`LD_PRELOAD`, `DYLD_*`, `BASH_ENV`, …) and
+  malformed names.
+- **PII handling.** `hook_pii` no longer panics on a nil model response, keeps
+  `sdk.FatalError`/context error identity, and scrubs reply reasoning,
+  tool-call arguments, image URLs, interrupts and payloads.
+- **Sandbox hardening.** A module snapshot now returns caller-bound secrets,
+  audit and sandbox services. `require_sandbox` rejects `sandbox:local` and
+  omitted sandbox metadata. Any Unix socket mount is refused, `sandbox_local`
+  downloads write to a temp file and rename, and its `Start` honours the
+  request timeout. `sandbox_microsandbox` only attaches ids it created and
+  parses directory listings NUL-safely.
+- **Firecracker example.** Strict sandbox-id/tap validation, a serialized tap
+  allocator, validated meta paths, numeric-only PID kills (no `pkill -f`),
+  and IPv6 host filtering.
+- **Repository hygiene.** `.env`, `.env.local` and `.env.*.local` are ignored.
+- **Full-stack demo sessions.** Conversations are bound to an HttpOnly session
+  cookie (persisted in `owners.json`), and the read, write and approval routes
+  refuse another session's thread. The Tensorlake/microsandbox examples set
+  `AllowPrivateEgress` for their local demo API.
+
+### Fixed
+
+- **Scheduled jobs during startup.** `Plan.StartWith` exposes the engine
+  before modules apply, so a module that starts a goroutine in `Apply`
+  (such as `trigger_schedule`) no longer races the assignment of
+  `Agent.eng`.
+- **Docs site.** Removed the stale `WithModel`, `WithTools`, `WithSandbox`,
+  `WithAudit`, `WithTracing`, `WithApprovals`, `WithMCP`, `WithWebSearch`,
+  `WithThinking` and `GenerateText` examples; formatted the Quickstart and
+  tutorial snippets; fixed heading order and the missing sidebar entries;
+  corrected the docs deployment URL.
+
 ## v0.6.1 — 2026-11-06
 
 ### Fixed

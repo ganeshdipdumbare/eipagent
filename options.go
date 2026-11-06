@@ -27,7 +27,7 @@ type Config struct {
 	Tools []sdk.Tool
 	// Modules is the composition. The default loop, secrets and thread
 	// storage are added unless a module of the same family is listed here.
-	Modules []engine.Module
+	Modules []Module
 	// Policy is the admin policy. nil means SecurePolicy: every module gets
 	// exactly the capabilities it declares.
 	Policy *engine.Policy

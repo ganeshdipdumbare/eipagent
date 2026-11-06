@@ -8,6 +8,18 @@ import (
 	"github.com/ganeshdipdumbare/kiln/sdk"
 )
 
+// Object builds a JSON Schema object from field schemas (sdk.Object, so a
+// module can import only kiln).
+func Object(props map[string]any, required ...string) map[string]any {
+	return sdk.Object(props, required...)
+}
+
+// Str is a string field schema with a description.
+func Str(desc string) map[string]any { return sdk.Str(desc) }
+
+// ArgString reads a string tool argument.
+func ArgString(args map[string]any, key string) string { return sdk.ArgString(args, key) }
+
 // Tool defines a tool from a typed Go function. The argument schema is
 // derived from In (see SchemaOf); a string Out is returned as is, any
 // other Out is sent to the model as JSON.

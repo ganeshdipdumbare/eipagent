@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,11 +17,27 @@ import (
 type client struct {
 	t   *testing.T
 	url string
+	hc  *http.Client
+}
+
+func (c client) session() string {
+	u, _ := url.Parse(c.url)
+	for _, ck := range c.hc.Jar.Cookies(u) {
+		if ck.Name == sessionCookie {
+			return ck.Value
+		}
+	}
+	return ""
+}
+
+func (c client) adopt(sid string) {
+	u, _ := url.Parse(c.url)
+	c.hc.Jar.SetCookies(u, []*http.Cookie{{Name: sessionCookie, Value: sid, Path: "/"}})
 }
 
 func (c client) get(path string, v any) {
 	c.t.Helper()
-	r, err := http.Get(c.url + path)
+	r, err := c.hc.Get(c.url + path)
 	if err != nil {
 		c.t.Fatal(err)
 	}
@@ -31,7 +49,7 @@ func (c client) get(path string, v any) {
 func (c client) stream(path string, body any) ([]map[string]any, int) {
 	c.t.Helper()
 	b, _ := json.Marshal(body)
-	r, err := http.Post(c.url+path, "application/json", bytes.NewReader(b))
+	r, err := c.hc.Post(c.url+path, "application/json", bytes.NewReader(b))
 	if err != nil {
 		c.t.Fatal(err)
 	}
@@ -71,7 +89,8 @@ func newServer(t *testing.T, dir string) (client, *Server) {
 	}
 	ts := httptest.NewServer(s)
 	t.Cleanup(func() { ts.Close(); s.Close() })
-	return client{t, ts.URL}, s
+	jar, _ := cookiejar.New(nil)
+	return client{t, ts.URL, &http.Client{Jar: jar}}, s
 }
 
 func TestSupportDeskFlows(t *testing.T) {
@@ -104,6 +123,7 @@ func TestSupportDeskFlows(t *testing.T) {
 	// The pause survives a server restart.
 	srv.Close()
 	c2, _ := newServer(t, dir)
+	c2.adopt(c.session())
 	c2.get("/api/approvals", &ap)
 	if len(ap.Approvals) != 1 {
 		t.Fatalf("approval lost on restart: %+v", ap)
@@ -217,7 +237,8 @@ func TestPublicDemoLimits(t *testing.T) {
 	}
 	ts := httptest.NewServer(s)
 	t.Cleanup(func() { ts.Close(); s.Close() })
-	c := client{t, ts.URL}
+	jar, _ := cookiejar.New(nil)
+	c := client{t, ts.URL, &http.Client{Jar: jar}}
 	msg := map[string]any{"text": "Where is my order #1077?", "user": "sam"}
 	for i := 0; i < 2; i++ {
 		if _, code := c.stream("/api/threads/t-limit/messages", msg); code != 200 {
@@ -265,7 +286,7 @@ func TestRateLimitKeyCantBeSpoofed(t *testing.T) {
 func (c client) post(path string, body any) (map[string]any, int) {
 	c.t.Helper()
 	b, _ := json.Marshal(body)
-	r, err := http.Post(c.url+path, "application/json", bytes.NewReader(b))
+	r, err := c.hc.Post(c.url+path, "application/json", bytes.NewReader(b))
 	if err != nil {
 		c.t.Fatal(err)
 	}
@@ -273,4 +294,27 @@ func (c client) post(path string, body any) (map[string]any, int) {
 	var out map[string]any
 	json.NewDecoder(r.Body).Decode(&out)
 	return out, r.StatusCode
+}
+
+func TestSessionsAreIsolated(t *testing.T) {
+	dir := t.TempDir()
+	c1, _ := newServer(t, dir)
+	c1.stream("/api/threads/t-owner/messages", map[string]any{"text": "My mug from order #1042 arrived broken.", "user": "sam"})
+
+	c2, _ := newServer(t, dir)
+	var ap struct{ Approvals []map[string]any }
+	c2.get("/api/approvals", &ap)
+	for _, a := range ap.Approvals {
+		if a["thread"] == "t-owner" {
+			t.Fatal("another session saw the first session's approval")
+		}
+	}
+	if _, code := c2.stream("/api/threads/t-owner/messages", map[string]any{"text": "hijack", "user": "sam"}); code != 403 {
+		t.Fatalf("another session wrote to the thread: %d", code)
+	}
+	var v map[string]any
+	c2.get("/api/threads/t-owner", &v)
+	if v["error"] == nil {
+		t.Fatal("another session read the thread")
+	}
 }

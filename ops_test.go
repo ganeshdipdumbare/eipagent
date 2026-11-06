@@ -118,3 +118,17 @@ func TestReadmeExamples(t *testing.T) {
 		}
 	}
 }
+
+// The ADK parity example is the simplicity gate: it stays one import and
+// runs offline.
+func TestADKParity(t *testing.T) {
+	out, err := exec.Command("go", "run", "./examples/adk-parity").CombinedOutput()
+	if err != nil {
+		t.Fatalf("examples/adk-parity: %v\n%s", err, out)
+	}
+	for _, want := range []string{"generate:", "thread messages: 4", "stream: ok", "object:", "subagent: ok"} {
+		if !bytes.Contains(out, []byte(want)) {
+			t.Fatalf("examples/adk-parity output lacks %q", want)
+		}
+	}
+}

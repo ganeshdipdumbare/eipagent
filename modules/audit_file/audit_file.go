@@ -9,7 +9,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"path/filepath"
 	"strconv"
 	"sync"
@@ -81,7 +83,9 @@ func Apply(p *sdk.Scope) error {
 			return err
 		}
 		p.OnClose(func() { d.Close() })
-		if old, err := d.Open(base); err == nil { // continue an existing chain
+		old, oerr := d.Open(base)
+		switch {
+		case oerr == nil: // continue an existing chain
 			// A partial trailing line (a crash mid-write) can't be
 			// continued safely: appending would fuse it with the next
 			// record. Refuse rather than silently truncate an audit log.
@@ -102,18 +106,37 @@ func Apply(p *sdk.Scope) error {
 			for sc.Scan() {
 				line++
 				var rec struct {
-					Hash string `json:"hash"`
-					Body struct {
-						Seq int `json:"seq"`
-					} `json:"body"`
+					Body json.RawMessage `json:"body"`
+					Prev string          `json:"prev"`
+					Hash string          `json:"hash"`
 				}
 				if err := json.Unmarshal(sc.Bytes(), &rec); err != nil {
 					old.Close()
 					return fmt.Errorf("audit_file: %s line %d is not valid JSON; refusing to continue the chain", logPath, line)
 				}
-				if rec.Body.Seq != line {
+				var body struct {
+					Seq int `json:"seq"`
+				}
+				if err := json.Unmarshal(rec.Body, &body); err != nil {
 					old.Close()
-					return fmt.Errorf("audit_file: %s line %d has seq %d; refusing to continue a broken chain", logPath, line, rec.Body.Seq)
+					return fmt.Errorf("audit_file: %s line %d has no sequence; refusing to continue the chain", logPath, line)
+				}
+				if body.Seq != line {
+					old.Close()
+					return fmt.Errorf("audit_file: %s line %d has seq %d; refusing to continue a broken chain", logPath, line, body.Seq)
+				}
+				if rec.Prev != prev {
+					old.Close()
+					return fmt.Errorf("audit_file: %s line %d does not follow the previous hash; refusing to continue a broken chain", logPath, line)
+				}
+				if !isHash(rec.Hash) {
+					old.Close()
+					return fmt.Errorf("audit_file: %s line %d has an invalid hash; refusing to continue the chain", logPath, line)
+				}
+				sum := sha256.Sum256(append([]byte(prev), rec.Body...))
+				if hex.EncodeToString(sum[:]) != rec.Hash {
+					old.Close()
+					return fmt.Errorf("audit_file: %s line %d fails its hash; refusing to continue a forged chain", logPath, line)
 				}
 				prev = rec.Hash
 				seq = line
@@ -123,6 +146,32 @@ func Apply(p *sdk.Scope) error {
 				return fmt.Errorf("audit_file: reading %s: %v", logPath, err)
 			}
 			old.Close()
+			// A keyed log must match its signed head before we append:
+			// otherwise a truncated tail is silently re-signed below.
+			if len(chainKey) > 0 && seq > 0 {
+				hb, herr := d.ReadFile(base + ".head")
+				if errors.Is(herr, fs.ErrNotExist) {
+					return fmt.Errorf("audit_file: %s has no signed head; refusing to append to a keyed log whose tail cannot be checked", logPath)
+				}
+				if herr != nil {
+					return fmt.Errorf("audit_file: reading %s.head: %v", logPath, herr)
+				}
+				var head struct {
+					Seq  int    `json:"seq"`
+					Hash string `json:"hash"`
+					MAC  string `json:"mac"`
+				}
+				if err := json.Unmarshal(hb, &head); err != nil {
+					return fmt.Errorf("audit_file: %s.head: %v", logPath, err)
+				}
+				if head.Seq != seq || head.Hash != prev || !hmac.Equal([]byte(head.MAC), []byte(headMAC(chainKey, head.Seq, head.Hash))) {
+					return fmt.Errorf("audit_file: %s does not match %s.head; refusing to append to a truncated or forged log", logPath, logPath)
+				}
+			}
+		case errors.Is(oerr, fs.ErrNotExist):
+			// A new log. Nothing to continue.
+		default:
+			return fmt.Errorf("audit_file: opening %s: %w", logPath, oerr)
 		}
 		nf, err := d.AppendFile(base, 0o600)
 		if err != nil {
@@ -133,13 +182,6 @@ func Apply(p *sdk.Scope) error {
 	}
 	var mu sync.Mutex
 	lastErr := ""
-	headMAC := func(seq int, hash string) string {
-		m := hmac.New(sha256.New, chainKey)
-		m.Write([]byte(strconv.Itoa(seq)))
-		m.Write([]byte("|"))
-		m.Write([]byte(hash))
-		return hex.EncodeToString(m.Sum(nil))
-	}
 	// writeHead keeps <log>.head in step with the last line, so a
 	// truncated tail is detectable (kiln audit verify / audit.VerifyKeyed).
 	writeHead := func(seq int, hash string) {
@@ -148,7 +190,7 @@ func Apply(p *sdk.Scope) error {
 		}
 		mac := ""
 		if len(chainKey) > 0 {
-			mac = headMAC(seq, hash)
+			mac = headMAC(chainKey, seq, hash)
 		}
 		b, _ := json.Marshal(struct {
 			Seq  int    `json:"seq"`
@@ -247,6 +289,17 @@ func Apply(p *sdk.Scope) error {
 	})
 	p.WrapTool(func(c context.Context, req *sdk.ToolRequest, next sdk.ToolHandler) (*sdk.ToolResult, error) {
 		t := time.Now()
+		// Snapshot the arguments before next runs: a tool receives the same
+		// map and could otherwise rewrite what the audit record says it was
+		// asked to do.
+		var args map[string]any
+		if logArgs {
+			args = cloneMap(req.Call.Args)
+		}
+		decisionType, decidedBy := "", ""
+		if req.Decision != nil {
+			decisionType, decidedBy = req.Decision.Type, req.Decision.By
+		}
 		r, err := next(c, req)
 		d := runFields(req.Run, req.Thread, req.User)
 		d["tool"], d["call_id"], d["step"], d["ms"] = req.Call.Name, req.Call.ID, req.Step, time.Since(t).Milliseconds()
@@ -254,23 +307,24 @@ func Apply(p *sdk.Scope) error {
 			d["module"] = req.Tool.Module
 		}
 		if logArgs {
-			d["args"] = req.Call.Args
+			d["args"] = args
 		}
-		if req.Decision != nil {
-			d["decision"] = req.Decision.Type
-			d["decided_by"] = req.Decision.By
+		if decisionType != "" {
+			d["decision"], d["decided_by"] = decisionType, decidedBy
 		}
 		switch {
 		case err != nil:
 			d["outcome"], d["error"] = "error", err.Error()
-		case r.Interrupt != nil:
+		case r != nil && r.Interrupt != nil:
 			d["outcome"] = "interrupted"
-		case r.IsError:
+		case r != nil && r.IsError:
 			d["outcome"] = "failed"
-			d["result"] = r.Content
+			if logResults {
+				d["result"] = r.Content
+			}
 		default:
 			d["outcome"] = "ok"
-			if logResults {
+			if logResults && r != nil {
 				d["result"] = r.Content
 			}
 		}
@@ -278,6 +332,39 @@ func Apply(p *sdk.Scope) error {
 		return r, err
 	})
 	return p.Provide("audit", &sdk.Audit{Record: record})
+}
+
+// headMAC must match audit.HeadMAC: HMAC-SHA256 of "seq|hash".
+func headMAC(key []byte, seq int, hash string) string {
+	m := hmac.New(sha256.New, key)
+	m.Write([]byte(strconv.Itoa(seq) + "|" + hash))
+	return hex.EncodeToString(m.Sum(nil))
+}
+
+func isHash(s string) bool {
+	if len(s) != sha256.Size*2 {
+		return false
+	}
+	_, err := hex.DecodeString(s)
+	return err == nil
+}
+
+// cloneMap snapshots tool arguments through their JSON form. A tool gets
+// the live map and must not be able to change the audit record after the
+// fact.
+func cloneMap(m map[string]any) map[string]any {
+	if m == nil {
+		return nil
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return m
+	}
+	var out map[string]any
+	if json.Unmarshal(b, &out) != nil {
+		return m
+	}
+	return out
 }
 
 // Module is the compiled form of "audit_file". modules/std registers it.

@@ -14,6 +14,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/ganeshdipdumbare/kiln"
 	"github.com/ganeshdipdumbare/kiln/audit"
@@ -40,11 +42,18 @@ type Config struct {
 }
 
 type Server struct {
-	agent *kiln.Agent
-	shop  *Shop
-	cfg   Config
-	mux   *http.ServeMux
-	limit *limiter
+	agent      *kiln.Agent
+	shop       *Shop
+	cfg        Config
+	mux        *http.ServeMux
+	limit      *limiter
+	mu         sync.Mutex
+	owners     map[string]string // thread id -> session id
+	ownersPath string
+	auditMu    sync.Mutex
+	auditAt    time.Time
+	auditCount int
+	auditOK    bool
 }
 
 // User identities. A real app takes these from its login session.
@@ -112,7 +121,10 @@ func New(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{agent: agent, shop: shop, cfg: cfg, mux: http.NewServeMux(), limit: newLimiter(cfg.RatePerMin, cfg.MaxRuns, cfg.TrustProxy)}
+	s := &Server{agent: agent, shop: shop, cfg: cfg, mux: http.NewServeMux(), limit: newLimiter(cfg.RatePerMin, cfg.MaxRuns, cfg.TrustProxy), owners: map[string]string{}, ownersPath: filepath.Join(cfg.DataDir, "owners.json")}
+	if b, err := os.ReadFile(s.ownersPath); err == nil {
+		json.Unmarshal(b, &s.owners)
+	}
 	s.routes()
 	return s, nil
 }
@@ -124,16 +136,16 @@ func (s *Server) routes() {
 	ui, _ := fs.Sub(uiFS, "ui")
 	s.mux.Handle("GET /", http.FileServerFS(ui))
 	s.mux.HandleFunc("GET /api/health", s.health)
-	s.mux.HandleFunc("GET /api/threads", s.listThreads)
-	s.mux.HandleFunc("POST /api/threads", s.newThread)
-	s.mux.HandleFunc("GET /api/threads/{id}", s.getThread)
+	s.mux.HandleFunc("GET /api/threads", s.guard(s.listThreads))
+	s.mux.HandleFunc("POST /api/threads", s.guard(s.newThread))
+	s.mux.HandleFunc("GET /api/threads/{id}", s.guard(s.getThread))
 	s.mux.HandleFunc("POST /api/threads/{id}/messages", s.guard(s.postMessage))
 	s.mux.HandleFunc("POST /api/threads/{id}/decisions", s.guard(s.postDecisions))
-	s.mux.HandleFunc("GET /api/approvals", s.approvals)
-	s.mux.HandleFunc("GET /api/audit", s.auditLog)
-	s.mux.HandleFunc("GET /api/orders", func(w http.ResponseWriter, r *http.Request) {
+	s.mux.HandleFunc("GET /api/approvals", s.guard(s.approvals))
+	s.mux.HandleFunc("GET /api/audit", s.guard(s.auditLog))
+	s.mux.HandleFunc("GET /api/orders", s.guard(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"orders": s.shop.Orders(), "outbox": s.shop.Outbox()})
-	})
+	}))
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
@@ -146,7 +158,71 @@ func (s *Server) newThread(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"id": "t-" + hex.EncodeToString(b)})
+	id := "t-" + hex.EncodeToString(b)
+	s.mu.Lock()
+	s.owners[id] = s.session(w, r)
+	s.saveOwnersLocked()
+	s.mu.Unlock()
+	writeJSON(w, 200, map[string]any{"id": id})
+}
+
+// session is the browser's demo session. It is not a login: it only keeps
+// one visitor's conversations away from another visitor's.
+const sessionCookie = "kiln_sid"
+
+func (s *Server) session(w http.ResponseWriter, r *http.Request) string {
+	if c, err := r.Cookie(sessionCookie); err == nil && len(c.Value) == 32 {
+		if _, err := hex.DecodeString(c.Value); err == nil {
+			return c.Value
+		}
+	}
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return ""
+	}
+	id := hex.EncodeToString(b)
+	http.SetCookie(w, &http.Cookie{
+		Name: sessionCookie, Value: id, Path: "/", HttpOnly: true,
+		SameSite: http.SameSiteLaxMode, Secure: r.TLS != nil,
+	})
+	return id
+}
+
+func (s *Server) owned(sid, id string) bool {
+	if sid == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	owner, ok := s.owners[id]
+	return ok && owner == sid
+}
+
+// claim binds an unowned thread to this session; it refuses a thread that
+// belongs to another session.
+func (s *Server) claim(sid, id string) bool {
+	if sid == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	owner, ok := s.owners[id]
+	if !ok {
+		s.owners[id] = sid
+		s.saveOwnersLocked()
+		return true
+	}
+	return owner == sid
+}
+
+func (s *Server) saveOwnersLocked() {
+	if s.ownersPath == "" || s.ownersPath == "owners.json" {
+		return
+	}
+	b, err := json.Marshal(s.owners)
+	if err == nil {
+		_ = os.WriteFile(s.ownersPath, b, 0o600)
+	}
 }
 
 // ---- reading threads ----
@@ -205,6 +281,7 @@ func (s *Server) view(ctx context.Context, id string, full bool) (threadView, er
 }
 
 func (s *Server) listThreads(w http.ResponseWriter, r *http.Request) {
+	sid := s.session(w, r)
 	ids, err := s.agent.Threads(r.Context(), "t-")
 	if err != nil {
 		writeErr(w, 500, err)
@@ -212,6 +289,9 @@ func (s *Server) listThreads(w http.ResponseWriter, r *http.Request) {
 	}
 	out := []threadView{}
 	for _, id := range ids {
+		if !s.owned(sid, id) {
+			continue
+		}
 		if v, err := s.view(r.Context(), id, false); err == nil {
 			out = append(out, v)
 		}
@@ -224,6 +304,10 @@ func (s *Server) getThread(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, errors.New("bad thread id"))
 		return
 	}
+	if !s.owned(s.session(w, r), r.PathValue("id")) {
+		writeErr(w, 404, errors.New("thread not found"))
+		return
+	}
 	v, err := s.view(r.Context(), r.PathValue("id"), true)
 	if err != nil {
 		writeErr(w, 500, err)
@@ -234,6 +318,7 @@ func (s *Server) getThread(w http.ResponseWriter, r *http.Request) {
 
 // approvals lists every paused run, across all conversations.
 func (s *Server) approvals(w http.ResponseWriter, r *http.Request) {
+	sid := s.session(w, r)
 	ids, _ := s.agent.Threads(r.Context(), "t-")
 	type item struct {
 		Thread string `json:"thread"`
@@ -242,6 +327,9 @@ func (s *Server) approvals(w http.ResponseWriter, r *http.Request) {
 	}
 	out := []item{}
 	for _, id := range ids {
+		if !s.owned(sid, id) {
+			continue
+		}
 		v, err := s.view(r.Context(), id, false)
 		if err != nil {
 			continue
@@ -269,6 +357,10 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 401, errors.New("unknown user"))
 		return
 	}
+	if !s.claim(s.session(w, r), r.PathValue("id")) {
+		writeErr(w, 403, errors.New("this conversation belongs to another session"))
+		return
+	}
 	stream := s.agent.Thread(r.PathValue("id")).Stream(r.Context(), body.Text, kiln.Run{User: body.User, Roles: []string{u.Role}})
 	sendSSE(w, stream)
 }
@@ -288,6 +380,10 @@ func (s *Server) postDecisions(w http.ResponseWriter, r *http.Request) {
 	u, ok := users[body.User]
 	if !ok || u.Role != "supervisor" {
 		writeErr(w, 403, errors.New("only supervisors can decide on approvals"))
+		return
+	}
+	if !s.owned(s.session(w, r), r.PathValue("id")) {
+		writeErr(w, 403, errors.New("this conversation belongs to another session"))
 		return
 	}
 	for i := range body.Decisions {
@@ -335,16 +431,30 @@ func (s *Server) auditLog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer f.Close()
+	// Read only the tail: the response returns the last 60 records, and
+	// scanning a multi-MB log twice per request is a cheap DoS.
+	if st, serr := f.Stat(); serr == nil && st.Size() > 1<<20 {
+		f.Seek(st.Size()-1<<20, 0)
+	}
 	var entries []map[string]any
 	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 1<<20), 1<<26)
+	sc.Buffer(make([]byte, 64<<10), 1<<20)
+	first := true
 	for sc.Scan() {
+		if first && len(entries) == 0 {
+			// If we started in the middle of a line, drop that fragment.
+			if b := sc.Bytes(); len(b) > 0 && b[0] != '{' {
+				first = false
+				continue
+			}
+		}
+		first = false
 		var line struct {
 			Body map[string]any `json:"body"`
 			Hash string         `json:"hash"`
 		}
 		if json.Unmarshal(sc.Bytes(), &line) != nil || line.Body == nil {
-			continue // a damaged line; Verify below reports the broken chain
+			continue // a damaged line; Verify reports the broken chain
 		}
 		h := line.Hash
 		if len(h) > 10 {
@@ -352,15 +462,26 @@ func (s *Server) auditLog(w http.ResponseWriter, r *http.Request) {
 		}
 		line.Body["hash"] = h
 		entries = append(entries, line.Body)
+		if len(entries) > 120 {
+			entries = entries[len(entries)-120:]
+		}
 	}
-	n, verr := audit.Verify(path)
+	// Verification is O(file); cache it briefly so /api/audit cannot be
+	// used to re-hash the whole log on every request.
+	s.auditMu.Lock()
+	if time.Since(s.auditAt) > 10*time.Second {
+		s.auditCount, err = audit.Verify(path)
+		s.auditOK, s.auditAt = err == nil, time.Now()
+	}
+	n, ok := s.auditCount, s.auditOK
+	s.auditMu.Unlock()
 	for i, j := 0, len(entries)-1; i < j; i, j = i+1, j-1 { // newest first
 		entries[i], entries[j] = entries[j], entries[i]
 	}
 	if len(entries) > 60 {
 		entries = entries[:60]
 	}
-	writeJSON(w, 200, map[string]any{"entries": entries, "verified": verr == nil, "count": n})
+	writeJSON(w, 200, map[string]any{"entries": entries, "verified": ok, "count": n})
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

@@ -63,7 +63,7 @@ func main() {
 
 	// billing is granted the Stripe key. Its tool leaks the key into its
 	// result on purpose, to show redaction. It is a compiled application
-	// module (WithModule): it declares the one secret it may resolve.
+	// module (Config.Modules): it declares the one secret it may resolve.
 	billing := kiln.Module{
 		Name:     "billing",
 		Requires: []string{"secrets"},

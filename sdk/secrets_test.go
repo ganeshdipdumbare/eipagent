@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -21,45 +22,28 @@ func resetRedactions(t *testing.T) {
 	redactSorted = nil
 	redactReplacer = nil
 	redactValues = map[string][]string{}
-	redactValueOrder = nil
 	redactEvictLogged = false
 	redactMu.Unlock()
 }
 
-func TestRedactionEvictionKeepsNewSecrets(t *testing.T) {
+func TestRedactionRegistryRefusesNewValuesWhenFull(t *testing.T) {
 	resetRedactions(t)
 	oldest := "oldest-secret-value-xyz"
 	if !AddRedaction(oldest) {
 		t.Fatal("oldest not registered")
 	}
-	for i := 0; len(redactOrder) < maxRedactions-20; i++ {
-		if !AddRedaction(fmt.Sprintf("filler-secret-%08d", i)) {
-			t.Fatal("filler not registered")
-		}
+	for i := 0; len(redactOrder) < maxRedactions-5; i++ {
+		AddRedaction(fmt.Sprintf("filler-secret-%08d", i))
 	}
-	long := strings.Repeat("L", 64) + "-long-secret"
-	if !AddRedaction(long) {
-		t.Fatal("long secret not registered")
+	newest := strings.Repeat("N", 64) + "-new-secret"
+	if AddRedaction(newest) {
+		t.Fatal("a new value was accepted after the registry filled")
 	}
-	for i := 0; i < 25; i++ {
-		if !AddRedaction(fmt.Sprintf("newest-secret-%08d", i)) {
-			t.Fatal("newest not registered")
-		}
+	if out := Redact(oldest); !strings.Contains(out, "[REDACTED]") {
+		t.Fatalf("an existing secret was evicted: %s", out)
 	}
-	for _, form := range []string{long, base64.StdEncoding.EncodeToString([]byte(long)), fmt.Sprintf("%x", []byte(long))} {
-		if out := Redact(form); !strings.Contains(out, "[REDACTED]") {
-			t.Fatalf("long secret form was evicted: %s", out)
-		}
-	}
-	// Re-registering a value refreshes it, so a busy secret is not evicted.
-	if !AddRedaction(long) {
-		t.Fatal("long secret re-register failed")
-	}
-	if Redact(oldest) != oldest {
-		t.Fatal("the oldest value was not evicted")
-	}
-	if out := Redact("newest-secret-00000000"); !strings.Contains(out, "[REDACTED]") {
-		t.Fatalf("newest secret not redacted: %s", out)
+	if !AddRedaction(oldest) {
+		t.Fatal("re-registering an existing value failed")
 	}
 }
 
@@ -213,5 +197,25 @@ func TestSandboxSpecWorkdir(t *testing.T) {
 		if err := CheckSandboxSpec(SandboxSpec{Workdir: wd}); err != nil {
 			t.Errorf("workdir %q refused: %v", wd, err)
 		}
+	}
+}
+
+func TestSandboxSpecRefusesRenamedSocketMount(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "kiln-sock-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	sock := filepath.Join(dir, "agent.sock")
+	l, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	if err := CheckSandboxSpec(SandboxSpec{Mounts: []Mount{{Host: sock, Box: "/s"}}}); err == nil {
+		t.Fatal("a renamed Unix socket was mountable")
+	}
+	if err := CheckSandboxSpec(SandboxSpec{Mounts: []Mount{{Host: dir, Box: "/d"}}}); err == nil {
+		t.Fatal("a directory holding a renamed Unix socket was mountable")
 	}
 }

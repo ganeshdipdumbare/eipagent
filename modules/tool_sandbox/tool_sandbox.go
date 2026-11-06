@@ -74,7 +74,7 @@ func Apply(p *sdk.Scope) error {
 	p.AddTool(sdk.Tool{
 		Name: "sandbox_create", Description: "Start a new isolated sandbox (" + provName + ") and return its id",
 		Schema: sdk.Object(map[string]any{"image": sdk.Str("container image (optional)")}),
-		Meta:   map[string]any{"risk": "medium"},
+		Meta:   map[string]any{"risk": "medium", "sandbox": "sandbox:" + provName},
 		Run: func(c context.Context, a map[string]any) (string, error) {
 			sp, ok := p.Service("sandbox/" + provName).(*sdk.SandboxProvider)
 			if !ok {
@@ -139,6 +139,7 @@ func Apply(p *sdk.Scope) error {
 	p.AddTool(sdk.Tool{
 		Name: "sandbox_exec", Description: "Run a shell command inside a sandbox",
 		Schema: sdk.Object(map[string]any{"id": idArg, "command": sdk.Str("shell command"), "timeout_seconds": sdk.Int("timeout")}, "id", "command"),
+		Meta:   map[string]any{"risk": "high", "sandbox": "sandbox:" + provName},
 		Run: func(c context.Context, a map[string]any) (string, error) {
 			b, err := get(c, sdk.ArgString(a, "id"))
 			if err != nil {
@@ -161,6 +162,7 @@ func Apply(p *sdk.Scope) error {
 	p.AddTool(sdk.Tool{
 		Name: "sandbox_write_file", Description: "Write a file inside a sandbox",
 		Schema: sdk.Object(map[string]any{"id": idArg, "path": sdk.Str("path"), "content": sdk.Str("content")}, "id", "path", "content"),
+		Meta:   map[string]any{"risk": "medium", "sandbox": "sandbox:" + provName},
 		Run: func(c context.Context, a map[string]any) (string, error) {
 			b, err := get(c, sdk.ArgString(a, "id"))
 			if err != nil {
@@ -205,6 +207,7 @@ func Apply(p *sdk.Scope) error {
 	p.AddTool(sdk.Tool{
 		Name: "sandbox_destroy", Description: "Destroy a sandbox and everything in it",
 		Schema: sdk.Object(map[string]any{"id": idArg}, "id"),
+		Meta:   map[string]any{"risk": "medium", "sandbox": "sandbox:" + provName},
 		Run: func(c context.Context, a map[string]any) (string, error) {
 			id := sdk.ArgString(a, "id")
 			b, err := get(c, id)

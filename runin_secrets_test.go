@@ -178,7 +178,7 @@ func TestRunInMicrosandbox(t *testing.T) {
 	}
 }
 
-// WithSandbox("microsandbox") runs shell tools in a microVM per thread.
+// kiln.Sandbox("microsandbox") runs shell tools in a microVM per thread.
 func TestWithSandboxMicrosandbox(t *testing.T) {
 	if _, err := exec.LookPath("msb"); err != nil || testing.Short() {
 		t.Skip("needs msb (microsandbox)")

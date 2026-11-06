@@ -50,6 +50,8 @@ type (
 	ProviderError = sdk.ProviderError
 	Checkpointer  = sdk.Checkpointer
 	Store         = sdk.Store
+	Scope         = sdk.Scope
+	HTTPOptions   = sdk.HTTPOptions
 )
 
 var (
@@ -94,11 +96,9 @@ func newLocal(cfg Config) (*Agent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("kiln: %w", err)
 	}
-	eng, err := plan.Start()
-	if err != nil {
+	if _, err := plan.StartWith(func(e *engine.Engine) { a.eng = e }); err != nil {
 		return nil, fmt.Errorf("kiln: %w", err)
 	}
-	a.eng = eng
 	return a, nil
 }
 

@@ -152,7 +152,10 @@ func Apply(p *sdk.Scope) error {
 				if se, ok := err.(*httpStatusError); ok && !retryableStatus(se.code) {
 					// A permanent rejection (auth error, wrong endpoint) must
 					// not block every later record behind it: drop this batch
-					// and keep the stream moving.
+					// and keep the stream moving, but count it.
+					mu.Lock()
+					dropped += n
+					mu.Unlock()
 					p.Logf("audit_http: dropping %d records: %v", n, err)
 					continue
 				}
@@ -200,10 +203,14 @@ func Apply(p *sdk.Scope) error {
 			<-done
 			flush()
 			mu.Lock()
+			// Whatever is still queued at shutdown is lost; count it so the
+			// operator sees a real number rather than silence.
+			dropped += len(queue)
+			queue = nil
 			n := dropped
 			mu.Unlock()
 			if n > 0 {
-				p.Logf("audit_http: dropped %d records (queue full)", n)
+				p.Logf("audit_http: dropped %d records (queue full or shutdown)", n)
 			}
 		}
 	})

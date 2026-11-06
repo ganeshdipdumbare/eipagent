@@ -9,3 +9,11 @@ release-notes.md
 .claude/
 .deepsec/
 .eipagent/
+
+# generated docs build (CI runs docs/build.sh)
+docs/public/
+
+# local credentials
+.env
+.env.local
+.env.*.local

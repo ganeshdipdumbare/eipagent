@@ -163,9 +163,10 @@ func main() {
 			Provider: "microsandbox",
 			Binary:   bin,
 			Spec:     sdk.SandboxSpec{Network: sdk.NetworkPolicy{Mode: "none"}},
-			// The placeholder becomes the real token only on GET requests
-			// under /orders on this host.
-			SecretHosts: map[string][]string{"ACME_API_TOKEN": {"GET 127.0.0.1/orders*"}},
+			// The demo API is a local httptest server; the egress rules below
+			// still limit which host/path may receive the token.
+			AllowPrivateEgress: true,
+			SecretHosts:        map[string][]string{"ACME_API_TOKEN": {"GET 127.0.0.1/orders*"}},
 		},
 	})
 	if err != nil {

@@ -1,4 +1,4 @@
-// A module in its own Go package: import it, register it with WithModule,
+// A module in its own Go package: import it, put it in Config.Modules,
 // and configure it with New(...).
 //
 //	go run ./examples/custom-module

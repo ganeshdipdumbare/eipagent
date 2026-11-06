@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -115,7 +116,9 @@ func Apply(p *sdk.Scope) error {
 				wd = "/workspace"
 			}
 			b := make([]byte, 6)
-			rand.Read(b)
+			if _, err := rand.Read(b); err != nil {
+				return nil, fmt.Errorf("sandbox_microsandbox: random id: %w", err)
+			}
 			id := "kiln-" + hex.EncodeToString(b)
 			args := []string{"create", "-q", "-n", id, "--mkdir", wd, "-w", wd, "--label", "kiln=1"}
 			switch spec.Network.Mode {
@@ -159,7 +162,7 @@ func Apply(p *sdk.Scope) error {
 			return vm(id, name, wd, run, start), nil
 		},
 		Attach: func(c context.Context, id string) (*sdk.Sandbox, error) {
-			if !validID(id) { // ids come back from saved threads; never let one become a flag
+			if !ownedID(id) { // ids come back from saved threads; never let one become a flag or another tenant's box
 				return nil, fmt.Errorf("sandbox_microsandbox: invalid sandbox name %q", id)
 			}
 			if _, _, code, err := run(c, nil, "inspect", "--", id); err != nil || code != 0 {
@@ -185,6 +188,12 @@ func validID(id string) bool {
 		}
 	}
 	return true
+}
+
+// ownedID is an id this provider created ("kiln-" + hex), so Attach cannot
+// adopt another tenant's or another product's microsandbox by name.
+func ownedID(id string) bool {
+	return len(id) > len("kiln-") && strings.HasPrefix(id, "kiln-") && validID(id)
 }
 
 type runner func(c context.Context, stdin []byte, args ...string) (string, string, int, error)
@@ -262,16 +271,22 @@ func vm(id, provider, wd string, run runner, start starter) *sdk.Sandbox {
 			return err
 		},
 		ListDir: func(c context.Context, fpath string) ([]sdk.FileInfo, error) {
-			out, err := sh(c, nil, `ls -1Ap -- "$1"`, abs(fpath))
+			const script = `find -- "$1" -mindepth 1 -maxdepth 1 -exec sh -c 'for f do if [ -d "$f" ]; then t=d; s=0; else t=f; s=$(wc -c < "$f" 2>/dev/null || echo 0); fi; printf "%s\0%s\0%s\0" "$t" "$s" "$(basename -- "$f")"; done' _ {} +`
+			out, err := sh(c, nil, script, abs(fpath))
 			if err != nil {
 				return nil, err
 			}
+			parts := strings.Split(out, "\x00")
+			if len(parts) > 0 && parts[len(parts)-1] == "" {
+				parts = parts[:len(parts)-1]
+			}
+			if len(parts)%3 != 0 {
+				return nil, fmt.Errorf("sandbox_microsandbox: unexpected directory listing")
+			}
 			var fis []sdk.FileInfo
-			for _, l := range strings.Split(strings.TrimSpace(out), "\n") {
-				if l == "" {
-					continue
-				}
-				fis = append(fis, sdk.FileInfo{Name: strings.TrimSuffix(l, "/"), IsDir: strings.HasSuffix(l, "/")})
+			for i := 0; i < len(parts); i += 3 {
+				size, _ := strconv.ParseInt(parts[i+1], 10, 64)
+				fis = append(fis, sdk.FileInfo{Name: parts[i+2], IsDir: parts[i] == "d", Size: size})
 			}
 			return fis, nil
 		},

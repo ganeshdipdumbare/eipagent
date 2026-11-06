@@ -18,6 +18,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ganeshdipdumbare/kiln"
@@ -155,6 +156,27 @@ func (c fcConfig) check() error {
 	return nil
 }
 
+// reserveTap picks a free tap name and creates it under one lock, so two
+// concurrent creates in this process cannot choose the same index.
+var tapMu sync.Mutex
+
+func reserveTap(ctx context.Context, cfg fcConfig) (string, int, error) {
+	tapMu.Lock()
+	defer tapMu.Unlock()
+	for i := 0; i < 20; i++ {
+		idx := randomIndex()
+		tap := fmt.Sprintf("%s%d", cfg.tapPrefix, idx)
+		if err := cfg.runPriv(ctx, "ip", "link", "show", tap); err == nil {
+			continue // in use
+		}
+		if err := cfg.runPriv(ctx, "ip", "tuntap", "add", "dev", tap, "mode", "tap"); err != nil {
+			return "", 0, fmt.Errorf("firecracker: create tap %s: %w", tap, err)
+		}
+		return tap, idx, nil
+	}
+	return "", 0, errors.New("firecracker: no free tap device")
+}
+
 func createVM(ctx context.Context, p *sdk.Scope, cfg fcConfig, spec sdk.SandboxSpec) (*sdk.Sandbox, error) {
 	if len(spec.Mounts) > 0 {
 		return nil, errors.New("firecracker: host mounts are not supported")
@@ -173,14 +195,9 @@ func createVM(ctx context.Context, p *sdk.Scope, cfg fcConfig, spec sdk.SandboxS
 		return nil, err
 	}
 	id := "fc-" + randomHex(6)
-	idx := randomIndex()
-	tap := fmt.Sprintf("%s%d", cfg.tapPrefix, idx)
-	for i := 0; i < 20; i++ {
-		if err := cfg.runPriv(ctx, "ip", "link", "show", tap); err != nil {
-			break
-		}
-		idx = randomIndex()
-		tap = fmt.Sprintf("%s%d", cfg.tapPrefix, idx)
+	tap, idx, err := reserveTap(ctx, cfg)
+	if err != nil {
+		return nil, err
 	}
 	dir := filepath.Join(cfg.workdir, id)
 	if cfg.remoteHost == "" {
@@ -201,9 +218,6 @@ func createVM(ctx context.Context, p *sdk.Scope, cfg fcConfig, spec sdk.SandboxS
 		}
 	}()
 
-	if err := cfg.runPriv(ctx, "ip", "tuntap", "add", "dev", tap, "mode", "tap"); err != nil {
-		return nil, fmt.Errorf("firecracker: create tap %s: %w", tap, err)
-	}
 	if err := cfg.runPriv(ctx, "ip", "addr", "add", hostIP+"/30", "dev", tap); err != nil {
 		return nil, fmt.Errorf("firecracker: address tap %s: %w", tap, err)
 	}
@@ -225,6 +239,14 @@ func createVM(ctx context.Context, p *sdk.Scope, cfg fcConfig, spec sdk.SandboxS
 		}
 		if err := cfg.runPriv(ctx, "iptables", "-w", "5", "-I", "FORWARD", "2", "-o", tap, "-j", "DROP"); err != nil {
 			return nil, fmt.Errorf("firecracker: network none needs iptables: %w", err)
+		}
+		// The guest also has an IPv6 link-local address; filter it too, or
+		// the host is reachable over IPv6 despite the IPv4 rules.
+		if err := cfg.runPriv(ctx, "ip6tables", "-w", "5", "-I", "INPUT", "1", "-i", tap, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"); err != nil {
+			return nil, fmt.Errorf("firecracker: network none needs ip6tables: %w", err)
+		}
+		if err := cfg.runPriv(ctx, "ip6tables", "-w", "5", "-I", "INPUT", "2", "-i", tap, "-j", "DROP"); err != nil {
+			return nil, fmt.Errorf("firecracker: network none needs ip6tables: %w", err)
 		}
 	}
 	rootfs := filepath.Join(dir, "rootfs.ext4")
@@ -307,7 +329,14 @@ func writeMeta(ctx context.Context, cfg fcConfig, m *meta) error {
 }
 
 func attachVM(ctx context.Context, p *sdk.Scope, cfg fcConfig, id string) (*sdk.Sandbox, error) {
-	path := filepath.Join(cfg.workdir, id, "meta.json")
+	if !validVMID(id) {
+		return nil, fmt.Errorf("firecracker: attach %q: invalid sandbox id", id)
+	}
+	wantDir := filepath.Join(cfg.workdir, id)
+	if _, err := safeRel(cfg.workdir, wantDir); err != nil {
+		return nil, fmt.Errorf("firecracker: attach %s: %w", id, err)
+	}
+	path := filepath.Join(wantDir, "meta.json")
 	var b []byte
 	var err error
 	if cfg.remoteHost != "" {
@@ -322,11 +351,10 @@ func attachVM(ctx context.Context, p *sdk.Scope, cfg fcConfig, id string) (*sdk.
 	if err := json.Unmarshal(b, &m); err != nil {
 		return nil, err
 	}
-	wantDir := filepath.Join(cfg.workdir, id)
 	if m.ID != id || filepath.Clean(m.Dir) != filepath.Clean(wantDir) ||
-		!strings.HasPrefix(filepath.Clean(m.PidFile), filepath.Clean(wantDir)+string(filepath.Separator)) ||
-		!strings.HasPrefix(filepath.Clean(m.Socket), filepath.Clean(wantDir)+string(filepath.Separator)) ||
-		!strings.HasPrefix(m.Tap, cfg.tapPrefix) {
+		filepath.Clean(m.PidFile) != filepath.Join(wantDir, "firecracker.pid") ||
+		filepath.Clean(m.Socket) != filepath.Join(wantDir, "firecracker.sock") ||
+		!validTap(m.Tap, cfg.tapPrefix) {
 		return nil, fmt.Errorf("firecracker: attach %s: meta does not belong to this sandbox", id)
 	}
 	if err := waitSSH(ctx, cfg, m.GuestIP, 10*time.Second); err != nil {
@@ -334,6 +362,49 @@ func attachVM(ctx context.Context, p *sdk.Scope, cfg fcConfig, id string) (*sdk.
 	}
 	p.Logf("attached firecracker microVM %s at %s", id, m.GuestIP)
 	return wrapVM(cfg, &m), nil
+}
+
+// validVMID accepts only ids this provider creates ("fc-" + 12 hex).
+func validVMID(id string) bool {
+	if len(id) != len("fc-")+12 || !strings.HasPrefix(id, "fc-") {
+		return false
+	}
+	_, err := hex.DecodeString(id[len("fc-"):])
+	return err == nil
+}
+
+// validTap accepts "<prefix><digits>" and nothing a shell or iptables
+// could interpret.
+func validTap(tap, prefix string) bool {
+	if !strings.HasPrefix(tap, prefix) || len(tap) == len(prefix) {
+		return false
+	}
+	for _, r := range tap[len(prefix):] {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// safeRel refuses a path that escapes root after cleaning.
+func safeRel(root, p string) (string, error) {
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return "", err
+	}
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(absRoot, abs)
+	if err != nil {
+		return "", err
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("%s is outside %s", p, root)
+	}
+	return rel, nil
 }
 
 func startFirecracker(cfg fcConfig, m *meta) error {
@@ -471,30 +542,59 @@ func startFirecrackerRemote(ctx context.Context, cfg fcConfig, m *meta) error {
 	return cfg.runRemoteRaw(ctx, cmd)
 }
 
+// firecrackerPID checks /proc/<pid>/cmdline before a privileged kill, so a
+// stale pid file whose number was reused by another process is ignored.
+func firecrackerPID(ctx context.Context, cfg fcConfig, pid int, m *meta) bool {
+	path := fmt.Sprintf("/proc/%d/cmdline", pid)
+	var b []byte
+	var err error
+	if cfg.remoteHost != "" {
+		b, err = cfg.remoteOutput(ctx, "cat "+shellQuote(path))
+	} else {
+		b, err = os.ReadFile(path)
+	}
+	if err != nil {
+		return false
+	}
+	cmd := string(b)
+	return strings.Contains(cmd, m.Dir) && (strings.Contains(cmd, "firecracker") || strings.Contains(cmd, cfg.bin))
+}
+
 func stop(m *meta, cfg fcConfig) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	var pidb []byte
-	var err error
-	if cfg.remoteHost != "" {
-		pidb, err = cfg.remoteRead(ctx, m.PidFile)
-	} else {
-		pidb, err = os.ReadFile(m.PidFile)
+	// m comes from createVM or a validated attach; still refuse paths that
+	// are not under the workdir before passing them to sudo.
+	if _, err := safeRel(cfg.workdir, m.Dir); err != nil {
+		return
 	}
-	if err == nil {
-		pid := strings.TrimSpace(string(pidb))
-		if pid != "" {
-			_ = cfg.runPriv(ctx, "kill", "-TERM", pid)
-			time.Sleep(300 * time.Millisecond)
-			_ = cfg.runPriv(ctx, "kill", "-KILL", pid)
+	if !validTap(m.Tap, cfg.tapPrefix) {
+		return
+	}
+	if filepath.Dir(filepath.Clean(m.PidFile)) == filepath.Clean(m.Dir) {
+		var pidb []byte
+		var err error
+		if cfg.remoteHost != "" {
+			pidb, err = cfg.remoteRead(ctx, m.PidFile)
+		} else {
+			pidb, err = os.ReadFile(m.PidFile)
+		}
+		if err == nil {
+			pid, perr := strconv.Atoi(strings.TrimSpace(string(pidb)))
+			if perr == nil && pid > 1 && firecrackerPID(ctx, cfg, pid, m) {
+				_ = cfg.runPriv(ctx, "kill", "-TERM", strconv.Itoa(pid))
+				time.Sleep(300 * time.Millisecond)
+				_ = cfg.runPriv(ctx, "kill", "-KILL", strconv.Itoa(pid))
+			}
 		}
 	}
-	_ = cfg.runPriv(ctx, "pkill", "-f", m.Socket)
 	if m.Network == "" || m.Network == "none" {
 		_ = cfg.runPriv(ctx, "iptables", "-w", "5", "-D", "INPUT", "-i", m.Tap, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT")
 		_ = cfg.runPriv(ctx, "iptables", "-w", "5", "-D", "INPUT", "-i", m.Tap, "-j", "DROP")
 		_ = cfg.runPriv(ctx, "iptables", "-w", "5", "-D", "FORWARD", "-i", m.Tap, "-j", "DROP")
 		_ = cfg.runPriv(ctx, "iptables", "-w", "5", "-D", "FORWARD", "-o", m.Tap, "-j", "DROP")
+		_ = cfg.runPriv(ctx, "ip6tables", "-w", "5", "-D", "INPUT", "-i", m.Tap, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT")
+		_ = cfg.runPriv(ctx, "ip6tables", "-w", "5", "-D", "INPUT", "-i", m.Tap, "-j", "DROP")
 	}
 	_ = cfg.runPriv(ctx, "ip", "link", "del", m.Tap)
 	if cfg.remoteHost != "" {

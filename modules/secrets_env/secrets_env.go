@@ -63,9 +63,9 @@ func Apply(p *sdk.Scope) error {
 			if !ok {
 				return "", fmt.Errorf("secret %q is not in the secrets_env allow list", name)
 			}
-			// p.Env cannot tell an unset variable from an empty one, so an
-			// empty value counts as not set.
-			v, err := p.Env(name)
+			// The caller's lookup is audited by boundSecrets; reading the
+			// provider's own env must not create a second record.
+			v, err := p.EnvRaw(name)
 			if err != nil {
 				return "", err
 			}

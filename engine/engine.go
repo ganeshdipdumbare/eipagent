@@ -30,7 +30,13 @@ type started struct {
 
 // Start applies the plan's modules in order. If one fails, the modules
 // already started are disposed (last first) and no engine is returned.
-func (p *Plan) Start() (*Engine, error) {
+func (p *Plan) Start() (*Engine, error) { return p.StartWith(nil) }
+
+// StartWith is Start with a hook that runs after the engine exists but
+// before any module applies. A module that starts work in Apply (a
+// scheduler, a listener) can therefore call back into the application
+// immediately.
+func (p *Plan) StartWith(before func(*Engine)) (*Engine, error) {
 	// Host setup first: a module may need a directory to exist before it
 	// applies, and modules cannot create host paths themselves.
 	for _, n := range p.nodes {
@@ -45,6 +51,9 @@ func (p *Plan) Start() (*Engine, error) {
 		root.SetLogger(p.logger)
 	}
 	e := &Engine{pol: p.pol, root: root}
+	if before != nil {
+		before(e)
+	}
 	for i, n := range p.nodes {
 		info := ModuleInfo{Name: n.name, Module: n.mod.Name, Auto: n.spec.Auto, Order: i, Requires: n.mod.Requires, Provides: n.mod.Provides, Declared: n.mod.Permissions, Permissions: n.granted, Secrets: secretNames(n), Locked: n.locked}
 		ctx := root.Fork(n.name)

@@ -3,6 +3,7 @@ package sdk
 import (
 	"context"
 	"sort"
+	"strings"
 )
 
 // Hook kinds. Ordering for every kind: priority (high first), then module
@@ -105,7 +106,23 @@ func (c *Scope) Snapshot() *Snapshot {
 		own := i == len(chain)-1
 		r.mu.RLock()
 		for k, e := range r.services {
-			s.Services[k] = e.v
+			v := e.v
+			// A module's snapshot must not hand it the unbound secrets,
+			// audit or sandbox services: those are bound per caller at
+			// Service(). The root snapshot (c.id == "") stays raw for the
+			// loop and the host broker.
+			if c.id != "" {
+				if s, ok := v.(*Secrets); ok && k == "secrets" {
+					v = c.boundSecrets(s)
+				}
+				if a, ok := v.(*Audit); ok && k == "audit" {
+					v = c.boundAudit(a)
+				}
+				if p, ok := v.(*SandboxProvider); ok && strings.HasPrefix(k, "sandbox/") {
+					v = moduleSandboxes(p, c.builtin)
+				}
+			}
+			s.Services[k] = v
 		}
 		if own {
 			for _, e := range r.tools {

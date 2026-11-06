@@ -148,14 +148,23 @@ func (c *Scope) Listen(addr string, allowAny bool) (net.Listener, error) {
 }
 
 // checkAddress refuses addresses an agent should not reach by default.
+// Cloud metadata and link-local addresses are refused even when
+// allowPrivate is set: AllowPrivate is for an operator-named SIEM, database
+// or model gateway on a private network, not for the host's metadata
+// service.
 func checkAddress(ip net.IP, allowPrivate bool) error {
-	if ip.Equal(net.ParseIP("169.254.169.254")) || ip.Equal(net.ParseIP("fd00:ec2::254")) {
-		return errors.New("sdk: cloud metadata address refused")
+	for _, n := range metadataNets {
+		if n.Contains(ip) {
+			return fmt.Errorf("sdk: cloud metadata or link-local address %s is refused", ip)
+		}
+	}
+	if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+		return fmt.Errorf("sdk: link-local address %s is refused", ip)
 	}
 	if allowPrivate {
 		return nil
 	}
-	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() {
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() || ip.IsMulticast() {
 		return fmt.Errorf("sdk: connection to private address %s is refused (set AllowPrivate to allow)", ip)
 	}
 	for _, n := range reservedNets {
@@ -165,6 +174,26 @@ func checkAddress(ip net.IP, allowPrivate bool) error {
 	}
 	return nil
 }
+
+// metadataNets are cloud metadata services and the whole IPv4 link-local
+// range, refused even when AllowPrivate is set.
+var metadataNets = func() []*net.IPNet {
+	var out []*net.IPNet
+	for _, c := range []string{
+		"169.254.0.0/16",     // AWS/GCP/Azure/OpenStack IMDS, ECS, EKS
+		"100.100.100.200/32", // Alibaba Cloud
+		"192.0.0.192/32",     // Oracle Cloud
+		"168.63.129.16/32",   // Azure WireServer
+		"fd00:ec2::254/128",  // AWS IPv6 IMDS
+	} {
+		_, n, err := net.ParseCIDR(c)
+		if err != nil {
+			panic(err)
+		}
+		out = append(out, n)
+	}
+	return out
+}()
 
 // reservedNets are ranges that are never public internet destinations:
 // "this network", carrier-grade NAT (which includes some cloud metadata
@@ -482,8 +511,9 @@ func ExitStatus(err error) (code int, ok bool) {
 }
 
 // childEnv builds the environment for a child: a few system variables,
-// the explicit extras, and the resolved secrets. Secret-looking names are
-// refused in Env, so a child can only receive a secret through Secrets.
+// the explicit extras, and the resolved secrets. Secret-looking names and
+// loader/interpreter hooks are refused in Env, so a child can only receive
+// a secret through Secrets and a module can't inject code into the child.
 func childEnv(opts ProcOptions) []string {
 	var env []string
 	for _, k := range []string{"PATH", "HOME", "LANG", "LC_ALL", "TERM", "TMPDIR", "TZ"} {
@@ -491,30 +521,82 @@ func childEnv(opts ProcOptions) []string {
 			env = append(env, k+"="+v)
 		}
 	}
-	for k, v := range opts.Env {
-		if SecretLike(k) {
-			continue // a caller must pass secrets through the secrets service
+	add := func(k, v string) {
+		if SecretLike(k) || unsafeEnv[k] || !validEnvName(k) || strings.IndexByte(v, 0) >= 0 {
+			return
 		}
 		env = append(env, k+"="+v)
 	}
+	for k, v := range opts.Env {
+		add(k, v)
+	}
 	for k, v := range opts.Secrets {
-		env = append(env, k+"="+v)
+		add(k, v)
 	}
 	return env
+}
+
+// unsafeEnv are loader/interpreter hooks that let an env entry run code in
+// an allow-listed child even when the value is not a secret.
+var unsafeEnv = map[string]bool{
+	"LD_PRELOAD": true, "LD_LIBRARY_PATH": true, "LD_AUDIT": true,
+	"DYLD_INSERT_LIBRARIES": true, "DYLD_LIBRARY_PATH": true, "DYLD_FRAMEWORK_PATH": true,
+	"BASH_ENV": true, "ENV": true, "SHELLOPTS": true, "BASHOPTS": true,
+	"PYTHONPATH": true, "PYTHONSTARTUP": true, "NODE_OPTIONS": true,
+	"PERL5OPT": true, "RUBYOPT": true, "GIT_SSH_COMMAND": true,
+}
+
+func validEnvName(k string) bool {
+	if k == "" {
+		return false
+	}
+	for i, r := range k {
+		if !(r == '_' || r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || i > 0 && r >= '0' && r <= '9') {
+			return false
+		}
+	}
+	return true
 }
 
 // ---- Environment ----
 
 // Env reads an environment variable. It needs "env". Secret-looking names
-// (SecretLike) also need "env:secrets".
-func (c *Scope) Env(name string) (string, error) {
+// (SecretLike) also need "env:secrets"; their values are registered for
+// redaction and the read is recorded as secret.access like a secrets
+// service lookup.
+func (c *Scope) Env(name string) (string, error) { return c.env(name, true) }
+
+// EnvRaw is Env without the secret.access record, for a built-in secrets
+// provider whose own lookup is already audited by boundSecrets. Other
+// modules get an error.
+func (c *Scope) EnvRaw(name string) (string, error) {
+	if c.contract == nil || !c.contract.secretProvider {
+		return "", errors.New("sdk: EnvRaw is only available to a module that provides \"secrets\"")
+	}
+	return c.env(name, false)
+}
+
+func (c *Scope) env(name string, audit bool) (string, error) {
 	if !c.Granted(PermEnv) && !c.Granted(PermEnvSecrets) {
 		return "", c.requireGrant(PermEnv)
 	}
 	if SecretLike(name) && !c.Granted(PermEnvSecrets) {
 		return "", fmt.Errorf("sdk: variable %q looks like a secret; it needs %q", name, PermEnvSecrets)
 	}
-	return os.Getenv(name), nil
+	v := os.Getenv(name)
+	if audit && SecretLike(name) && v != "" {
+		redactable := AddRedaction(v)
+		if c.auditGrant(c.ModuleName(), name, v) {
+			if a, ok := c.rawService("audit").(*Audit); ok && a.Record != nil {
+				d := map[string]any{"module": c.ModuleName(), "secret": name, "outcome": "granted", "writer": "core"}
+				if !redactable {
+					d["redaction"] = "not possible: value shorter than 4 bytes"
+				}
+				a.Record("secret.access", d)
+			}
+		}
+	}
+	return v, nil
 }
 
 // ---- Database ----

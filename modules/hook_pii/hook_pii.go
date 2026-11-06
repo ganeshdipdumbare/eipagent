@@ -171,6 +171,21 @@ func Apply(p *sdk.Scope) error {
 						}
 						m.Reasoning = clean
 					}
+					if len(m.Images) > 0 {
+						imgs := make([]sdk.Image, len(m.Images))
+						copy(imgs, m.Images)
+						for i := range imgs {
+							if imgs[i].URL == "" {
+								continue
+							}
+							clean, found = scrub(imgs[i].URL)
+							if len(found) > 0 && strategy == "block" {
+								return nil, fmt.Errorf("blocked: image URL contains %s", strings.Join(found, ", "))
+							}
+							imgs[i].URL = clean
+						}
+						m.Images = imgs
+					}
 				}
 				if len(m.ToolCalls) > 0 {
 					// Earlier tool calls in the history carry arguments too.
@@ -203,12 +218,11 @@ func Apply(p *sdk.Scope) error {
 			req = &r2
 		}
 		resp, err := next(c, req)
-		if err == nil && onOut {
-			clean, found := scrub(resp.Message.Content)
+		if err == nil && onOut && resp != nil {
+			found := scrubMessage(&resp.Message, scrub)
 			if len(found) > 0 && strategy == "block" {
 				return nil, fmt.Errorf("blocked: reply contains %s", strings.Join(found, ", "))
 			}
-			resp.Message.Content = clean
 		}
 		return resp, err
 	})
@@ -220,19 +234,97 @@ func Apply(p *sdk.Scope) error {
 				if len(found) > 0 && strategy == "block" {
 					return &sdk.ToolResult{Content: "blocked: tool error contained " + strings.Join(found, ", "), IsError: true}, nil
 				}
-				err = fmt.Errorf("%s", clean)
+				// Keep the original error for errors.Is / errors.As (sdk.Fatal,
+				// exec.ExitError, context cancellation) but show the scrubbed text.
+				err = &scrubbedError{msg: clean, err: err}
 			}
-			if r != nil && r.Interrupt == nil {
-				clean, found := scrub(r.Content)
-				if len(found) > 0 && strategy == "block" {
-					return &sdk.ToolResult{Content: "blocked: tool result contained " + strings.Join(found, ", "), IsError: true}, nil
+			if r != nil {
+				if r.Interrupt != nil {
+					found := scrubInterrupt(r.Interrupt, scrub)
+					if len(found) > 0 && strategy == "block" {
+						return &sdk.ToolResult{Content: "blocked: interrupt contained " + strings.Join(found, ", "), IsError: true}, nil
+					}
+				} else {
+					clean, found := scrub(r.Content)
+					if len(found) > 0 && strategy == "block" {
+						return &sdk.ToolResult{Content: "blocked: tool result contained " + strings.Join(found, ", "), IsError: true}, nil
+					}
+					r.Content = clean
 				}
-				r.Content = clean
 			}
 			return r, err
 		})
 	}
 	return nil
+}
+
+// scrubbedError keeps error identity for errors.Is / errors.As while
+// exposing only redacted text.
+type scrubbedError struct {
+	msg string
+	err error
+}
+
+func (e *scrubbedError) Error() string { return e.msg }
+func (e *scrubbedError) Unwrap() error { return e.err }
+
+// scrubMessage cleans every text field of a model message.
+func scrubMessage(m *sdk.Message, scrub func(string) (string, []string)) []string {
+	clean, found := scrub(m.Content)
+	m.Content = clean
+	if m.Reasoning != "" {
+		clean, f := scrub(m.Reasoning)
+		m.Reasoning = clean
+		found = append(found, f...)
+	}
+	for i := range m.ToolCalls {
+		if m.ToolCalls[i].Args == nil {
+			continue
+		}
+		clean, f := scrubAny(m.ToolCalls[i].Args, scrub)
+		if args, ok := clean.(map[string]any); ok {
+			m.ToolCalls[i].Args = args
+		}
+		found = append(found, f...)
+	}
+	for i := range m.Images {
+		if m.Images[i].URL == "" {
+			continue
+		}
+		clean, f := scrub(m.Images[i].URL)
+		m.Images[i].URL = clean
+		found = append(found, f...)
+	}
+	return found
+}
+
+// scrubInterrupt cleans the human-in-the-loop payload that may be
+// persisted or shown to a user.
+func scrubInterrupt(in *sdk.Interrupt, scrub func(string) (string, []string)) []string {
+	var found []string
+	clean, f := scrub(in.Message)
+	in.Message = clean
+	found = append(found, f...)
+	if in.ToolCall != nil {
+		clean, f := scrub(in.ToolCall.Name)
+		in.ToolCall.Name = clean
+		found = append(found, f...)
+		if in.ToolCall.Args != nil {
+			clean, f := scrubAny(in.ToolCall.Args, scrub)
+			if args, ok := clean.(map[string]any); ok {
+				in.ToolCall.Args = args
+			}
+			found = append(found, f...)
+		}
+	}
+	if in.Payload != nil {
+		clean, f := scrubAny(in.Payload, scrub)
+		if payload, ok := clean.(map[string]any); ok {
+			in.Payload = payload
+		}
+		found = append(found, f...)
+	}
+	return found
 }
 
 // scrubAny walks maps, slices and strings, returning a cleaned copy and

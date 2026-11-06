@@ -74,7 +74,7 @@ func TestVerifyKeyedDetectsTruncatedTail(t *testing.T) {
 	}
 }
 
-func TestVerifyKeyedMissingHeadIsWarning(t *testing.T) {
+func TestVerifyKeyedMissingHeadIsError(t *testing.T) {
 	key := []byte("chain-key-123456789012345678901234")
 	path := filepath.Join(t.TempDir(), "audit.jsonl")
 	writeLog(t, path, []int{1, 2}, key)
@@ -117,6 +117,16 @@ func TestHeadMACChangesWithSeq(t *testing.T) {
 	key := []byte("k")
 	if HeadMAC(key, 1, "h") == HeadMAC(key, 2, "h") {
 		t.Fatal("head mac does not bind seq")
+	}
+}
+
+func TestVerifyKeyedWithAnchorRejectsMissingMAC(t *testing.T) {
+	key := []byte("chain-key-123456789012345678901234")
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	last := writeLog(t, path, []int{1, 2}, key)
+	anchor := Head{Seq: 2, Hash: last} // no MAC: must not pin anything
+	if _, err := VerifyKeyedWithAnchor(path, key, anchor); err == nil {
+		t.Fatal("an anchor without a MAC was accepted")
 	}
 }
 

@@ -27,7 +27,8 @@ func Verify(path string) (int, error) {
 // VerifyKeyed also checks each line's "mac", an HMAC-SHA256 of its hash
 // under the key audit_jsonl was configured with, and the <log>.head
 // checkpoint, which catches a truncated tail. Without the key, a
-// rewritten log can't produce valid macs.
+// rewritten log can't produce valid macs. A keyed log with no head is an
+// error: truncation cannot be ruled out.
 //
 // The head lives beside the log, so someone who can rewrite both the log
 // and the head can still roll the tail back together. Keep a copy of the
@@ -56,8 +57,8 @@ func VerifyKeyedWithAnchor(path string, key []byte, anchor Head) (int, error) {
 	if len(key) == 0 {
 		return 0, fmt.Errorf("audit: empty key")
 	}
-	if anchor.Seq == 0 || anchor.Hash == "" {
-		return 0, fmt.Errorf("audit: empty external anchor")
+	if anchor.Seq == 0 || anchor.Hash == "" || anchor.MAC == "" {
+		return 0, fmt.Errorf("audit: external anchor needs seq, hash and mac")
 	}
 	n, last, err := verifyChain(path, key)
 	if err != nil {
@@ -66,7 +67,7 @@ func VerifyKeyedWithAnchor(path string, key []byte, anchor Head) (int, error) {
 	if n != anchor.Seq || last != anchor.Hash {
 		return n, fmt.Errorf("audit: %s ends at seq %d (%s), but the external anchor is seq %d (%s): the log was rolled back", path, n, shortHash(last), anchor.Seq, shortHash(anchor.Hash))
 	}
-	if anchor.MAC != "" && !hmac.Equal([]byte(HeadMAC(key, anchor.Seq, anchor.Hash)), []byte(anchor.MAC)) {
+	if !hmac.Equal([]byte(HeadMAC(key, anchor.Seq, anchor.Hash)), []byte(anchor.MAC)) {
 		return n, fmt.Errorf("audit: external anchor mac is invalid")
 	}
 	return n, nil
@@ -81,10 +82,9 @@ func DecodeHead(b []byte) (Head, error) {
 	return h, nil
 }
 
-// MissingHeadError says a keyed log has no <log>.head checkpoint. The
-// log still verifies; callers may report this as a warning rather than a
-// failure (it means the log was written before head files existed, or
-// the head was removed).
+// MissingHeadError says a keyed log has no <log>.head checkpoint. VerifyKeyed
+// returns it as a hard failure: without the signed head, removed trailing
+// lines can't be told from a complete log.
 type MissingHeadError struct{ Path string }
 
 func (e *MissingHeadError) Error() string {

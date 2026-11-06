@@ -2,7 +2,7 @@
 // microsandbox, E2B, Kubernetes pods, a remote VM) plugs in by providing
 // "sandbox/<name>"; workspace_sandbox and tool_sandbox then use it unchanged.
 //
-// This one is a compiled application module (WithModule) that wraps an
+// This one is a compiled application module (Config.Modules) that wraps an
 // existing sandbox; a real provider would call its backend's API in
 // Create/Exec/ReadFile/WriteFile/Close.
 package main

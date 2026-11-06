@@ -57,7 +57,7 @@ func main() {
 
 **Words you'll meet** (the [glossary](https://kilnai-docs.vercel.app/#concepts) has more):
 
-- **Module:** a compiled Go package that exports a descriptor and `func Apply(p *sdk.Scope) error`. The loop, providers, tools, memory and policy are all modules.
+- **Module:** a compiled Go package that exports a descriptor and `func Apply(p *kiln.Scope) error`. The loop, providers, tools, memory and policy are all modules.
 - **Service:** something a module provides by name for others to use: `model/anthropic`, `threads`, `memory`, `secrets`.
 - **Hook:** code a module runs around each step, model call or tool call (retries, approvals, redaction …).
 - **Capability:** what a module may reach through the broker: `net`, `exec`, `fs:read`, `fs:write`, `env`, `env:secrets`, `db`.
@@ -65,7 +65,7 @@ func main() {
 
 **Demo:** [`examples/fullstack`](examples/fullstack) is a support desk with a Go backend and web UI: streaming, refunds that wait for a supervisor, redaction and an audit trail. Run it with `go run ./examples/fullstack`, or try it live at https://kilnai-docs.vercel.app/demo/ (the backend runs on a free instance, so the first visit can take a minute to wake it).
 
-**Docs:** https://kilnai-docs.vercel.app has the full guide, with examples, lifecycles and reference. The content is `docs/site.html`; the design system, self-hosted fonts and interactions live in `docs/assets/` (the content is generated from the code and the examples). Every push to `main` that touches the docs or demo rebuilds the site and deploys it ([`docs.yml`](.github/workflows/docs.yml)); to build it locally, run `docs/build.sh` (add `SKIP_RECORD=1` to skip re-recording the demo).
+**Docs:** https://kilnai-docs.vercel.app has the full guide, with examples, lifecycles and reference. The content is `docs/site.html`; the design system, self-hosted fonts and interactions live in `docs/assets/`. Every push to `main` that touches the docs or demo rebuilds the site and deploys it ([`docs.yml`](.github/workflows/docs.yml)); to build it locally, run `docs/build.sh` (add `SKIP_RECORD=1` to skip re-recording the demo). Coming from [ADK Go](https://github.com/google/adk-go)? See the [mapping](docs/adk-parity.md) and [`examples/adk-parity`](examples/adk-parity/main.go).
 
 Releases and breaking changes are listed in [CHANGELOG.md](CHANGELOG.md); see [Versioning](#versioning).
 
@@ -271,14 +271,14 @@ console := kiln.Module{
 	Requires: []string{"memory"},                 // must exist first ("?svc" = optional)
 	Provides: []string{"tool/console"},           // only these names may be provided
 	Permissions: []string{"net"},                 // broker capabilities: net, exec, fs:read, fs:write, env, env:secrets, db
-	Apply: func(p *sdk.Scope) error {
-		hc, err := p.HTTP(sdk.HTTPOptions{AllowHosts: []string{"api.example.com"}})
+	Apply: func(p *kiln.Scope) error {
+		hc, err := p.HTTP(kiln.HTTPOptions{AllowHosts: []string{"api.example.com"}})
 		if err != nil {
 			return err
 		}
-		return p.AddTool(sdk.Tool{Name: "lookup", Schema: sdk.Object(map[string]any{"id": sdk.Str("id")}, "id"),
+		return p.AddTool(kiln.Tool{Name: "lookup", Schema: kiln.Object(map[string]any{"id": kiln.Str("id")}, "id"),
 			Run: func(c context.Context, args map[string]any) (string, error) {
-				req, _ := http.NewRequestWithContext(c, "GET", "https://api.example.com/"+sdk.ArgString(args, "id"), nil)
+				req, _ := http.NewRequestWithContext(c, "GET", "https://api.example.com/"+kiln.ArgString(args, "id"), nil)
 				resp, err := hc.Do(req)
 				if err != nil {
 					return "", err
@@ -298,7 +298,7 @@ agent, err := kiln.New(kiln.Config{
 
 A module is an ordinary Go package, so it can live in another directory, another package or another Go module. Import it and put its value in `Config.Modules`; `go get` and `replace` work as usual. There is one way to compose: the slice. A module's `New(...)` constructor returns it configured, and its `As` field names a second instance.
 
-If you already have a Go library, write a thin `engine.Module` adapter whose `Apply` exposes its functions as tools or services; the library itself does not need to change. See [MODULES.md](MODULES.md) and the [Custom modules](https://kilnai-docs.vercel.app/#custom-modules) docs page.
+If you already have a Go library, write a thin `kiln.Module` adapter whose `Apply` exposes its functions as tools or services; the library itself does not need to change. See [MODULES.md](MODULES.md) and the [Custom modules](https://kilnai-docs.vercel.app/#custom-modules) docs page.
 
 A missing requirement names the registry modules that would supply it, so the fix is one line:
 
@@ -585,7 +585,7 @@ modules := append(kiln.Approvals("issue_refund"),          // hook_approval
 	kiln.Persistence("postgres", "secret://DATABASE_URL")...) // threads_sql + memory_sql + db_sql
 modules = append(modules, kiln.Sandbox("docker")...)       // sandbox_docker + workspace_sandbox
 modules = append(modules, kiln.Audit("/var/log/kiln/audit.log")...)
-modules = append(modules, kiln.Tracing("http://otel-collector:4318")...)
+modules = append(modules, kiln.Tracing("https://otel-collector:4318")...)
 modules = append(modules, kiln.MCP("github", "npx", "-y", "@modelcontextprotocol/server-github")...)
 
 agent, _ := kiln.New(kiln.Config{

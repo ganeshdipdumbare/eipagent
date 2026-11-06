@@ -257,9 +257,10 @@ func runtimeSocket(path string) bool {
 	if strings.HasSuffix(base, ".sock") && (strings.Contains(base, "docker") || strings.Contains(base, "podman") || strings.Contains(base, "containerd")) {
 		return true
 	}
+	// A mount of any Unix socket lets the box talk to a host daemon; a
+	// renamed docker.sock in /tmp is still a docker socket.
 	if fi, err := os.Stat(path); err == nil && fi.Mode()&os.ModeSocket != 0 {
-		dir := filepath.Base(filepath.Dir(path))
-		return dir == "docker" || dir == "podman" || dir == "containerd"
+		return true
 	}
 	return false
 }

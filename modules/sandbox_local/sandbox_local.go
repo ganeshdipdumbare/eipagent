@@ -82,7 +82,9 @@ func Apply(p *sdk.Scope) error {
 			id := "local"
 			if dir == "" {
 				b := make([]byte, 6)
-				rand.Read(b)
+				if _, err := rand.Read(b); err != nil {
+					return nil, fmt.Errorf("sandbox_local: random id: %w", err)
+				}
 				id = "local-" + hex.EncodeToString(b)
 				dir = filepath.Join(root, id)
 			}
@@ -234,15 +236,29 @@ func box(id string, d *sdk.Dir, p *sdk.Scope, shell *sdk.Exec, baseEnv map[strin
 			if err != nil {
 				return nil, err
 			}
+			var timer *time.Timer
+			if req.TimeoutSeconds > 0 {
+				timer = time.AfterFunc(time.Duration(req.TimeoutSeconds)*time.Second, func() {
+					proc.Kill()
+				})
+			}
 			return &sdk.Process{Stdin: proc.Stdin, Stdout: proc.Stdout, Stderr: proc.Stderr,
 				Wait: func() (int, error) {
+					if timer != nil {
+						timer.Stop()
+					}
 					err := proc.Wait()
 					if code, ok := sdk.ExitStatus(err); ok {
 						return code, nil
 					}
 					return 0, err
 				},
-				Kill: proc.Kill}, nil
+				Kill: func() error {
+					if timer != nil {
+						timer.Stop()
+					}
+					return proc.Kill()
+				}}, nil
 		},
 		ReadFile: func(c context.Context, fpath string) ([]byte, error) {
 			r, err := rel(fpath)
@@ -355,20 +371,30 @@ func box(id string, d *sdk.Dir, p *sdk.Scope, shell *sdk.Exec, baseEnv map[strin
 			}
 			defer hd.Close()
 			name := filepath.Base(dst)
-			// Truncate, then stream: the broker has no create-and-write
-			// handle, so WriteFile empties the file and AppendFile fills it.
-			if err := hd.WriteFile(name, nil, st.Mode().Perm()); err != nil {
+			// Write to a temporary file in the destination directory and
+			// rename it into place, so a failed copy never truncates the
+			// existing host file.
+			tmp := fmt.Sprintf(".%s.tmp-%d", name, time.Now().UnixNano())
+			if err := hd.WriteFile(tmp, nil, st.Mode().Perm()); err != nil {
 				return err
 			}
-			out, err := hd.AppendFile(name, st.Mode().Perm())
+			out, err := hd.AppendFile(tmp, st.Mode().Perm())
 			if err != nil {
+				hd.Remove(tmp)
 				return err
 			}
 			_, err = io.Copy(out, in)
 			if cerr := out.Close(); err == nil {
 				err = cerr
 			}
-			return err
+			if err == nil {
+				err = hd.Rename(tmp, name)
+			}
+			if err != nil {
+				hd.Remove(tmp)
+				return err
+			}
+			return nil
 		},
 		Close: func(c context.Context) error {
 			if id == "local" {

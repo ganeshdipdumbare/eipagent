@@ -92,8 +92,8 @@ func Apply(p *sdk.Scope) error {
 	if u.User != nil {
 		return fmt.Errorf("trace_otlp: endpoint must not contain credentials")
 	}
-	if len(headers) > 0 && u.Scheme != "https" && !otlpLocalHost(u.Hostname()) {
-		return fmt.Errorf("trace_otlp: endpoint must be https when headers are configured")
+	if u.Scheme != "https" && !otlpLocalHost(u.Hostname()) {
+		return fmt.Errorf("trace_otlp: endpoint must be https for a non-loopback collector (traces carry run, thread, user and optionally content)")
 	}
 	service := p.ConfigString("service_name", "kiln")
 	content := p.ConfigBool("content", false)
@@ -106,7 +106,7 @@ func Apply(p *sdk.Scope) error {
 		AllowHosts:    []string{u.Hostname()},
 		Timeout:       10 * time.Second,
 		AllowPrivate:  true, // operator-named collector; the default is a local one
-		AllowInsecure: len(headers) == 0,
+		AllowInsecure: otlpLocalHost(u.Hostname()),
 	})
 	if err != nil {
 		return err

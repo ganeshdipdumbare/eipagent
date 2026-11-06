@@ -7,21 +7,20 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/ganeshdipdumbare/kiln/engine"
-	"github.com/ganeshdipdumbare/kiln/sdk"
+	"github.com/ganeshdipdumbare/kiln"
 )
 
-var Module = engine.Module{
+var Module = kiln.Module{
 	Name: "weather",
-	Apply: func(p *sdk.Scope) error {
+	Apply: func(p *kiln.Scope) error {
 		unit := p.ConfigString("unit", "celsius")
-		p.AddTool(sdk.Tool{
+		p.AddTool(kiln.Tool{
 			Name:        "weather",
 			Description: "Current weather for a city.",
-			Schema:      sdk.Object(map[string]any{"city": sdk.Str("city name")}, "city"),
+			Schema:      kiln.Object(map[string]any{"city": kiln.Str("city name")}, "city"),
 			Meta:        map[string]any{"readonly": true},
 			Run: func(_ context.Context, args map[string]any) (string, error) {
-				city := strings.TrimSpace(sdk.ArgString(args, "city"))
+				city := strings.TrimSpace(kiln.ArgString(args, "city"))
 				if city == "" {
 					return "", fmt.Errorf("city is required")
 				}
@@ -33,7 +32,7 @@ var Module = engine.Module{
 }
 
 // New returns the module. Keys in cfg are the module's configuration.
-func New(cfg ...map[string]any) engine.Module {
+func New(cfg ...map[string]any) kiln.Module {
 	m := Module
 	if len(cfg) > 0 {
 		m.Config = cfg[0]

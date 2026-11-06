@@ -24,6 +24,7 @@ import (
 
 	"github.com/ganeshdipdumbare/kiln"
 	"github.com/ganeshdipdumbare/kiln/audit"
+	"github.com/ganeshdipdumbare/kiln/engine"
 	"github.com/ganeshdipdumbare/kiln/internal/mcptest"
 	"github.com/ganeshdipdumbare/kiln/sdk"
 )
@@ -701,5 +702,99 @@ func TestTraceOTLPRejectsPlaintextHeaders(t *testing.T) {
 		withLogger(func(string, string) {}))
 	if err == nil {
 		t.Fatal("plaintext OTLP endpoint with a secret header was accepted")
+	}
+}
+
+// A tool receives the live args map. The audit record must show what the
+// model asked for, not what the tool rewrote after running.
+func TestAuditRecordsOriginalToolArgs(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "audit.jsonl")
+	tool := sdk.Tool{
+		Name:   "mutate",
+		Schema: sdk.Object(map[string]any{"v": sdk.Str("value")}, "v"),
+		Run: func(ctx context.Context, args map[string]any) (string, error) {
+			args["v"] = "tampered"
+			return "ok", nil
+		},
+	}
+	a := mockAgent(t, []any{
+		map[string]any{"tool": "mutate", "args": map[string]any{"v": "original"}},
+		map[string]any{"text": "done"},
+	}, withTools(tool), withModuleConfig("audit_file", map[string]any{"path": p}))
+	if _, err := a.Generate(bg, "go"); err != nil {
+		t.Fatal(err)
+	}
+	a.Close()
+	b, _ := os.ReadFile(p)
+	if strings.Contains(string(b), "tampered") || !strings.Contains(string(b), `"v":"original"`) {
+		t.Fatalf("audit log used the mutated arguments: %s", b)
+	}
+}
+
+func TestAuditHidesFailedResultsWhenResultsOff(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "audit.jsonl")
+	tool := sdk.Tool{
+		Name:   "fail",
+		Schema: sdk.Object(map[string]any{}),
+		Run: func(ctx context.Context, args map[string]any) (string, error) {
+			return "ok", nil
+		},
+	}
+	failWrap := engine.Module{Name: "fail_wrap", Apply: func(sc *sdk.Scope) error {
+		sc.WrapTool(func(c context.Context, req *sdk.ToolRequest, next sdk.ToolHandler) (*sdk.ToolResult, error) {
+			return &sdk.ToolResult{Content: "secret failure detail", IsError: true}, nil
+		})
+		return nil
+	}}
+	a := mockAgent(t, []any{
+		map[string]any{"tool": "fail", "args": map[string]any{}},
+		map[string]any{"text": "done"},
+	}, withTools(tool), withModule(failWrap), withModuleConfig("audit_file", map[string]any{"path": p, "results": false}))
+	if _, err := a.Generate(bg, "go"); err != nil {
+		t.Fatal(err)
+	}
+	a.Close()
+	b, _ := os.ReadFile(p)
+	if strings.Contains(string(b), "secret failure detail") {
+		t.Fatalf("failed tool result logged with results=false: %s", b)
+	}
+}
+
+func TestAuditRefusesForgedExistingChain(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "audit.jsonl")
+	a := mockAgent(t, nil, withModuleConfig("audit_file", map[string]any{"path": p}))
+	a.Close()
+	// Flip one byte in the body while leaving valid JSON and seq in place.
+	b, _ := os.ReadFile(p)
+	forged := strings.Replace(string(b), `"type":"module.active"`, `"type":"module.active "`, 1)
+	if err := os.WriteFile(p, []byte(forged), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := startAgent(withModel("mock:x"),
+		withModuleConfig("model_mock", map[string]any{"script": []any{}}),
+		withModuleConfig("audit_file", map[string]any{"path": p}),
+		withLogger(func(string, string) {}))
+	if err == nil || !strings.Contains(err.Error(), "hash") {
+		t.Fatalf("forged chain was accepted: %v", err)
+	}
+}
+
+func TestAuditKeyedRefusesMissingHeadOnRestart(t *testing.T) {
+	t.Setenv("AUDIT_CHAIN_TOKEN", "chain-key-123")
+	p := filepath.Join(t.TempDir(), "audit.jsonl")
+	a := mockAgent(t, nil,
+		withModuleConfig("secrets_env", nil),
+		withModuleConfig("audit_file", map[string]any{"path": p, "key": "secret://AUDIT_CHAIN_TOKEN"}))
+	a.Close()
+	if err := os.Remove(p + ".head"); err != nil {
+		t.Fatal(err)
+	}
+	_, err := startAgent(withModel("mock:x"),
+		withModuleConfig("model_mock", map[string]any{"script": []any{}}),
+		withModuleConfig("secrets_env", nil),
+		withModuleConfig("audit_file", map[string]any{"path": p, "key": "secret://AUDIT_CHAIN_TOKEN"}),
+		withLogger(func(string, string) {}))
+	if err == nil || !strings.Contains(err.Error(), "signed head") {
+		t.Fatalf("keyed log without a head was accepted: %v", err)
 	}
 }

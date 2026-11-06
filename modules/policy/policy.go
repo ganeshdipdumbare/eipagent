@@ -164,17 +164,30 @@ func Apply(p *sdk.Scope) error {
 				return deny("high-risk tool needs full-access mode")
 			}
 		}
-		if requireSandbox && req.Tool != nil && !readonly {
-			if sandbox != "" && !strings.HasPrefix(sandbox, "sandbox:") {
-				return deny("shell and file tools must run in an isolated sandbox (load workspace_sandbox)")
+		if requireSandbox && req.Tool != nil {
+			if sandbox != "" && !isolatedSandbox(sandbox) {
+				return deny("shell and file tools must run in an isolated sandbox (load workspace_sandbox with docker or a microVM, not sandbox_local)")
 			}
-			if sandbox == "" && req.Tool.Meta["risk"] == "high" {
+			if sandbox == "" && !readonly && req.Tool.Meta["risk"] == "high" {
 				return deny("a high-risk tool without Meta.sandbox must run in an isolated sandbox")
 			}
 		}
 		return next(c, req)
 	})
 	return nil
+}
+
+// isolatedSandbox reports whether a tool's Meta.sandbox names a boundary
+// that require_sandbox accepts. sandbox_local is explicitly not isolation.
+func isolatedSandbox(name string) bool {
+	if !strings.HasPrefix(name, "sandbox:") {
+		return false
+	}
+	switch strings.TrimPrefix(name, "sandbox:") {
+	case "", "local", "host", "unsafe":
+		return false
+	}
+	return true
 }
 
 // Module is the compiled form of "policy". modules/std registers it.

@@ -41,7 +41,32 @@ jobs:
       - name: Module check
         run: go run ./cmd/kiln module check modules
 
+      - name: Docs build
+        run: SKIP_RECORD=1 docs/build.sh
+
       - name: Test
         # Docker is available on the runner, so the docker sandbox test runs;
         # the Postgres and microsandbox tests skip themselves.
         run: go test -count=1 ./...
+
+      - name: Fuzz smoke
+        run: |
+          go test -run='^$' -fuzz=FuzzAmbiguousPath -fuzztime=10s .
+          go test -run='^$' -fuzz=FuzzEgressRuleAllows -fuzztime=10s .
+          go test -run='^$' -fuzz=FuzzCheckCredentialURL -fuzztime=10s ./sdk
+
+      - name: Vulnerability check
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
+  race:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Race detector
+        run: go test -race -count=1 ./...

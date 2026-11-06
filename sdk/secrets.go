@@ -35,7 +35,6 @@ var (
 	redactSorted      []string                // length-desc, rebuilt when the set changes
 	redactReplacer    *strings.Replacer       // trie-backed matcher, rebuilt with the set
 	redactValues      = map[string][]string{} // original value -> its registered forms
-	redactValueOrder  []string                // value insertion order, oldest first
 	redactEvictLogged bool
 )
 
@@ -68,18 +67,18 @@ func AddRedaction(v string) bool {
 	redactMu.Lock()
 	defer redactMu.Unlock()
 	changed, setChanged := false, false
-	// Refresh an actively used value so it is not the first evicted.
-	if _, ok := redactValues[v]; ok {
-		for i, old := range redactValueOrder {
-			if old == v {
-				redactValueOrder = append(redactValueOrder[:i:i], redactValueOrder[i+1:]...)
-				break
+	// Never evict a live secret to make room: a value that disappears from
+	// the registry silently stops being redacted. Refuse the new value and
+	// let the caller report it as unredactable instead.
+	if _, ok := redactValues[v]; !ok {
+		if len(redactOrder)+len(forms) > maxRedactions {
+			if !redactEvictLogged {
+				redactEvictLogged = true
+				log.Printf("sdk: redaction registry full (%d forms); refusing new values rather than evicting live secrets", maxRedactions)
 			}
+			return false
 		}
-		redactValueOrder = append(redactValueOrder, v)
-	} else {
 		redactValues[v] = forms
-		redactValueOrder = append(redactValueOrder, v)
 	}
 	for _, f := range forms {
 		if _, ok := redactSet[f]; ok {
@@ -95,28 +94,6 @@ func AddRedaction(v string) bool {
 		redactSet[f] = struct{}{}
 		redactOrder = append(redactOrder, f)
 		changed = true
-	}
-	for len(redactOrder) > maxRedactions && len(redactValueOrder) > 1 {
-		// Evict whole values, never half of a secret's encodings.
-		oldest := redactValueOrder[0]
-		redactValueOrder = redactValueOrder[1:]
-		for _, f := range redactValues[oldest] {
-			delete(redactSet, f)
-			for i, old := range redactOrder {
-				if old == f {
-					redactOrder = append(redactOrder[:i:i], redactOrder[i+1:]...)
-					break
-				}
-			}
-		}
-		delete(redactValues, oldest)
-		changed, setChanged = true, true
-	}
-	if len(redactOrder) > maxRedactions && !redactEvictLogged {
-		// One value with more encodings than the cap; keep the registry
-		// bounded even though it means dropping the oldest forms.
-		redactEvictLogged = true
-		log.Printf("sdk: redaction registry full (%d forms); dropping the oldest encodings", maxRedactions)
 	}
 	if changed && setChanged {
 		redactSorted = make([]string, len(redactOrder))
@@ -415,12 +392,23 @@ func NewRunID() string {
 // credential (*_API_KEY, *_TOKEN, *PASSWORD* ...).
 func SecretLike(name string) bool {
 	n := strings.ToUpper(name)
-	for _, s := range []string{"_KEY", "_TOKEN", "_SECRET", "_PASSWORD", "_PASS", "_PASSWD", "_DSN", "_CREDENTIALS", "_CREDENTIAL", "_PAT"} {
+	for _, s := range []string{
+		"_KEY", "_TOKEN", "_SECRET", "_PASSWORD", "_PASS", "_PASSWD", "_DSN",
+		"_CREDENTIALS", "_CREDENTIAL", "_PAT", "_ACCESS_KEY", "_PRIVATE_KEY",
+		"_AUTH", "_BEARER", "_JWT", "_SESSION", "_COOKIE", "_CERT", "_PWD",
+		"_SALT", "_SIGNING", "_WEBHOOK", "_ENCRYPTION", "_CONNECTION",
+	} {
 		if strings.HasSuffix(n, s) {
 			return true
 		}
 	}
-	for _, s := range []string{"PASSWORD", "SECRET", "TOKEN", "APIKEY", "API_KEY", "PRIVATE_KEY", "DATABASE_URL"} {
+	for _, s := range []string{
+		"PASSWORD", "SECRET", "TOKEN", "APIKEY", "API_KEY", "PRIVATE_KEY",
+		"ACCESS_KEY", "DATABASE_URL", "CREDENTIAL", "AUTHORIZATION",
+		"BEARER", "WEBHOOK", "SIGNING_KEY", "ENCRYPTION_KEY",
+		"CONNECTION_STRING", "REDIS_URL", "SMTP_URL", "MONGODB_URI",
+		"PG_URL", "MYSQL_URL", "MONGO_URL", "AMQP_URL", "KUBECONFIG",
+	} {
 		if strings.Contains(n, s) {
 			return true
 		}

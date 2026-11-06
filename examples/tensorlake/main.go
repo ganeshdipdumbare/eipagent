@@ -153,9 +153,10 @@ func main() {
 			}
 		},
 		RunIn: &kiln.RunIn{
-			Provider: "tensorlake",
-			Binary:   bin,
-			Spec:     sdk.SandboxSpec{Network: sdk.NetworkPolicy{Mode: "none"}},
+			Provider:           "tensorlake",
+			Binary:             bin,
+			Spec:               sdk.SandboxSpec{Network: sdk.NetworkPolicy{Mode: "none"}},
+			AllowPrivateEgress: true, // the demo API is a local httptest server
 			SecretHosts: map[string][]string{
 				"ACME_API_TOKEN": {"GET 127.0.0.1/orders*"},
 			},

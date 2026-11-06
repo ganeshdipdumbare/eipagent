@@ -35,8 +35,9 @@ func IsKnownPermission(name string) bool {
 // contract is what the engine granted a module: the services it may
 // provide and the capabilities it may use. Set once, before Apply.
 type contract struct {
-	provides []string
-	grants   map[string]bool
+	provides       []string
+	grants         map[string]bool
+	secretProvider bool
 }
 
 // SetContract is called by the engine before Apply. It records the
@@ -48,6 +49,11 @@ func (c *Scope) SetContract(key *TrustKey, provides, grants, secrets []string) {
 		return
 	}
 	k := &contract{provides: append([]string(nil), provides...), grants: map[string]bool{}}
+	for _, p := range provides {
+		if p == "secrets" {
+			k.secretProvider = true
+		}
+	}
 	for _, g := range grants {
 		k.grants[g] = true
 	}

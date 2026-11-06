@@ -34,7 +34,7 @@ import (
 // Example:
 //
 //	kiln.Config{Model: "openai:gpt-4.1"} // also deepseek:, ollama:, openrouter:, groq:
-//	// Any other OpenAI-compatible server, e.g. vLLM, then WithModel("vllm:qwen3-32b"):
+//	// Any other OpenAI-compatible server, e.g. vLLM, then Config{Model: "vllm:qwen3-32b"}:
 //	model_openai.New(map[string]any{"name": "vllm", "base_url": "http://gpu-box:8000/v1", "api_key": ""})
 var Permissions = []string{"net"}
 
