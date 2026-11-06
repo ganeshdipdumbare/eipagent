@@ -74,7 +74,7 @@
 <aside class="side" id="side" aria-label="Documentation">
   <a class="version" href="https://github.com/ganeshdipdumbare/kiln/blob/main/CHANGELOG.md" aria-label="Release notes">
     <span class="logo"><svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8.5" fill="var(--fg)"/><rect x="6.00" y="6.00" width="3.36" height="3.36" rx="0.8" fill="var(--bg)"/><rect x="6.00" y="10.16" width="3.36" height="3.36" rx="0.8" fill="var(--bg)"/><rect x="6.00" y="14.32" width="3.36" height="3.36" rx="0.8" fill="var(--bg)"/><rect x="6.00" y="18.48" width="3.36" height="3.36" rx="0.8" fill="var(--bg)"/><rect x="6.00" y="22.64" width="3.36" height="3.36" rx="0.8" fill="var(--bg)"/><rect x="18.48" y="6.00" width="3.36" height="3.36" rx="0.8" fill="var(--bg)"/><rect x="14.32" y="10.16" width="3.36" height="3.36" rx="0.8" fill="var(--bg)"/><rect x="14.32" y="18.48" width="3.36" height="3.36" rx="0.8" fill="var(--bg)"/><rect x="18.48" y="22.64" width="3.36" height="3.36" rx="0.8" fill="var(--bg)"/><rect x="10.16" y="14.32" width="3.36" height="3.36" rx="0.8" fill="var(--accent)"/></svg></span>
-    <span><b>v0.6.0</b><small>latest</small></span>
+    <span><b>v0.6.1</b><small>latest</small></span>
   </a>
   <nav id="sidenav"></nav>
 </aside>
@@ -93,7 +93,7 @@
       <a class="btn primary" href="#quickstart">Get started <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
       <a class="btn" href="#composition">See how composition works</a>
     </div>
-    <div class="hero-install"><span style="color:var(--fg-3)">$</span><code>go get github.com/ganeshdipdumbare/kiln@v0.6.0</code><button class="copy" type="button" data-copy="go get github.com/ganeshdipdumbare/kiln@v0.6.0" aria-label="Copy install command"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div>
+    <div class="hero-install"><span style="color:var(--fg-3)">$</span><code>go get github.com/ganeshdipdumbare/kiln@v0.6.1</code><button class="copy" type="button" data-copy="go get github.com/ganeshdipdumbare/kiln@v0.6.1" aria-label="Copy install command"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div>
     <div class="hero-meta"><span><i></i> Go 1.27</span><span><i></i> Anthropic · OpenAI · Gemini · DeepSeek · Ollama</span><span><i></i> Secure by default</span></div>
   </div>
 
@@ -242,12 +242,12 @@ if err != nil {
 <section id="installation" class="page">
   <h1>Installation</h1>
   <p>kiln needs Go 1.27 or newer. Add a tagged release to your module:</p>
-  <div class="code" data-title="terminal"><pre><code class="language-bash">go get github.com/ganeshdipdumbare/kiln@v0.6.0</code></pre></div>
+  <div class="code" data-title="terminal"><pre><code class="language-bash">go get github.com/ganeshdipdumbare/kiln@v0.6.1</code></pre></div>
   <p>The repository is private, so tell Go and give git access once:</p>
   <div class="code" data-title="terminal"><pre><code class="language-bash">go env -w GOPRIVATE=github.com/ganeshdipdumbare/*
 gh auth setup-git        # or use an SSH key for github.com</code></pre></div>
   <p>The CLI installs the same way:</p>
-  <div class="code" data-title="terminal"><pre><code class="language-bash">go install github.com/ganeshdipdumbare/kiln/cmd/kiln@v0.6.0</code></pre></div>
+  <div class="code" data-title="terminal"><pre><code class="language-bash">go install github.com/ganeshdipdumbare/kiln/cmd/kiln@v0.6.1</code></pre></div>
   <h2>Versions</h2>
   <p>Releases are git tags that follow semantic versioning. While the major version is 0, patch releases (<code>v0.4.x</code>) only fix bugs and security issues, and minor releases (<code>v0.x.0</code>) may break the API. Each break is listed with what to change in <a href="https://github.com/ganeshdipdumbare/kiln/blob/main/CHANGELOG.md">CHANGELOG.md</a>. Modules import the SDK from <code>github.com/ganeshdipdumbare/kiln/sdk</code>.</p>
   <p>Check that everything works from a checkout. The test suite runs offline, using a mock model that needs no API key.</p>
@@ -265,7 +265,7 @@ cd kiln && go test ./...</code></pre></div>
 go mod init example.com/hello-agent
 go env -w GOPRIVATE=github.com/ganeshdipdumbare/*   # the repo is private
 gh auth setup-git                                    # or add an SSH key
-go get github.com/ganeshdipdumbare/kiln@v0.6.0</code></pre></div>
+go get github.com/ganeshdipdumbare/kiln@v0.6.1</code></pre></div>
 
   <h2>2. Pick a provider and set its key</h2>
   <p>The model string is <code>provider:model</code>. The matching provider module loads automatically.</p>
@@ -394,7 +394,7 @@ go run ./examples/ollama                 # every demo</code></pre></div>
       <tr><td><code>401</code>, <code>404</code> or <code>unknown revision</code> from <code>go get</code></td><td>The repository is private. Run <code>go env -w GOPRIVATE=github.com/ganeshdipdumbare/*</code> once, then <code>gh auth setup-git</code> or add an SSH key.</td></tr>
       <tr><td><code>go: module ... requires go &gt;= 1.27</code></td><td>Upgrade Go to 1.27 or newer. Check with <code>go version</code>.</td></tr>
       <tr><td>A module import is not found</td><td>A module imports <code>github.com/ganeshdipdumbare/kiln/sdk</code> and <code>.../engine</code>. The application imports <code>github.com/ganeshdipdumbare/kiln</code>.</td></tr>
-      <tr><td>The CLI is not found</td><td><code>go install github.com/ganeshdipdumbare/kiln/cmd/kiln@v0.6.0</code>, then make sure <code>$(go env GOPATH)/bin</code> is on <code>PATH</code>.</td></tr>
+      <tr><td>The CLI is not found</td><td><code>go install github.com/ganeshdipdumbare/kiln/cmd/kiln@v0.6.1</code>, then make sure <code>$(go env GOPATH)/bin</code> is on <code>PATH</code>.</td></tr>
     </tbody>
   </table></div>
 

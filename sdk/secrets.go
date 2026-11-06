@@ -19,7 +19,7 @@ import (
 
 // Version is the kiln SDK version modules are checked against
 // (the "kiln" field of a module manifest).
-const Version = "0.6.0"
+const Version = "0.6.1"
 
 // Redaction: every secret value resolved through the "secrets" service
 // is remembered here, and audit / trace / log modules pass what they

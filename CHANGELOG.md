@@ -4,6 +4,8 @@ All notable changes to kiln. Versions follow [semantic versioning](https://semve
 
 ## Unreleased
 
+## v0.6.1 — 2026-11-06
+
 ### Fixed
 
 - **RunIn `host.tool` boundary.** Box-minted runs (webhook/schedule inside
