@@ -22,7 +22,7 @@ var Probe = engine.Module{
 	Requires:    []string{"?secrets"},
 	Permissions: []string{"net", "env"},
 	Secrets:     []string{"GH_TOKEN"},
-	Apply: func(p *sdk.Module) error {
+	Apply: func(p *sdk.Scope) error {
 		hc, err := p.HTTP(sdk.HTTPOptions{AllowHosts: []string{"*"}, AllowPrivate: true, AllowInsecure: true})
 		if err != nil {
 			return err
@@ -58,7 +58,7 @@ var Probe = engine.Module{
 // The host must use the identity it recorded for the run, not the box's.
 var Forge = engine.Module{
 	Name: "box_forge",
-	Apply: func(p *sdk.Module) error {
+	Apply: func(p *sdk.Scope) error {
 		p.AddTool(sdk.Tool{Name: "forge", Schema: sdk.Object(map[string]any{}),
 			Run: func(c context.Context, a map[string]any) (string, error) {
 				ri := sdk.RunInfoFrom(c)

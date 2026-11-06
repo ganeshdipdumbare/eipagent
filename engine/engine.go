@@ -17,20 +17,29 @@ var trustKey = sdk.ClaimTrustKey()
 type Engine struct {
 	mu      sync.Mutex
 	pol     *Policy
-	root    *sdk.Module
+	root    *sdk.Scope
 	started []started
 	closed  bool
 }
 
 type started struct {
 	info ModuleInfo
-	ctx  *sdk.Module
+	ctx  *sdk.Scope
 	err  error
 }
 
 // Start applies the plan's modules in order. If one fails, the modules
 // already started are disposed (last first) and no engine is returned.
 func (p *Plan) Start() (*Engine, error) {
+	// Host setup first: a module may need a directory to exist before it
+	// applies, and modules cannot create host paths themselves.
+	for _, n := range p.nodes {
+		if n.mod.Prepare != nil {
+			if err := n.mod.Prepare(); err != nil {
+				return nil, fmt.Errorf("module %s: prepare: %w", n.name, err)
+			}
+		}
+	}
 	root := sdk.NewRoot()
 	if p.logger != nil {
 		root.SetLogger(p.logger)
@@ -55,6 +64,13 @@ func (p *Plan) Start() (*Engine, error) {
 			e.rollback()
 			return nil, fmt.Errorf("module %s: %w", n.name, err)
 		}
+		// Apply may have ignored a registration error; never start with
+		// fewer tools or services than the application declared.
+		if err := ctx.Err(); err != nil {
+			ctx.Dispose()
+			e.rollback()
+			return nil, fmt.Errorf("module %s: %w", n.name, err)
+		}
 		e.started = append(e.started, started{info: info, ctx: ctx})
 		e.audit("module.active", n.name, nil)
 	}
@@ -62,7 +78,7 @@ func (p *Plan) Start() (*Engine, error) {
 }
 
 // applyModule runs Apply, turning a panic into an error.
-func applyModule(m Module, ctx *sdk.Module) (err error) {
+func applyModule(m Module, ctx *sdk.Scope) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("panic: %v", r)
@@ -132,7 +148,7 @@ func (e *Engine) audit(kind, module string, err error) {
 
 // Root returns the root context. Applications read the services modules
 // provide through it.
-func (e *Engine) Root() *sdk.Module { return e.root }
+func (e *Engine) Root() *sdk.Scope { return e.root }
 
 // Policy returns the admin policy the engine was started with.
 func (e *Engine) Policy() *Policy { return e.pol }

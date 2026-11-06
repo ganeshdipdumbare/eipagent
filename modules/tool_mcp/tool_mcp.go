@@ -41,12 +41,12 @@ import (
 //
 // Example:
 //
-//	kiln.WithModuleConfig("tool_mcp", map[string]any{"servers": []any{
+//	tool_mcp.New(map[string]any{"servers": []any{
 //		map[string]any{"name": "github", "command": "npx", "args": []any{"-y", "@modelcontextprotocol/server-github"},
 //			"env": map[string]any{"GITHUB_PERSONAL_ACCESS_TOKEN": "secret://GITHUB_TOKEN"}},
 //		map[string]any{"name": "docs", "url": "https://mcp.example.com/mcp"},
 //	}})
-//	// Shortcut: kiln.WithMCP("github", "npx", "-y", "@modelcontextprotocol/server-github")
+//	// Shortcut: kiln.MCP("github", "npx", "-y", "@modelcontextprotocol/server-github")
 var Permissions = []string{"net", "exec"}
 
 var Requires = []string{"?secrets"} // secret:// keys/headers are optional
@@ -73,7 +73,7 @@ type client struct {
 	close  func()
 }
 
-func Apply(p *sdk.Module) error {
+func Apply(p *sdk.Scope) error {
 	servers := p.ConfigList("servers")
 	if len(servers) == 0 {
 		return errors.New("tool_mcp: config servers is empty")
@@ -83,7 +83,7 @@ func Apply(p *sdk.Module) error {
 		if err != nil {
 			return err
 		}
-		p.OnUnload(cl.close)
+		p.OnClose(cl.close)
 		if err := register(p, cl, s); err != nil {
 			return err
 		}
@@ -104,7 +104,7 @@ func request(id *int64, method string, params map[string]any) map[string]any {
 
 func str(m map[string]any, k string) string { s, _ := m[k].(string); return s }
 
-func resolveMap(p *sdk.Module, raw any) (map[string]string, error) {
+func resolveMap(p *sdk.Scope, raw any) (map[string]string, error) {
 	out := map[string]string{}
 	m, _ := raw.(map[string]any)
 	for k, v := range m {
@@ -121,7 +121,7 @@ func resolveMap(p *sdk.Module, raw any) (map[string]string, error) {
 	return out, nil
 }
 
-func connect(p *sdk.Module, s map[string]any) (*client, error) {
+func connect(p *sdk.Scope, s map[string]any) (*client, error) {
 	name := str(s, "name")
 	if name == "" {
 		return nil, errors.New("tool_mcp: every server needs a name")
@@ -164,7 +164,7 @@ func connect(p *sdk.Module, s map[string]any) (*client, error) {
 // splitEnv divides a stdio server's env: a secret:// reference is resolved
 // through the secrets service and goes to Secrets; any other value goes to
 // Env. A credential-looking name must use a reference.
-func splitEnv(p *sdk.Module, name string, raw any) (env, secrets map[string]string, err error) {
+func splitEnv(p *sdk.Scope, name string, raw any) (env, secrets map[string]string, err error) {
 	env, secrets = map[string]string{}, map[string]string{}
 	m, _ := raw.(map[string]any)
 	for k, v := range m {
@@ -185,7 +185,7 @@ func splitEnv(p *sdk.Module, name string, raw any) (env, secrets map[string]stri
 	return env, secrets, nil
 }
 
-func stdioClient(p *sdk.Module, name string, s map[string]any) (*client, error) {
+func stdioClient(p *sdk.Scope, name string, s map[string]any) (*client, error) {
 	command := str(s, "command")
 	var args []string
 	if raw, ok := s["args"].([]any); ok {
@@ -284,7 +284,7 @@ func stdioClient(p *sdk.Module, name string, s map[string]any) (*client, error) 
 	}, nil
 }
 
-func httpClient(p *sdk.Module, name string, s map[string]any) (*client, error) {
+func httpClient(p *sdk.Scope, name string, s map[string]any) (*client, error) {
 	url := str(s, "url")
 	headers, err := resolveMap(p, s["headers"])
 	if err != nil {
@@ -433,7 +433,7 @@ func httpClient(p *sdk.Module, name string, s map[string]any) (*client, error) {
 	}, nil
 }
 
-func register(p *sdk.Module, cl *client, s map[string]any) error {
+func register(p *sdk.Scope, cl *client, s map[string]any) error {
 	trustAnn, _ := s["trust_annotations"].(bool)
 	allow := map[string]bool{}
 	if raw, ok := s["tools"].([]any); ok {
@@ -539,3 +539,13 @@ func mcpTool(cl *client, toolName, desc string, schema, meta map[string]any) sdk
 
 // Module is the compiled form of "tool_mcp". modules/std registers it.
 var Module = engine.Module{Name: "tool_mcp", Requires: Requires, Provides: nil, Permissions: Permissions, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}

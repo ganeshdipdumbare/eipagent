@@ -26,7 +26,7 @@ func statusOf(a *kiln.Agent) map[string]kiln.ModuleStatus {
 }
 
 func TestShellToolsGetAWorkspaceAutomatically(t *testing.T) {
-	a := mockAgent(t, nil, kiln.WithModules("tool_shell"))
+	a := mockAgent(t, nil, withModules("tool_shell"))
 	st := statusOf(a)
 	if st["tool_shell"].State != "ACTIVE" {
 		t.Fatalf("tool_shell: %s", st["tool_shell"].State)
@@ -44,7 +44,7 @@ func TestShellToolsGetAWorkspaceAutomatically(t *testing.T) {
 func TestWithPersistenceFile(t *testing.T) {
 	dir := t.TempDir()
 	mk := func(reply string) *kiln.Agent {
-		return mockAgent(t, []any{map[string]any{"text": reply}}, kiln.WithPersistence("file", dir))
+		return mockAgent(t, []any{map[string]any{"text": reply}}, withPersistence("file", dir))
 	}
 	a := mk("first")
 	if _, err := a.Thread("t1").Generate(bg, "hello"); err != nil {
@@ -69,8 +69,8 @@ func TestWithApprovalsPausesTheTool(t *testing.T) {
 	a := mockAgent(t, []any{
 		map[string]any{"tool": "wire", "args": map[string]any{"amount": 5}},
 		map[string]any{"text": "done"},
-	}, kiln.WithApprovals("wire"),
-		kiln.WithTools(kiln.Tool("wire", "Send money", func(c context.Context, in struct {
+	}, withApprovals("wire"),
+		withTools(kiln.NewTool("wire", "Send money", func(c context.Context, in struct {
 			Amount int `json:"amount"`
 		}) (string, error) {
 			ran = true
@@ -80,7 +80,7 @@ func TestWithApprovalsPausesTheTool(t *testing.T) {
 	if err != nil || !res.Interrupted() || ran {
 		t.Fatalf("want a pause before wire: %v %+v ran=%v", err, res, ran)
 	}
-	if _, err := a.Thread("t").Resume(bg, kiln.Approve(res.Interrupts[0].ID)); err != nil || !ran {
+	if _, err := a.Thread("t").Resume(bg, []kiln.Decision{kiln.Approve(res.Interrupts[0].ID)}); err != nil || !ran {
 		t.Fatalf("approve: %v ran=%v", err, ran)
 	}
 }
@@ -100,9 +100,9 @@ func TestWithAuditTracingAndMCP(t *testing.T) {
 	defer srv.Close()
 	auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
 	a := mockAgent(t, nil,
-		kiln.WithAudit(auditPath),
-		kiln.WithTracing(srv.URL),
-		kiln.WithMCP("srv", srv.URL))
+		withAudit(auditPath),
+		withTracing(srv.URL),
+		withMCP("srv", srv.URL))
 	st := statusOf(a)
 	for _, n := range []string{"audit_file", "trace_otlp", "tool_mcp"} {
 		if st[n].State != "ACTIVE" {

@@ -8,7 +8,7 @@ microVM and connects to it like a small hosted sandbox. The provider:
 - connects to the guest over SSH for exec, files and `kiln serve --stdio`;
 - destroys the VM, tap and temporary rootfs on `Close`.
 
-The agent runs inside the microVM with `WithRunIn`. The real test token stays on
+The agent runs inside the microVM with `Config.RunIn`. The real test token stays on
 the host, the guest holds a placeholder, and the host swaps it only for the
 allowed request.
 
@@ -132,10 +132,10 @@ split does not depend on who owns the machines: only the provider module
 changes.
 
 ```go
-agent, _ := kiln.New(
-    kiln.WithModel("openai:gpt-4.1"),
-    kiln.WithModules("tool_shell", "tool_fs"),
-    kiln.WithRunIn(kiln.RunIn{
+agent, _ := kiln.New(kiln.Config{
+    Model:   "openai:gpt-4.1",
+    Modules: []kiln.Module{tool_shell.New(), tool_fs.New()},
+    RunIn: &kiln.RunIn{
         Provider: "your_hosted_provider", // e.g. E2B, microsandbox cloud, a Kubernetes provider
         Binary:   "./kiln-linux",
         // The real values stay in the host's environment. The provider's
@@ -143,8 +143,8 @@ agent, _ := kiln.New(
         SecretHosts: map[string][]string{
             "ACME_API_TOKEN": {"GET api.acme.com/orders*"},
         },
-    }),
-)
+    },
+})
 ```
 
 The host is your server: it runs the model provider, the secrets service, the
@@ -155,7 +155,7 @@ when the sandbox sends a request with that placeholder, the host checks
 redacts the reply. The provider never sees the value.
 
 That is why `examples/firecracker` is useful even if you use a hosted service:
-it runs the exact same `WithRunIn`, `host.secret`, `host.http`, placeholder,
+it runs the exact same `Config.RunIn`, `host.secret`, `host.http`, placeholder,
 redaction and `sandbox.egress` code paths, with a provider you can inspect and
 run yourself.
 
@@ -217,5 +217,5 @@ The provider reads these environment variables:
 | `FC_BOOT_ARGS` | `keep_bootcon console=ttyS0 reboot=k panic=1` on arm64 |
 
 Each VM gets a `/30` host/guest network for SSH. The guest has no internet
-route; with `WithRunIn` HTTP goes through the host bridge, and other secret
+route; with `Config.RunIn` HTTP goes through the host bridge, and other secret
 values never enter the VM.

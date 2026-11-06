@@ -13,7 +13,7 @@ import (
 func mod(name string, requires, provides []string, perms []string, log *[]string) Module {
 	return Module{
 		Name: name, Requires: requires, Provides: provides, Permissions: perms,
-		Apply: func(p *sdk.Module) error {
+		Apply: func(p *sdk.Scope) error {
 			*log = append(*log, name)
 			for _, s := range provides {
 				if strings.HasSuffix(s, "*") {
@@ -89,7 +89,7 @@ func TestComposeRejections(t *testing.T) {
 		wantErr string
 	}{
 		{"unknown module", base, Options{Specs: specs("nope")}, `unknown module "nope"`},
-		{"duplicate row", base, Options{Specs: specs("memory_x", "memory_x")}, "listed twice"},
+		{"duplicate instance", base, Options{Specs: []ModuleSpec{{Use: "memory_x"}, {Use: "memory_y", As: "memory_x"}}}, "listed twice"},
 		{"duplicate provider", base, Options{Specs: specs("memory_x", "memory_y")}, `both provide "memory"`},
 		{"unmet requirement with hint", base, Options{Specs: specs("needs_db")}, `requires "db", which no enabled module provides`},
 		{"cycle", base, Options{Specs: specs("cycle_a", "cycle_b")}, "dependency cycle"},
@@ -196,7 +196,7 @@ func TestStartRunsAppliesInOrder(t *testing.T) {
 func TestProvideOutsideContractFails(t *testing.T) {
 	reg := []Module{{
 		Name: "sneaky", Provides: []string{"tool"},
-		Apply: func(p *sdk.Module) error {
+		Apply: func(p *sdk.Scope) error {
 			if err := p.Provide("model/openai", "x"); err == nil {
 				return fmt.Errorf("undeclared Provide succeeded")
 			}
@@ -217,12 +217,12 @@ func TestProvideOutsideContractFails(t *testing.T) {
 func TestFailureRollsBackEarlierModules(t *testing.T) {
 	disposed := []string{}
 	track := func(name string) Module {
-		return Module{Name: name, Provides: []string{name}, Apply: func(p *sdk.Module) error {
-			p.OnUnload(func() { disposed = append(disposed, name) })
+		return Module{Name: name, Provides: []string{name}, Apply: func(p *sdk.Scope) error {
+			p.OnClose(func() { disposed = append(disposed, name) })
 			return p.Provide(name, name)
 		}}
 	}
-	boom := Module{Name: "boom", Requires: []string{"a"}, Apply: func(*sdk.Module) error { return fmt.Errorf("kaboom") }}
+	boom := Module{Name: "boom", Requires: []string{"a"}, Apply: func(*sdk.Scope) error { return fmt.Errorf("kaboom") }}
 	reg := []Module{track("a"), track("b"), boom}
 	plan, err := Compose(Options{Registry: reg, Specs: specs("a", "b", "boom")})
 	if err != nil {
@@ -237,7 +237,7 @@ func TestFailureRollsBackEarlierModules(t *testing.T) {
 }
 
 func TestPanicBecomesError(t *testing.T) {
-	reg := []Module{{Name: "panicky", Apply: func(*sdk.Module) error { panic("oops") }}}
+	reg := []Module{{Name: "panicky", Apply: func(*sdk.Scope) error { panic("oops") }}}
 	plan, err := Compose(Options{Registry: reg, Specs: specs("panicky")})
 	if err != nil {
 		t.Fatal(err)
@@ -250,8 +250,8 @@ func TestPanicBecomesError(t *testing.T) {
 func TestCloseIsIdempotentAndReversed(t *testing.T) {
 	var closed []string
 	mk := func(name string) Module {
-		return Module{Name: name, Provides: []string{name}, Apply: func(p *sdk.Module) error {
-			p.OnUnload(func() { closed = append(closed, name) })
+		return Module{Name: name, Provides: []string{name}, Apply: func(p *sdk.Scope) error {
+			p.OnClose(func() { closed = append(closed, name) })
 			return nil
 		}}
 	}

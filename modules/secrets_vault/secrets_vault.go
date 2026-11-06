@@ -44,7 +44,7 @@ import (
 //
 // Example:
 //
-//	kiln.WithModuleConfig("secrets_vault", map[string]any{
+//	secrets_vault.New(map[string]any{
 //		"address":     "https://vault.internal:8200",
 //		"mount":       "secret",
 //		"prefix":      "kiln",
@@ -67,7 +67,7 @@ func validName(n string) bool {
 	return true
 }
 
-func Apply(p *sdk.Module) error {
+func Apply(p *sdk.Scope) error {
 	envAddr, err := p.Env("VAULT_ADDR")
 	if err != nil {
 		return err
@@ -249,3 +249,13 @@ func Apply(p *sdk.Module) error {
 
 // Module is the compiled form of "secrets_vault". modules/std registers it.
 var Module = engine.Module{Name: "secrets_vault", Requires: nil, Provides: []string{"secrets"}, Permissions: Permissions, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}

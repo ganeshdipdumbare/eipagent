@@ -23,12 +23,12 @@ import (
 //
 // Example:
 //
-//	kiln.WithModuleConfig("hook_approval", map[string]any{"interrupt_on": map[string]any{
+//	hook_approval.New(map[string]any{"interrupt_on": map[string]any{
 //		"delete_file": true,
 //		"send_email":  map[string]any{"allowed": []any{"approve", "edit", "reject"}, "description": "Send this email?"},
 //	}})
-//	// Shortcut: kiln.WithApprovals("delete_file", "send_email")
-func Apply(p *sdk.Module) error {
+//	// Shortcut: kiln.Approvals("delete_file", "send_email")
+func Apply(p *sdk.Scope) error {
 	if p.Priority() == 0 {
 		p.SetPriority(-10) // inner: runs after policy, limits, reviewers
 	}
@@ -105,3 +105,13 @@ func Apply(p *sdk.Module) error {
 
 // Module is the compiled form of "hook_approval". modules/std registers it.
 var Module = engine.Module{Name: "hook_approval", Requires: nil, Provides: nil, Permissions: nil, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}

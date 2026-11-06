@@ -24,14 +24,14 @@ import (
 //
 // Example:
 //
-//	kiln.WithModules("tool_plan")
+//	kiln.Config{Modules: []kiln.Module{tool_plan.New()}}
 var Requires = []string{"?memory"}
 
 type task struct {
 	Title, Status, Note string
 }
 
-func Apply(p *sdk.Module) error {
+func Apply(p *sdk.Scope) error {
 	maxTasks := p.ConfigInt("max_tasks", 30)
 	reminder := p.ConfigBool("reminder", true)
 
@@ -186,3 +186,13 @@ func Apply(p *sdk.Module) error {
 
 // Module is the compiled form of "tool_plan". modules/std registers it.
 var Module = engine.Module{Name: "tool_plan", Requires: Requires, Provides: nil, Permissions: nil, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}

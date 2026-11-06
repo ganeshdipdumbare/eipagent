@@ -54,7 +54,7 @@ import (
 //
 // Example:
 //
-//	kiln.WithModuleConfig("trigger_webhook", map[string]any{
+//	trigger_webhook.New(map[string]any{
 //		"addr": "127.0.0.1:8787",
 //		"routes": []any{map[string]any{"path": "/github", "secret": "secret://GH_WEBHOOK_TOKEN",
 //			"user": "github-bot", "thread": "gh-{repository.full_name}"}},
@@ -63,7 +63,7 @@ var Requires = []string{"agent"}
 
 var Permissions = []string{"net"}
 
-func Apply(p *sdk.Module) error {
+func Apply(p *sdk.Scope) error {
 	agent := p.Service("agent").(*sdk.AgentService)
 	addr := p.ConfigString("addr", "127.0.0.1:8787")
 	mux := http.NewServeMux()
@@ -85,7 +85,7 @@ func Apply(p *sdk.Module) error {
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second}
 	go srv.Serve(ln)
 	p.Logf("listening on %s", ln.Addr())
-	p.OnUnload(func() {
+	p.OnClose(func() {
 		c, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		g.close() // no new runs from here on
@@ -120,7 +120,7 @@ func (g *gate) close() {
 	g.mu.Unlock()
 }
 
-func route(p *sdk.Module, mux *http.ServeMux, agent *sdk.AgentService, r map[string]any, runCtx context.Context, g *gate) error {
+func route(p *sdk.Scope, mux *http.ServeMux, agent *sdk.AgentService, r map[string]any, runCtx context.Context, g *gate) error {
 	s := func(k string) string { v, _ := r[k].(string); return v }
 	n := func(k string, def int) int { // no type switch on any (Yaegi)
 		if v, ok := r[k].(float64); ok {
@@ -324,3 +324,13 @@ func fill(t string, doc map[string]any, body string) string {
 
 // Module is the compiled form of "trigger_webhook". modules/std registers it.
 var Module = engine.Module{Name: "trigger_webhook", Requires: Requires, Provides: nil, Permissions: Permissions, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}

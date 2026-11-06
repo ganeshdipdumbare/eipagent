@@ -36,11 +36,11 @@ import (
 //
 // Example:
 //
-//	kiln.WithModuleConfig("sandbox_local", map[string]any{"workdir": "."}) // no isolation: this project folder
-//	kiln.WithModules("workspace_local", "tool_shell", "tool_fs")
+//	sandbox_local.New(map[string]any{"workdir": "."}) // no isolation: this project folder
+//	kiln.Config{Modules: []kiln.Module{workspace_local.New(), tool_shell.New(), tool_fs.New()}}
 var Permissions = []string{"exec", "fs:read", "fs:write", "env"}
 
-func Apply(p *sdk.Module) error {
+func Apply(p *sdk.Scope) error {
 	if p.ConfigBool("env_secrets", false) {
 		return errors.New("sandbox_local: env_secrets was removed; secret values must be passed by secret:// references, not inherited from the host environment")
 	}
@@ -133,7 +133,7 @@ func validBoxID(id string) bool {
 // ensureDir creates dir and any missing parents with perm, like os.MkdirAll.
 // The broker only opens existing directories, so each missing level is
 // created inside its existing parent.
-func ensureDir(p *sdk.Module, dir string, perm fs.FileMode) error {
+func ensureDir(p *sdk.Scope, dir string, perm fs.FileMode) error {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return err
@@ -161,7 +161,7 @@ func ensureDir(p *sdk.Module, dir string, perm fs.FileMode) error {
 // every file operation goes through d, which refuses paths and symlinks
 // that leave the directory. Host paths (Upload, Download) go through p.Dir
 // on their own parent directory.
-func box(id string, d *sdk.Dir, p *sdk.Module, shell *sdk.Exec, baseEnv map[string]string) *sdk.Sandbox {
+func box(id string, d *sdk.Dir, p *sdk.Scope, shell *sdk.Exec, baseEnv map[string]string) *sdk.Sandbox {
 	abs := d.Name()
 	// rel turns a path (absolute, or relative to the root) into a name
 	// under the root. Symlinks that leave the root are refused by d.
@@ -417,3 +417,13 @@ func removeTree(d *sdk.Dir, name string) error {
 
 // Module is the compiled form of "sandbox_local". modules/std registers it.
 var Module = engine.Module{Name: "sandbox_local", Requires: nil, Provides: []string{"sandbox/local"}, Permissions: Permissions, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}

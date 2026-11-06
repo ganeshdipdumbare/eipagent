@@ -13,7 +13,7 @@ import (
 // supervisor approves, edits or rejects it. The pause is durable: it is
 // stored with the thread and survives a server restart.
 func RefundPolicy(limit float64) kiln.Module {
-	return kiln.Module{Name: "refund_policy", Apply: func(p *sdk.Module) error {
+	return kiln.Module{Name: "refund_policy", Apply: func(p *sdk.Scope) error {
 		p.WrapTool(func(c context.Context, req *sdk.ToolRequest, next sdk.ToolHandler) (*sdk.ToolResult, error) {
 			if req.Call.Name != "issue_refund" || req.Decision != nil {
 				return next(c, req) // other tools, or a supervisor already decided
@@ -40,7 +40,7 @@ func RefundPolicy(limit float64) kiln.Module {
 // middleware ran (for example, card numbers already masked by hook_pii).
 // It runs innermost and reports through the run's event stream.
 func Inspector() kiln.Module {
-	return kiln.Module{Name: "inspector", Apply: func(p *sdk.Module) error {
+	return kiln.Module{Name: "inspector", Apply: func(p *sdk.Scope) error {
 		p.SetPriority(-100)
 		p.WrapModel(func(c context.Context, req *sdk.ModelRequest, next sdk.ModelHandler) (*sdk.ModelResponse, error) {
 			if req.Run != nil && req.Run.Emit != nil {

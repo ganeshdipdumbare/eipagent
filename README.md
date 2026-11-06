@@ -19,7 +19,7 @@
 Requires **Go 1.27**.
 
 ```bash
-go get github.com/ganeshdipdumbare/kiln@v0.5.0
+go get github.com/ganeshdipdumbare/kiln@v0.6.0
 ```
 
 The repository is private: run `go env -w GOPRIVATE=github.com/ganeshdipdumbare/*` once, and `gh auth setup-git` (or an SSH key) so `git` can fetch it.
@@ -36,10 +36,10 @@ import (
 )
 
 func main() {
-	agent, err := kiln.New(
-		kiln.WithModel("mock:demo"), // or "anthropic:claude-sonnet-5-5", "openai:gpt-4.1", "ollama:llama3" ...
-		kiln.WithInstructions("You are a concise assistant."),
-	)
+	agent, err := kiln.New(kiln.Config{
+		Model:        "mock:demo", // or "anthropic:claude-sonnet-5-5", "openai:gpt-4.1", "ollama:llama3" ...
+		Instructions: "You are a concise assistant.",
+	})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func main() {
 
 **Words you'll meet** (the [glossary](https://kilnai-docs.vercel.app/#concepts) has more):
 
-- **Module:** a compiled Go package that exports a descriptor and `func Apply(p *sdk.Module) error`. The loop, providers, tools, memory and policy are all modules.
+- **Module:** a compiled Go package that exports a descriptor and `func Apply(p *sdk.Scope) error`. The loop, providers, tools, memory and policy are all modules.
 - **Service:** something a module provides by name for others to use: `model/anthropic`, `threads`, `memory`, `secrets`.
 - **Hook:** code a module runs around each step, model call or tool call (retries, approvals, redaction …).
 - **Capability:** what a module may reach through the broker: `net`, `exec`, `fs:read`, `fs:write`, `env`, `env:secrets`, `db`.
@@ -108,11 +108,11 @@ The model string is just `ollama:<model>` (for example `ollama:qwen3.5:4b`). Set
 |---|---|
 | [`examples/secrets`](examples/secrets/main.go) | `secrets_vault` against an in-process Vault: per-module grants, a module that can't ask as another, key rotation without a restart, a leaked key redacted from logs and audit, `secret.access` records |
 | [`examples/microsandbox`](examples/microsandbox/main.go) | the agent in a [microsandbox](https://microsandbox.dev) microVM with no network (needs `msb`; set `MSB_BACKEND=cloud` and `MSB_API_KEY` for microsandbox cloud): no secret env vars in the VM, a module that holds only a placeholder, the host swapping in the real token on `GET /orders` only, the echoed token redacted, a `DELETE` and any other host refused, and the host's `sandbox.egress` record of every request |
-| [`examples/firecracker`](examples/firecracker/main.go) | a self-hosted [Firecracker](https://firecracker-microvm.github.io/) microVM, created and connected to like a small hosted sandbox (Linux with `/dev/kvm`; includes a Lima setup for macOS): tap device, Firecracker API, SSH, `WithRunIn`, and the same secret-placeholder, host-swap, redaction and `sandbox.egress` guarantees. Set `FC_HOST` to run the host process on one machine and Firecracker on another |
+| [`examples/firecracker`](examples/firecracker/main.go) | a self-hosted [Firecracker](https://firecracker-microvm.github.io/) microVM, created and connected to like a small hosted sandbox (Linux with `/dev/kvm`; includes a Lima setup for macOS): tap device, Firecracker API, SSH, `Config.RunIn`, and the same secret-placeholder, host-swap, redaction and `sandbox.egress` guarantees. Set `FC_HOST` to run the host process on one machine and Firecracker on another |
 | [`examples/tensorlake`](examples/tensorlake/main.go) | the agent inside a real [Tensorlake](https://docs.tensorlake.ai/sandboxes/introduction) cloud sandbox (needs `TENSORLAKE_API_KEY`): the host keeps the model provider, secrets and broker, the provider runs the VM, and the same placeholder, host-swap, redaction and `sandbox.egress` flow is shown on a real hosted service |
 | [`examples/observability`](examples/observability/main.go) | `audit_http` to an in-process SIEM that checks HMAC signatures and the hash chain; `trace_otlp` to an in-process OpenTelemetry collector, printing the span tree and the shared fields (`run`, `thread`, `user`, `module`, `provider`) |
-| [`examples/boxprobe`](examples/boxprobe/main.go) | application modules compiled into a box program (`internal/boxtest`), the way `WithRunIn` runs them |
-| [`examples/custom-module`](examples/custom-module/main.go) | a module in its own Go package: import it, register it with `WithModule`, configure it with `WithModuleConfig`, and check it with `kiln module check` |
+| [`examples/boxprobe`](examples/boxprobe/main.go) | application modules compiled into a box program (`internal/boxtest`), the way `Config.RunIn` runs them |
+| [`examples/custom-module`](examples/custom-module/main.go) | a module in its own Go package: import it, put it in `Config.Modules`, configure it with `New(...)`, and check it with `kiln module check` |
 
 ### Generate with a typed tool
 
@@ -121,16 +121,16 @@ type WeatherIn struct {
 	City string `json:"city" desc:"city name"`
 }
 
-weather := kiln.Tool("weather", "Current weather for a city",
+weather := kiln.NewTool("weather", "Current weather for a city",
 	func(ctx context.Context, in WeatherIn) (string, error) {
 		return "18°C and light rain in " + in.City, nil
 	})
 
-agent, err := kiln.New(
-	kiln.WithModel("anthropic:claude-sonnet-5-5"),
-	kiln.WithInstructions("You are a concise travel assistant."),
-	kiln.WithTools(weather),
-)
+agent, err := kiln.New(kiln.Config{
+	Model:        "anthropic:claude-sonnet-5-5",
+	Instructions: "You are a concise travel assistant.",
+	Tools:        []kiln.Tool{weather},
+})
 defer agent.Close()
 
 res, err := agent.Generate(ctx, "What's the weather in Lisbon?")
@@ -186,53 +186,55 @@ If the reply doesn't parse, kiln asks the model once to repair it and then retur
 ### Threads (durable conversations)
 
 ```go
-agent, err := kiln.New(
-	kiln.WithModel("openai:gpt-4.1"),
-	kiln.WithModuleConfig("threads_file", map[string]any{"dir": ".kiln/threads"}), // or threads_sql
-)
+agent, err := kiln.New(kiln.Config{
+	Model:   "openai:gpt-4.1",
+	Modules: kiln.Persistence("file", ".kiln"), // or kiln.Persistence("postgres", dsn)
+})
 th := agent.Thread("customer-42")
 th.Generate(ctx, "My name is Ada.")
 th.Generate(ctx, "What's my name?") // sees the earlier turn
 msgs, _ := th.Messages(ctx)
 ```
 
-Without `WithPersistence`, threads are kept in memory (`threads_inmem`).
+Without `kiln.Persistence`, threads are kept in memory (`threads_inmem`).
 
 ### Human in the loop
 
 ```go
-agent, _ := kiln.New(
-	kiln.WithModel("openai:gpt-4.1"),
-	kiln.WithTools(refund),
-	kiln.WithModuleConfig("hook_approval", map[string]any{"interrupt_on": map[string]any{"refund": true}}),
-)
+agent, _ := kiln.New(kiln.Config{
+	Model:   "openai:gpt-4.1",
+	Tools:   []kiln.Tool{refund},
+	Modules: kiln.Approvals("refund"),
+})
 th := agent.Thread("ticket-981")
 res, _ := th.Generate(ctx, "Refund order A-17")
 for res.Interrupted() { // paused before the tool ran; the pause is saved
 	in := res.Interrupts[0]
 	fmt.Println("approve?", in.Message, in.ToolCall.Args)
-	res, _ = th.Resume(ctx, kiln.Approve(in.ID)) // or Reject(id, why) / Edit(id, args) / Respond(id, text)
+	res, _ = th.Resume(ctx, []kiln.Decision{kiln.Approve(in.ID)}) // or Reject(id, why) / Edit(id, args) / Respond(id, text)
 }
 ```
 
 The pause is saved with the thread. With `threads_sql`, a different process or pod can resume it, possibly hours later. Two other ways to answer interrupts:
 
 - **Without a thread:** call `agent.Resume(ctx, res, decisions)`. The state travels in `res`.
-- **In-process, synchronously:** pass `kiln.WithApprover(func(ctx, in) (*Decision, error))`, for example to prompt in a CLI.
+- **In-process, synchronously:** add `kiln.Approver(func(ctx, in) (*Decision, error))...` to `Config.Modules`, for example to prompt in a CLI.
 
 To pause on everything risky instead of naming tools, use `{"non_readonly": true}` or `{"risk": ["high"]}`. You can also put `hook_review` in front: a reviewer model then approves, denies or escalates each call to a human.
 
 ### Hooks from the standard modules
 
 ```go
-agent, _ := kiln.New(
-	kiln.WithModel("anthropic:claude-sonnet-5-5"),
-	kiln.WithModuleConfig("hook_retry", map[string]any{"max_retries": 3}),                         // 429/5xx with backoff
-	kiln.WithModuleConfig("hook_fallback", map[string]any{"models": []any{"openai:gpt-4.1"}}),     // next model on failure
-	kiln.WithModuleConfig("hook_limits", map[string]any{"model_calls_run": 20, "tool_calls_run": 50}),
-	kiln.WithModuleConfig("hook_pii", map[string]any{"types": []any{"email", "credit_card"}}),     // redact, mask, hash or block
-	kiln.WithModuleConfig("hook_summarize", map[string]any{"trigger_messages": 40, "keep_messages": 10}),
-)
+agent, _ := kiln.New(kiln.Config{
+	Model: "anthropic:claude-sonnet-5-5",
+	Modules: []kiln.Module{
+		hook_retry.New(map[string]any{"max_retries": 3}),                      // 429/5xx with backoff
+		hook_fallback.New(map[string]any{"models": []any{"openai:gpt-4.1"}}),   // next model on failure
+		hook_limits.New(map[string]any{"model_calls_run": 20, "tool_calls_run": 50}),
+		hook_pii.New(map[string]any{"types": []any{"email", "credit_card"}}),   // redact, mask, hash or block
+		hook_summarize.New(map[string]any{"trigger_messages": 40, "keep_messages": 10}),
+	},
+})
 ```
 
 ### Your own hooks
@@ -240,7 +242,7 @@ agent, _ := kiln.New(
 A module is ordinary Go code compiled into your program (see [Modules](#modules)).
 
 ```go
-timing := kiln.Module{Name: "timing", Apply: func(p *sdk.Module) error {
+timing := kiln.Module{Name: "timing", Apply: func(p *sdk.Scope) error {
 	p.WrapModel(func(c context.Context, req *kiln.ModelRequest, next kiln.ModelHandler) (*kiln.ModelResponse, error) {
 		resp, err := next(c, req) // the model call, plus any inner hooks
 		if err == nil {
@@ -256,7 +258,7 @@ timing := kiln.Module{Name: "timing", Apply: func(p *sdk.Module) error {
 	})
 	return nil
 }}
-agent, _ := kiln.New(kiln.WithModel("openai:gpt-4.1"), kiln.WithModule(timing))
+agent, _ := kiln.New(kiln.Config{Model: "openai:gpt-4.1", Modules: []kiln.Module{timing}})
 ```
 
 ### Add your own modules
@@ -269,12 +271,12 @@ console := kiln.Module{
 	Requires: []string{"memory"},                 // must exist first ("?svc" = optional)
 	Provides: []string{"tool/console"},           // only these names may be provided
 	Permissions: []string{"net"},                 // broker capabilities: net, exec, fs:read, fs:write, env, env:secrets, db
-	Apply: func(p *sdk.Module) error {
+	Apply: func(p *sdk.Scope) error {
 		hc, err := p.HTTP(sdk.HTTPOptions{AllowHosts: []string{"api.example.com"}})
 		if err != nil {
 			return err
 		}
-		p.AddTool(sdk.Tool{Name: "lookup", Schema: sdk.Object(map[string]any{"id": sdk.Str("id")}, "id"),
+		return p.AddTool(sdk.Tool{Name: "lookup", Schema: sdk.Object(map[string]any{"id": sdk.Str("id")}, "id"),
 			Run: func(c context.Context, args map[string]any) (string, error) {
 				req, _ := http.NewRequestWithContext(c, "GET", "https://api.example.com/"+sdk.ArgString(args, "id"), nil)
 				resp, err := hc.Do(req)
@@ -285,17 +287,16 @@ console := kiln.Module{
 				b, _ := io.ReadAll(resp.Body)
 				return string(b), nil
 			}})
-		return nil
 	},
 }
 
-agent, err := kiln.New(
-	kiln.WithModel("openai:gpt-4.1"),
-	kiln.WithModule(console),
-)
+agent, err := kiln.New(kiln.Config{
+	Model:   "openai:gpt-4.1",
+	Modules: []kiln.Module{console},
+})
 ```
 
-A module is an ordinary Go package, so it can live in another directory, another package or another Go module. Import it and pass the descriptor; `go get` and `replace` work as usual. `WithModule` registers and enables it, `WithModuleConfig` configures it, and `WithModuleSpec` sets its instance name (`As`) or priority. `WithModules(names...)` only enables modules already compiled into the registry; it does not import anything.
+A module is an ordinary Go package, so it can live in another directory, another package or another Go module. Import it and put its value in `Config.Modules`; `go get` and `replace` work as usual. There is one way to compose: the slice. A module's `New(...)` constructor returns it configured, and its `As` field names a second instance.
 
 If you already have a Go library, write a thin `engine.Module` adapter whose `Apply` exposes its functions as tools or services; the library itself does not need to change. See [MODULES.md](MODULES.md) and the [Custom modules](https://kilnai-docs.vercel.app/#custom-modules) docs page.
 
@@ -310,30 +311,32 @@ Modules reach the outside world only through the broker: `p.HTTP`, `p.Listen`, `
 ### Subagents and handoffs
 
 ```go
-agent, _ := kiln.New(
-	kiln.WithModel("openai:gpt-4.1"),
-	kiln.WithModules("tool_time"),
-	kiln.WithModuleConfig("tool_subagents", map[string]any{"agents": []any{
-		map[string]any{"name": "researcher", "description": "Finds facts",
-			"instructions": "Research carefully.", "tools": []any{"current_time"}},       // called as a tool
-		map[string]any{"name": "billing", "description": "Invoices and refunds",
-			"instructions": "You are billing support.", "mode": "handoff"},             // takes over the thread
-	}}),
-)
+agent, _ := kiln.New(kiln.Config{
+	Model: "openai:gpt-4.1",
+	Modules: []kiln.Module{
+		tool_time.New(),
+		tool_subagents.New(map[string]any{"agents": []any{
+			map[string]any{"name": "researcher", "description": "Finds facts",
+				"instructions": "Research carefully.", "tools": []any{"current_time"}}, // called as a tool
+			map[string]any{"name": "billing", "description": "Invoices and refunds",
+				"instructions": "You are billing support.", "mode": "handoff"}, // takes over the thread
+		}}),
+	},
+})
 
 // A whole agent, with its own modules, model and policy, can also be a tool:
-kiln.WithTools(expertAgent.AsTool("legal_expert", "Answers legal questions"))
+Config.Tools: []kiln.Tool{expertAgent.AsTool("legal_expert", "Answers legal questions")}
 ```
 
 ### Shell and file tools in a sandbox
 
 ```go
-agent, _ := kiln.New(
-	kiln.WithModel("openai:gpt-4.1"),
-	kiln.WithModules("sandbox_docker"),                                     // or sandbox_local, or your own
-	kiln.WithModuleConfig("workspace_sandbox", map[string]any{"provider": "docker"}),  // one box per thread, no network
-	kiln.WithModules("tool_shell", "tool_fs"),
-)
+agent, _ := kiln.New(kiln.Config{
+	Model: "openai:gpt-4.1",
+	Modules: append(kiln.Sandbox("docker"), // or sandbox_local, or your own
+		workspace_sandbox.New(map[string]any{"provider": "docker"}), // one box per thread, no network
+		tool_shell.New(), tool_fs.New()),
+})
 res, _ := agent.Generate(ctx, "Write notes.md and count its lines")
 for _, ch := range res.Changes { // review what the agent changed
 	fmt.Print(ch.Diff())
@@ -343,34 +346,40 @@ for _, ch := range res.Changes { // review what the agent changed
 ### MCP servers, skills, the web
 
 ```go
-kiln.WithModuleConfig("tool_mcp", map[string]any{"servers": []any{
-	map[string]any{"name": "github", "command": "github-mcp-server", "args": []any{"stdio"},
-		"env": map[string]any{"GITHUB_TOKEN": "secret://GITHUB_TOKEN"}},
-	map[string]any{"name": "docs", "url": "https://mcp.internal.example.com/mcp"},
-}}) // tools appear as github__create_issue, docs__search, ...
-kiln.WithModuleConfig("tool_skills", map[string]any{"dirs": []any{"./skills"}})       // folders with SKILL.md
-kiln.WithModuleConfig("tool_fetch", map[string]any{"allow_hosts": []any{"*.wikipedia.org"}})
-kiln.WithWebSearch("duckduckgo")                                                 // tool_websearch; also tavily, brave, searxng
+modules := []kiln.Module{
+	tool_mcp.New(map[string]any{"servers": []any{
+		map[string]any{"name": "github", "command": "github-mcp-server", "args": []any{"stdio"},
+			"env": map[string]any{"GITHUB_TOKEN": "secret://GITHUB_TOKEN"}},
+		map[string]any{"name": "docs", "url": "https://mcp.internal.example.com/mcp"},
+	}}), // tools appear as github__create_issue, docs__search, ...
+	tool_skills.New(map[string]any{"dirs": []any{"./skills"}}), // folders with SKILL.md
+	tool_fetch.New(map[string]any{"allow_hosts": []any{"*.wikipedia.org"}}),
+}
+modules = append(modules, kiln.WebSearch("duckduckgo")...) // tool_websearch; also tavily, brave, searxng
 ```
 
 ### Reasoning, caching and structured output
 
 ```go
-kiln.WithThinking("high")                                       // hook_thinking: Anthropic adaptive thinking, OpenAI reasoning_effort, Gemini thinkingConfig
-kiln.WithModuleConfig("hook_cache", map[string]any{"ttl": "1h"})      // prompt caching (Anthropic cache_control, OpenAI prompt_cache_key)
-kiln.WithModuleConfig("hook_output_validate", map[string]any{"max_retries": 2}) // re-ask when GenerateObject output doesn't match the schema
+modules = append(modules, kiln.Thinking("high")...) // hook_thinking: Anthropic adaptive thinking, OpenAI reasoning_effort, Gemini thinkingConfig
+modules = append(modules,
+	hook_cache.New(map[string]any{"ttl": "1h"}),               // prompt caching (Anthropic cache_control, OpenAI prompt_cache_key)
+	hook_output_validate.New(map[string]any{"max_retries": 2})) // re-ask when GenerateObject output doesn't match the schema
 ```
 
 ### Long runs, guardrails and evals
 
 ```go
-kiln.WithModuleConfig("hook_compact", map[string]any{"max_fraction": 0.8}) // stay inside the context window, cheapest first
-kiln.WithModuleConfig("tool_search", map[string]any{"threshold": 15})      // reveal tools on demand (big MCP servers)
-kiln.WithModules("tool_plan", "hook_loop_detect", "hook_tool_output_limit")
-kiln.WithModuleConfig("hook_guardrails", map[string]any{"rules": []any{
-	map[string]any{"on": "output", "detect": "secrets", "action": "redact"},
-}})
-kiln.WithSaveEachStep() // a crash keeps the run's progress; Thread.Continue resumes it
+modules = append(modules, []kiln.Module{
+	hook_compact.New(map[string]any{"max_fraction": 0.8}), // stay inside the context window, cheapest first
+	tool_search.New(map[string]any{"threshold": 15}),      // reveal tools on demand (big MCP servers)
+	tool_plan.New(), hook_loop_detect.New(), hook_tool_output_limit.New(),
+	hook_guardrails.New(map[string]any{"rules": []any{
+		map[string]any{"on": "output", "detect": "secrets", "action": "redact"},
+	}}),
+}...)
+// a crash keeps the run's progress; Thread.Continue resumes it
+cfg := kiln.Config{Model: "openai:gpt-4.1", Modules: modules, SaveEachStep: true}
 ```
 
 `agent.Thread(id).Fork(ctx, newID)` copies a conversation to try another direction. `kiln eval cases.json` (or package [`evals`](evals/evals.go)) grades the agent on a dataset of prompts.
@@ -378,37 +387,26 @@ kiln.WithSaveEachStep() // a crash keeps the run's progress; Thread.Continue res
 ### Scheduled jobs and webhooks
 
 ```go
-kiln.WithModuleConfig("trigger_schedule", map[string]any{"jobs": []any{
-	map[string]any{"name": "weekly-report", "schedule": "weekly fri 17:00", "prompt": "Summarize this week's tickets", "user": "ops"},
-}}) // the model also gets schedule_create / schedule_list / schedule_cancel
-kiln.WithModuleConfig("trigger_webhook", map[string]any{"routes": []any{
-	map[string]any{"path": "/github", "secret": "secret://GH_WEBHOOK_TOKEN", "thread": "gh-{repository.full_name}"},
-}}) // requests must carry an HMAC-SHA256 signature
-```
-
-### Profiles: configure everything in a file
-
-```json
-{
-  "model": "anthropic:claude-sonnet-5-5",
-  "instructions": "You are the internal engineering assistant.",
-  "max_steps": 30,
-  "modules": [
-    { "use": "hook_retry" },
-    { "use": "hook_approval", "config": { "non_readonly": true } },
-    { "use": "model_openai", "as": "model_local", "config": { "name": "local", "base_url": "http://vllm:8000/v1", "api_key": "" } },
-    { "use": "threads_sql" }
-  ]
+Config.Modules: []kiln.Module{
+	trigger_schedule.New(map[string]any{"jobs": []any{
+		map[string]any{"name": "weekly-report", "schedule": "weekly fri 17:00", "prompt": "Summarize this week's tickets", "user": "ops"},
+	}}), // the model also gets schedule_create / schedule_list / schedule_cancel
+	trigger_webhook.New(map[string]any{"routes": []any{
+		map[string]any{"path": "/github", "secret": "secret://GH_WEBHOOK_TOKEN", "thread": "gh-{repository.full_name}"},
+	}}), // requests must carry an HMAC-SHA256 signature
 }
 ```
 
-Load it with `kiln.New(kiln.WithProfile("kiln.json"))`. Layers apply in order, and later ones win:
+### Configuration is Go
 
-1. Profiles, in the order given.
-2. Options passed in code.
-3. The admin policy, which nothing can override.
+There is no profile file: the composition is the `Config.Modules` slice and
+the settings are fields, so the compiler checks both and there is only one
+place to look. Secrets stay references (`secret://NAME`) resolved at run
+time.
 
-[`examples/corporate/`](examples/corporate) has a complete corporate profile and policy.
+A policy JSON can still be loaded by the application (`engine.ReadJSON`) and
+passed as `Config.Policy`; the admin policy is the only layer that can narrow
+what a module declared.
 
 ---
 
@@ -418,8 +416,8 @@ Load it with `kiln.New(kiln.WithProfile("kiln.json"))`. Layers apply in order, a
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Resolving: New(opts...)
-    Resolving --> Composing: policy, profiles and options merged
+    [*] --> Resolving: New(Config)
+    Resolving --> Composing: policy, defaults and Config.Modules merged
     Composing --> [*]: invalid plan → New returns a named error
     Composing --> Starting: valid plan, deterministic order
     Starting --> [*]: a module failed → everything started is disposed
@@ -431,7 +429,7 @@ stateDiagram-v2
 
 **`New`:**
 
-1. **Resolve the configuration.** The policy (secure by default), the profiles and the code options combine into one list of module rows. Defaults give way to a module of the same family: `threads_sql` replaces `threads_inmem`, for example.
+1. **Resolve the configuration.** `Config.Modules` and the defaults combine into one list of module rows, with the policy (secure by default) applied. Defaults give way to a module of the same family: `threads_sql` replaces `threads_inmem`, for example.
 2. **Add the defaults a requirement needs.** If a required service has no provider, the facade adds its standard provider and marks it `auto`. There is no runtime loading.
 3. **Compose.** `engine.Compose` validates the whole plan without running any module: unknown modules, policy allow/deny, duplicate providers, missing requirements (with a hint naming the modules that would supply it) and cycles. It returns a deterministic start order; policy-required rows (audit, policy, secrets) start in the order the policy lists them.
 4. **Start.** Modules `Apply` in that order. If one fails or panics, everything already started is disposed in reverse and `New` returns the error. You never get a half-configured agent.
@@ -499,7 +497,7 @@ Step by step:
 4. **Stop.** Reaching the step limit finishes the run with `max_steps`.
 5. **End.** **`agent/end`** hooks always run exactly once, even when the run fails (`FinishReason: "error"`), so modules can always clean up. Observers then get `finish`, or `error` when the run failed.
 
-Default priorities (higher means outer). Set `priority` on a profile row to override a value; the reserved band is only for locked modules.
+Default priorities (higher means outer). Set `Priority` on the module value to override a value; the reserved band is only for locked modules.
 
 | Priority | Model middleware (`model/wrap`) | Tool middleware (`tool/wrap`) |
 |---|---|---|
@@ -565,10 +563,10 @@ stateDiagram-v2
 
 With `tool_sandbox`, the model creates and destroys boxes itself, up to `max_boxes` per thread.
 
-### Remote agent lifecycle (`WithRunIn`)
+### Remote agent lifecycle (`Config.RunIn`)
 
 1. `New` builds a small **host** agent. It holds the model provider and its keys, the sandbox provider, and your Go tools.
-2. The host creates a box and uploads the program (its own binary by default, or `RunIn.Binary` built for the box's OS and architecture), plus the resolved profile and admin policy.
+2. The host creates a box and uploads the program (its own binary by default, or `RunIn.Binary` built for the box's OS and architecture), plus the resolved module rows and admin policy.
 3. The host starts the program with `KILN_BOX=1`; the program calls `kiln.ServeBox` (check `kiln.InBox()` first) and serves the agent over JSON-RPC on stdin/stdout. Its own modules come with it, compiled in.
 4. The box builds its agent and replies `ready`, or reports the startup error.
 5. Runs and threads are proxied over JSON-RPC. Model calls come back to the host, through the host's middleware and policy, so keys never enter the box. Your Go tools are bridged back too.
@@ -580,18 +578,20 @@ With `tool_sandbox`, the model creates and destroys boxes itself, up to `max_box
 
 ## Modules
 
-Everything the agent does comes from a module, but **most apps never type a module name**. Common setups are options, and plumbing (the loop, a workspace for shell tools, the database connection) is resolved statically and shows as `auto` in `agent.Status()`:
+Everything the agent does comes from a module, and **there is one way to compose**: put module values in `Config.Modules`. Presets are just preconfigured modules, and plumbing (the loop, a workspace for shell tools, the database connection) is resolved statically and shows as `auto` in `agent.Status()`:
 
 ```go
-agent, _ := kiln.New(
-	kiln.WithModel("anthropic:claude-sonnet-5-5"),            // model_anthropic
-	kiln.WithApprovals("issue_refund"),                       // hook_approval
-	kiln.WithPersistence("postgres", "secret://DATABASE_URL"), // threads_sql + memory_sql + db_sql
-	kiln.WithSandbox("docker"),                               // sandbox_docker + workspace_sandbox
-	kiln.WithAudit("/var/log/kiln/audit.log"),            // audit_file
-	kiln.WithTracing("http://otel-collector:4318"),           // trace_otlp
-	kiln.WithMCP("github", "npx", "-y", "@modelcontextprotocol/server-github"), // tool_mcp
-)
+modules := append(kiln.Approvals("issue_refund"),          // hook_approval
+	kiln.Persistence("postgres", "secret://DATABASE_URL")...) // threads_sql + memory_sql + db_sql
+modules = append(modules, kiln.Sandbox("docker")...)       // sandbox_docker + workspace_sandbox
+modules = append(modules, kiln.Audit("/var/log/kiln/audit.log")...)
+modules = append(modules, kiln.Tracing("http://otel-collector:4318")...)
+modules = append(modules, kiln.MCP("github", "npx", "-y", "@modelcontextprotocol/server-github")...)
+
+agent, _ := kiln.New(kiln.Config{
+	Model:   "anthropic:claude-sonnet-5-5", // model_anthropic
+	Modules: modules,
+})
 ```
 
 **A module is one Go package.** It exports a descriptor and an `Apply` function, and it can live in your app or in another Go module. `Provides` and `Permissions` are enforced: `Provide` of a name that is not declared fails, and a broker call without the capability fails.
@@ -601,7 +601,7 @@ agent, _ := kiln.New(
 | the model to be able to do something | `p.AddTool` |
 | something to happen around every model or tool call | `p.WrapModel`, `p.WrapTool`, `p.OnRunStart` … |
 | other modules to use something you provide | `p.Provide("model/acme", …)` |
-| background work, stopped on close | `p.Effect`, `p.OnUnload` |
+| background work, stopped on close | `p.Effect`, `p.OnClose` |
 | the network, files, processes, env, the database | `p.HTTP`, `p.Listen`, `p.Dir`, `p.Exec`, `p.Env`, `p.DB` |
 
 ```go
@@ -619,24 +619,23 @@ var Module = engine.Module{
 	Requires:    nil,          // "?secrets" if optional, "model/*" for any one
 	Provides:    nil,          // services Apply will register
 	Permissions: nil,          // net, exec, fs:read, fs:write, env, env:secrets, db
-	Apply: func(p *sdk.Module) error {
-		p.AddTool(sdk.Tool{
+	Apply: func(p *sdk.Scope) error {
+		return p.AddTool(sdk.Tool{
 			Name: "greet", Description: "Greet someone",
 			Schema: sdk.Object(map[string]any{"name": sdk.Str("who")}, "name"),
 			Run: func(c context.Context, args map[string]any) (string, error) {
 				return "Hello, " + sdk.ArgString(args, "name"), nil
 			},
 		})
-		return nil
 	},
 }
 ```
 
-Import the package and pass it: `kiln.WithModule(greeter.Module)`.
+Import the package and put it in the list: `Modules: []kiln.Module{greeter.Module}`.
 
 `kiln module list` prints every standard module with its services and capabilities, and `kiln module manifest` prints the same as JSON for a build manifest. `kiln module check [dir]` is the CI gate: it rejects a module that imports `os`, `os/exec`, `net` (except pure helpers), `syscall` or `database/sql` instead of the broker, uses a capability it did not declare, provides an undeclared service, or ships a descriptor that does not match its directory.
 
-A note on what this buys: compile-time inclusion is not a sandbox. A malicious module linked into your binary still runs with the process's privileges. The analyzer and the broker enforce the contract at build time and at the API boundary; run genuinely untrusted code in a sandbox (`WithRunIn`).
+A note on what this buys: compile-time inclusion is not a sandbox. A malicious module linked into your binary still runs with the process's privileges. The analyzer and the broker enforce the contract at build time and at the API boundary; run genuinely untrusted code in a sandbox (`Config.RunIn`).
 
 ### Standard modules (linked into the binary)
 
@@ -668,14 +667,14 @@ There are two directions:
 - **The agent runs inside a sandbox:**
 
   ```go
-  kiln.New(
-  	kiln.WithModel("openai:gpt-4.1"),
-  	kiln.WithModules("tool_shell", "tool_fs"),
-  	kiln.WithRunIn(kiln.RunIn{Provider: "docker", Binary: "./box-linux"}), // GOOS=linux go build -o box-linux ./your/box/program
-  )
+  kiln.New(kiln.Config{
+  	Model:   "openai:gpt-4.1",
+  	Modules: []kiln.Module{tool_shell.New(), tool_fs.New()},
+  	RunIn:   &kiln.RunIn{Provider: "docker", Binary: "./box-linux"}, // GOOS=linux go build -o box-linux ./your/box/program
+  })
   ```
 
-Providers: `sandbox_local` (no isolation, for development; `WithRunIn` refuses it unless `AllowUnsafeLocal` is set), `sandbox_docker` (Docker or Podman, with no network by default) and `sandbox_microsandbox` ([microsandbox](https://microsandbox.dev) microVMs, with no network by default). The microsandbox provider also runs on **microsandbox cloud** when the host environment sets `MSB_BACKEND=cloud` and `MSB_API_KEY` (or selects a cloud profile with `MSB_PROFILE`); no code changes are needed. Any other backend, such as Firecracker, E2B or Kubernetes, only needs to provide `sdk.SandboxProvider`. See [`examples/custom-sandbox`](examples/custom-sandbox) and the complete self-hosted microVM provider in [`examples/firecracker`](examples/firecracker). The `WithRunIn` + `SecretHosts` flow is the same for a hosted provider: the host runs the broker and secrets, and the provider's machine only receives placeholders. The Firecracker example walks that flow explicitly and has a [cloud-hosted equivalent](examples/firecracker/README.md#the-same-flow-on-a-cloud-hosted-sandbox).
+Providers: `sandbox_local` (no isolation, for development; `Config.RunIn` refuses it unless `AllowUnsafeLocal` is set), `sandbox_docker` (Docker or Podman, with no network by default) and `sandbox_microsandbox` ([microsandbox](https://microsandbox.dev) microVMs, with no network by default). The microsandbox provider also runs on **microsandbox cloud** when the host environment sets `MSB_BACKEND=cloud` and `MSB_API_KEY` (or selects a cloud profile with `MSB_PROFILE`); no code changes are needed. Any other backend, such as Firecracker, E2B or Kubernetes, only needs to provide `sdk.SandboxProvider`. See [`examples/custom-sandbox`](examples/custom-sandbox) and the complete self-hosted microVM provider in [`examples/firecracker`](examples/firecracker). The `Config.RunIn` + `SecretHosts` flow is the same for a hosted provider: the host runs the broker and secrets, and the provider's machine only receives placeholders. The Firecracker example walks that flow explicitly and has a [cloud-hosted equivalent](examples/firecracker/README.md#the-same-flow-on-a-cloud-hosted-sandbox).
 
 ## Security
 
@@ -694,7 +693,7 @@ An admin `policy.json` adds:
 - tool and model allowlists, token budgets and per-role rules;
 - per-module secret grants and capability grants.
 
-`WithRunIn` keeps the model and secret providers on the host, returns placeholders in the box, refuses redirects on proxied HTTP, blocks private/metadata egress by default, authenticates the box's run identity for `host.llm`/`host.tool`, and redacts persisted threads and memory. See [SECURITY.md](SECURITY.md).
+`Config.RunIn` keeps the model and secret providers on the host, returns placeholders in the box, refuses redirects on proxied HTTP, blocks private/metadata egress by default, authenticates the box's run identity for `host.llm`/`host.tool`, and redacts persisted threads and memory. See [SECURITY.md](SECURITY.md).
 
 ## Scaling and persistence
 
@@ -703,7 +702,7 @@ The core engine is stateless and needs no database. All state lives behind modul
 ```go
 import _ "github.com/ganeshdipdumbare/kiln/drivers/postgres"
 
-kiln.WithPersistence("postgres", "secret://KILN_DATABASE_URL") // db_sql + threads_sql + memory_sql
+Config.Modules = kiln.Persistence("postgres", "secret://KILN_DATABASE_URL") // db_sql + threads_sql + memory_sql
 ```
 
 With this setup:
@@ -714,13 +713,13 @@ With this setup:
 
 ## CLI
 
-The `kiln` command runs the **standard modules**. Application modules are compiled into your own program; pass them with `kiln.WithModule`.
+The `kiln` command runs the **standard modules**. Application modules are compiled into your own program; put them in `Config.Modules`.
 
 ```bash
 go run ./cmd/kiln -model openai:gpt-4.1 -use tool_time      # REPL (/modules, /quit)
 go run ./cmd/kiln run -model mock:x "hello"                 # one prompt; -json, -thread ID
 go run ./cmd/kiln eval -model ... cases.json                # grade on a dataset
-go run ./cmd/kiln config dump -profile kiln.json             # policy + modules in start order
+go run ./cmd/kiln config dump -model mock:demo -use tool_time  # policy + modules in start order
 go run ./cmd/kiln module list                               # every standard module
 go run ./cmd/kiln module check modules                      # static check (CI gate)
 go run ./cmd/kiln module manifest modules > manifest.json   # modules, services, capabilities
@@ -728,7 +727,7 @@ go run ./cmd/kiln trace view .kiln/trace.jsonl > trace.html
 go run ./cmd/kiln audit verify .kiln/audit.jsonl
 ```
 
-`serve` (the box side) is started by `WithRunIn` itself: the box runs the same program with `KILN_BOX=1`; a program calls `kiln.ServeBox` when `kiln.InBox()` is true.
+`serve` (the box side) is started by `Config.RunIn` itself: the box runs the same program with `KILN_BOX=1`; a program calls `kiln.ServeBox` when `kiln.InBox()` is true.
 
 ## Versioning
 
@@ -741,12 +740,12 @@ While the major version is 0:
 
 The public API is:
 
-- the `kiln` package (`New`, options, `Generate` / `Stream` / `Thread` ...);
+- the `kiln` package (`New`, `Config`, `Run`, `Generate` / `Stream` / `Thread` ...);
 - `sdk`, which modules are written against;
-- `engine`'s exported types (`Module`, `ModuleSpec`, `Policy`, `Profile`, `Compose`, `Plan`);
+- `engine`'s exported types (`Module`, `Policy`, `Compose`, `Plan`);
 - `audit` and the audit record format;
 - the `kiln` CLI commands and flags;
-- the `module.json`/profile schema, the names and config keys of the standard modules.
+- the names and config keys of the standard modules, and the `Config`/`Run` fields.
 
 To depend on a version, `go get github.com/ganeshdipdumbare/kiln@vX.Y.Z`. To try unreleased work, `go get github.com/ganeshdipdumbare/kiln@main`, or a local checkout with `replace github.com/ganeshdipdumbare/kiln => ../kiln`.
 
@@ -757,7 +756,7 @@ To depend on a version, `go get github.com/ganeshdipdumbare/kiln@vX.Y.Z`. To try
 - the static composer: validation (unknown module, missing requirement, duplicate provider, cycle), deterministic order, all-or-nothing startup
 - the capability broker: HTTP with host allow-lists and SSRF checks, rooted directories, exec without a shell, env, database
 - the build-time analyzer (`internal/modulecheck`) and the `kiln module` commands
-- the facade (`New`, options, `Generate`, `Stream`, `Thread`)
+- the facade (`New`, `Config`, `Run`, `Generate`, `Stream`, `Thread`)
 - four model providers
 - streaming and structured output
 - the middleware pack

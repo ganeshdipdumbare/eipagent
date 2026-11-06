@@ -13,8 +13,8 @@ import (
 //
 // Example:
 //
-//	kiln.WithModuleConfig("tool_time", map[string]any{"layout": "2006-01-02 15:04 MST"})
-func Apply(p *sdk.Module) error {
+//	tool_time.New(map[string]any{"layout": "2006-01-02 15:04 MST"})
+func Apply(p *sdk.Scope) error {
 	layout := p.ConfigString("layout", time.RFC1123)
 	p.AddTool(sdk.Tool{
 		Name:        "current_time",
@@ -30,3 +30,13 @@ func Apply(p *sdk.Module) error {
 
 // Module is the compiled form of "tool_time". modules/std registers it.
 var Module = engine.Module{Name: "tool_time", Requires: nil, Provides: nil, Permissions: nil, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}

@@ -58,31 +58,31 @@ type (
 )
 
 // OnRunStart runs when a run (Generate, Stream, Resume) starts.
-func (c *Module) OnRunStart(fn AgentStartFn) { c.hook(HookAgentStart, fn) }
+func (c *Scope) OnRunStart(fn AgentStartFn) { c.hook(HookAgentStart, fn) }
 
 // BeforeStep can rewrite the next model request (model, messages,
 // tools, tool choice) before every step.
-func (c *Module) BeforeStep(fn StepPrepareFn) { c.hook(HookStepPrepare, fn) }
+func (c *Scope) BeforeStep(fn StepPrepareFn) { c.hook(HookStepPrepare, fn) }
 
 // WrapModel wraps every model call: call next to continue, or answer
 // without it. Higher priority wraps further out.
-func (c *Module) WrapModel(fn ModelWrapFn) { c.hook(HookModelWrap, fn) }
+func (c *Scope) WrapModel(fn ModelWrapFn) { c.hook(HookModelWrap, fn) }
 
 // AfterModel sees every model reply and may redirect the run (Jump).
-func (c *Module) AfterModel(fn ModelAfterFn) { c.hook(HookModelAfter, fn) }
+func (c *Scope) AfterModel(fn ModelAfterFn) { c.hook(HookModelAfter, fn) }
 
 // WrapTool wraps every tool call: call next to run it, or return a
 // result, an error or an Interrupt instead.
-func (c *Module) WrapTool(fn ToolWrapFn) { c.hook(HookToolWrap, fn) }
+func (c *Scope) WrapTool(fn ToolWrapFn) { c.hook(HookToolWrap, fn) }
 
 // OnRunEnd runs when a run ends, also when it failed.
-func (c *Module) OnRunEnd(fn AgentEndFn) { c.hook(HookAgentEnd, fn) }
+func (c *Scope) OnRunEnd(fn AgentEndFn) { c.hook(HookAgentEnd, fn) }
 
 // OnEvent observes every event a run emits (text, tool calls ...).
-func (c *Module) OnEvent(fn EventFn) { c.hook(HookObserve, fn) }
+func (c *Scope) OnEvent(fn EventFn) { c.hook(HookObserve, fn) }
 
 // On registers a legacy tool hook (HookToolBefore / HookToolAfter).
-func (c *Module) On(kind string, fn func(*HookEvent)) { c.hook(kind, fn) }
+func (c *Scope) On(kind string, fn func(*HookEvent)) { c.hook(kind, fn) }
 
 // ---- Snapshot: an immutable view taken at the start of each run ----
 
@@ -93,7 +93,7 @@ type Snapshot struct {
 	hooks    map[string][]any
 }
 
-func (c *Module) Snapshot() *Snapshot {
+func (c *Scope) Snapshot() *Snapshot {
 	s := &Snapshot{Services: map[string]any{}, hooks: map[string][]any{}}
 	// Parent registries first (Isolate), so the child overrides services.
 	var chain []*registry

@@ -129,7 +129,7 @@ func LastText(msgs []Message) string {
 
 // Secret resolves a config value: "secret://NAME" goes through the
 // "secrets" service; anything else is returned as is.
-func (c *Module) Secret(ref string) (string, error) {
+func (c *Scope) Secret(ref string) (string, error) {
 	if !strings.HasPrefix(ref, "secret://") {
 		return ref, nil
 	}
@@ -137,14 +137,14 @@ func (c *Module) Secret(ref string) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("%s: no \"secrets\" service to resolve %s (load secrets_env)", c.Name, ref)
 	}
-	return s.Get(context.Background(), c.PluginName(), strings.TrimPrefix(ref, "secret://"))
+	return s.Get(context.Background(), c.ModuleName(), strings.TrimPrefix(ref, "secret://"))
 }
 
 // SecretValue is Secret for a value that is known to be a credential.
 // Unlike Secret it also registers a literal (non-secret://) value for
 // redaction, so a key written directly in config can't appear in logs,
 // traces or audit records.
-func (c *Module) SecretValue(ref string) (string, error) {
+func (c *Scope) SecretValue(ref string) (string, error) {
 	v, err := c.Secret(ref)
 	if err == nil && v != "" {
 		AddRedaction(v)

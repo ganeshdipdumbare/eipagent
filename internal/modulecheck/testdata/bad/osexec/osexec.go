@@ -9,4 +9,4 @@ import (
 
 var Module = engine.Module{Name: "osexec", Apply: Apply}
 
-func Apply(p *sdk.Module) error { return exec.ErrNotFound }
+func Apply(p *sdk.Scope) error { return exec.ErrNotFound }

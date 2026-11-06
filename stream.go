@@ -17,16 +17,20 @@ type Stream struct {
 }
 
 // Stream starts a run and returns immediately.
-func (a *Agent) Stream(ctx context.Context, prompt string, opts ...RunOption) *Stream {
-	return startStream(func(o RunOption) (*Result, error) { return a.Generate(ctx, prompt, append(opts, o)...) })
+func (a *Agent) Stream(ctx context.Context, prompt string, run ...Run) *Stream {
+	return startStream(func(onEvent func(sdk.Event)) (*Result, error) {
+		r := one(run)
+		r.OnEvent = onEvent
+		return a.Generate(ctx, prompt, r)
+	})
 }
 
-func startStream(run func(RunOption) (*Result, error)) *Stream {
+func startStream(run func(func(sdk.Event)) (*Result, error)) *Stream {
 	s := &Stream{events: make(chan sdk.Event, 64), done: make(chan struct{})}
 	go func() {
 		defer close(s.done)
 		defer close(s.events)
-		s.res, s.err = run(OnEvent(func(e sdk.Event) { s.events <- e }))
+		s.res, s.err = run(func(e sdk.Event) { s.events <- e })
 	}()
 	return s
 }

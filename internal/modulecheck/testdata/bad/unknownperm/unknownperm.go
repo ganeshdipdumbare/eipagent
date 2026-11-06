@@ -7,4 +7,4 @@ import (
 
 var Module = engine.Module{Name: "unknownperm", Permissions: []string{"root"}, Apply: Apply}
 
-func Apply(p *sdk.Module) error { return nil }
+func Apply(p *sdk.Scope) error { return nil }

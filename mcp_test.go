@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ganeshdipdumbare/kiln"
 	"github.com/ganeshdipdumbare/kiln/internal/mcptest"
 )
 
@@ -22,7 +21,7 @@ func mcpScript() []any {
 
 func checkMCP(t *testing.T, server map[string]any) {
 	t.Helper()
-	a := mockAgent(t, mcpScript(), kiln.WithModuleConfig("tool_mcp", map[string]any{"servers": []any{server}}))
+	a := mockAgent(t, mcpScript(), withModuleConfig("tool_mcp", map[string]any{"servers": []any{server}}))
 	res, err := a.Generate(bg, "use mcp")
 	if err != nil {
 		t.Fatal(err)

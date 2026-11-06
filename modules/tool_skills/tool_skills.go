@@ -23,7 +23,7 @@ import (
 //
 // Example:
 //
-//	kiln.WithModuleConfig("tool_skills", map[string]any{"dirs": []any{"./skills"}}) // skills/<name>/SKILL.md
+//	tool_skills.New(map[string]any{"dirs": []any{"./skills"}}) // skills/<name>/SKILL.md
 var Permissions = []string{"fs:read"}
 
 type skill struct {
@@ -31,13 +31,13 @@ type skill struct {
 	root                  *sdk.Dir // the skill folder, read-only
 }
 
-func Apply(p *sdk.Module) error {
+func Apply(p *sdk.Scope) error {
 	dirs := p.ConfigStrings("dirs")
 	if len(dirs) == 0 {
 		dirs = []string{"skills"}
 	}
 	var roots []*sdk.Dir // every skill folder opened; closed on unload
-	p.OnUnload(func() {
+	p.OnClose(func() {
 		for _, r := range roots {
 			r.Close()
 		}
@@ -168,3 +168,13 @@ func parse(raw, dir string) *skill {
 
 // Module is the compiled form of "tool_skills". modules/std registers it.
 var Module = engine.Module{Name: "tool_skills", Requires: nil, Provides: nil, Permissions: Permissions, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}

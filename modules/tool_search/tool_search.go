@@ -30,11 +30,11 @@ import (
 //
 // Example:
 //
-//	kiln.WithModuleConfig("tool_search", map[string]any{
+//	tool_search.New(map[string]any{
 //		"threshold": 10,
 //		"always":    []any{"read_file", "bash"},
 //	})
-func Apply(p *sdk.Module) error {
+func Apply(p *sdk.Scope) error {
 	threshold := p.ConfigInt("threshold", 15)
 	always := p.ConfigStrings("always")
 	maxResults := p.ConfigInt("max_results", 5)
@@ -170,3 +170,13 @@ func Apply(p *sdk.Module) error {
 
 // Module is the compiled form of "tool_search". modules/std registers it.
 var Module = engine.Module{Name: "tool_search", Requires: nil, Provides: nil, Permissions: nil, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}

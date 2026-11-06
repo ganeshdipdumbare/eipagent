@@ -20,8 +20,8 @@ import (
 //
 // Example:
 //
-//	kiln.WithModuleConfig("hook_retry", map[string]any{"max_retries": 5, "initial_delay_ms": 1000, "tool_retries": 1})
-func Apply(p *sdk.Module) error {
+//	hook_retry.New(map[string]any{"max_retries": 5, "initial_delay_ms": 1000, "tool_retries": 1})
+func Apply(p *sdk.Scope) error {
 	if p.Priority() == 0 {
 		p.SetPriority(10)
 	}
@@ -107,3 +107,13 @@ func Apply(p *sdk.Module) error {
 
 // Module is the compiled form of "hook_retry". modules/std registers it.
 var Module = engine.Module{Name: "hook_retry", Requires: nil, Provides: nil, Permissions: nil, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}

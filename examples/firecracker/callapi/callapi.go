@@ -17,7 +17,7 @@ var CallAPI = engine.Module{
 	Requires:    []string{"?secrets"},
 	Permissions: []string{"net"},
 	Secrets:     []string{"ACME_API_TOKEN"},
-	Apply: func(p *sdk.Module) error {
+	Apply: func(p *sdk.Scope) error {
 		hc, err := p.HTTP(sdk.HTTPOptions{AllowHosts: []string{"*"}, AllowPrivate: true, AllowInsecure: true})
 		if err != nil {
 			return err

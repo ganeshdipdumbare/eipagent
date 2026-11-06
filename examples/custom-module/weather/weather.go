@@ -1,5 +1,5 @@
 // Package weather is a custom module in its own Go package. Import it and
-// pass weather.Module to kiln.WithModule.
+// put weather.New(nil) in kiln.Config.Modules.
 package weather
 
 import (
@@ -13,7 +13,7 @@ import (
 
 var Module = engine.Module{
 	Name: "weather",
-	Apply: func(p *sdk.Module) error {
+	Apply: func(p *sdk.Scope) error {
 		unit := p.ConfigString("unit", "celsius")
 		p.AddTool(sdk.Tool{
 			Name:        "weather",
@@ -30,4 +30,13 @@ var Module = engine.Module{
 		})
 		return nil
 	},
+}
+
+// New returns the module. Keys in cfg are the module's configuration.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
 }

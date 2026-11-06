@@ -25,13 +25,13 @@ import (
 //
 // Example:
 //
-//	kiln.WithModuleConfig("tool_fetch", map[string]any{
+//	tool_fetch.New(map[string]any{
 //		"allow_hosts": []any{"*.wikipedia.org", "docs.python.org"},
 //		"max_bytes":   200000,
 //	})
 var Permissions = []string{"net"}
 
-func Apply(p *sdk.Module) error {
+func Apply(p *sdk.Scope) error {
 	allow := p.ConfigStrings("allow_hosts")
 	if len(allow) == 0 {
 		return fmt.Errorf("tool_fetch: config allow_hosts is required")
@@ -96,3 +96,13 @@ func allowed(pats []string, host string) bool {
 
 // Module is the compiled form of "tool_fetch". modules/std registers it.
 var Module = engine.Module{Name: "tool_fetch", Requires: nil, Provides: nil, Permissions: Permissions, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}

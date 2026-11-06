@@ -32,8 +32,8 @@ import (
 //
 // Example:
 //
-//	kiln.WithModuleConfig("audit_file", map[string]any{"path": "-"}) // no local file
-//	kiln.WithModuleConfig("audit_http", map[string]any{
+//	audit_file.New(map[string]any{"path": "-"}) // no local file
+//	audit_http.New(map[string]any{
 //		"url":      "https://siem.example.com/ingest",
 //		"hmac_key": "secret://SIEM_HMAC_KEY",
 //		"headers":  map[string]any{"Authorization": "secret://SIEM_TOKEN"},
@@ -42,7 +42,7 @@ var Permissions = []string{"net"}
 
 var Requires = []string{"audit", "?secrets"}
 
-func Apply(p *sdk.Module) error {
+func Apply(p *sdk.Scope) error {
 	endpoint := p.ConfigString("url", "")
 	if endpoint == "" {
 		return fmt.Errorf("audit_http: config url is required")
@@ -246,3 +246,13 @@ func retryableStatus(code int) bool { return code == 408 || code == 429 || code 
 
 // Module is the compiled form of "audit_http". modules/std registers it.
 var Module = engine.Module{Name: "audit_http", Requires: Requires, Provides: []string{"audit/sink/http"}, Permissions: Permissions, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}

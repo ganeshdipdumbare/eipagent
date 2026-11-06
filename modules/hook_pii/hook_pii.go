@@ -34,14 +34,14 @@ import (
 //
 // Example:
 //
-//	kiln.WithModuleConfig("hook_pii", map[string]any{
+//	hook_pii.New(map[string]any{
 //		"types":    []any{"email", "credit_card", "phone"},
 //		"strategy": "mask",
 //		"patterns": map[string]any{"order_id": `ORD-\d{6}`},
 //	})
 var Requires = []string{"?secrets"} // only for hash_key
 
-func Apply(p *sdk.Module) error {
+func Apply(p *sdk.Scope) error {
 	if p.Priority() == 0 {
 		p.SetPriority(30)
 	}
@@ -266,3 +266,13 @@ func scrubAny(v any, scrub func(string) (string, []string)) (any, []string) {
 
 // Module is the compiled form of "hook_pii". modules/std registers it.
 var Module = engine.Module{Name: "hook_pii", Requires: Requires, Provides: nil, Permissions: nil, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}

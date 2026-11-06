@@ -20,12 +20,12 @@ import (
 //
 // Example:
 //
-//	kiln.WithModuleConfig("workspace_sandbox", map[string]any{
+//	workspace_sandbox.New(map[string]any{
 //		"provider":         "docker",
 //		"image":            "python:3.12-slim",
 //		"idle_ttl_seconds": 900,
 //	})
-//	kiln.WithModules("sandbox_docker", "tool_shell", "tool_fs")
+//	kiln.Config{Modules: []kiln.Module{sandbox_docker.New(), tool_shell.New(), tool_fs.New()}}
 var Requires = []string{"sandbox/*"}
 
 type entry struct {
@@ -33,7 +33,7 @@ type entry struct {
 	used time.Time
 }
 
-func Apply(p *sdk.Module) error {
+func Apply(p *sdk.Scope) error {
 	provName := p.ConfigString("provider", "docker")
 	spec := sdk.SandboxSpec{
 		Image:    p.ConfigString("image", ""),
@@ -148,3 +148,13 @@ func Apply(p *sdk.Module) error {
 
 // Module is the compiled form of "workspace_sandbox". modules/std registers it.
 var Module = engine.Module{Name: "workspace_sandbox", Requires: Requires, Provides: []string{"workspace"}, Permissions: nil, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}

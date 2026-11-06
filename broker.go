@@ -17,7 +17,7 @@ import (
 	"github.com/ganeshdipdumbare/kiln/sdk"
 )
 
-// broker keeps secrets on the host for an agent running WithRunIn. The
+// broker keeps secrets on the host for an agent running Config.RunIn. The
 // box's "secrets" service gets placeholders (host.secret); the box's
 // HTTP requests are made by the host (host.http), which swaps a
 // placeholder for its value only on requests its rules allow, redacts

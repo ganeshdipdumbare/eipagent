@@ -26,12 +26,12 @@ import (
 //
 // Example:
 //
-//	kiln.WithModel("mock:demo")
-//	kiln.WithModuleConfig("model_mock", map[string]any{"script": []any{
+//	kiln.Config{Model: "mock:demo"}
+//	model_mock.New(map[string]any{"script": []any{
 //		map[string]any{"tool": "weather", "args": map[string]any{"city": "Lisbon"}},
 //		map[string]any{"text": "Bring an umbrella."},
 //	}})
-func Apply(p *sdk.Module) error {
+func Apply(p *sdk.Scope) error {
 	script := p.ConfigList("script")
 	var mu sync.Mutex
 	next := 0
@@ -153,3 +153,13 @@ func example(s map[string]any) map[string]any {
 
 // Module is the compiled form of "model_mock". modules/std registers it.
 var Module = engine.Module{Name: "model_mock", Requires: nil, Provides: []string{"model/*"}, Permissions: nil, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}

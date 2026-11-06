@@ -4,11 +4,12 @@ The short version. A module is a compiled Go package that declares what it
 requires, what it provides and which capabilities it uses. `kiln.New`
 validates the whole composition before anything runs.
 
-## Start from an option, write a module when you need one
+## Start from a preset, write a module when you need one
 
-Most setups are options (`WithModel`, `WithApprovals`, `WithPersistence`,
-`WithSandbox`, `WithAudit`, `WithTracing`, `WithMCP`), and plumbing resolves
-itself. Write a module when you need behaviour the standard set does not have.
+Most setups are presets (`kiln.Approvals`, `kiln.Persistence`,
+`kiln.Sandbox`, `kiln.Audit`, `kiln.Tracing`, `kiln.MCP`) that return module
+values, and plumbing resolves itself. Write a module when you need behaviour
+the standard set does not have.
 
 ## A module is one package
 
@@ -28,7 +29,7 @@ var Module = engine.Module{
 	Provides:    nil,                            // services Apply will register ("x/*" = prefix)
 	Permissions: []string{"net"},                // net, exec, fs:read, fs:write, env, env:secrets, db
 	Secrets:     []string{"WEATHER_API_KEY"},    // the only secrets it may resolve
-	Apply: func(p *sdk.Module) error {
+	Apply: func(p *sdk.Scope) error {
 		hc, err := p.HTTP(sdk.HTTPOptions{AllowHosts: []string{"api.openweathermap.org"}})
 		if err != nil {
 			return err
@@ -52,13 +53,26 @@ var Module = engine.Module{
 }
 ```
 
-Import it and pass it:
+Export a constructor that returns the descriptor configured, so callers
+write a value instead of a name string:
 
 ```go
-agent, err := kiln.New(
-	kiln.WithModel("openai:gpt-4.1"),
-	kiln.WithModule(weather.Module),
-)
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}
+```
+
+Put the value in the list:
+
+```go
+agent, err := kiln.New(kiln.Config{
+	Model:   "openai:gpt-4.1",
+	Modules: []kiln.Module{weather.New(map[string]any{"unit": "celsius"})},
+})
 ```
 
 A module is not one "kind": the same `Apply` can add tools, wrap calls and
@@ -69,10 +83,10 @@ module. Fetch it with `go get` (or point at a local checkout with `replace`);
 there is no module registry, lock file or runtime loader. Publish it by
 tagging the Go module.
 
-`WithModule` registers and enables the descriptor. Configure that row with
-`WithModuleConfig(name, cfg)`, or use `WithModuleSpec` when you need an
-instance name (`As`) or priority. `WithModules(names...)` only enables modules
-already in the compiled registry; it never imports a package.
+`Config.Modules` is the only composition point: it registers and enables
+every value in it. A module's `New(...)` returns it configured; set `As` for a
+second instance and `Priority` to change start order. There is no name-based
+lookup, profile file or runtime registry.
 
 If you already have a Go library, write a small `engine.Module` adapter:
 `Apply` exposes the library's functions as `sdk.Tool`s (or a service), and any
@@ -100,7 +114,7 @@ unload or reload; rebuild and redeploy.
 Other calls: `p.Secret("secret://NAME")` (a declared secret), `p.Config*`
 (config with defaults), `p.SetPriority(n)` (higher wraps further out; the
 reserved band is for locked modules), `p.Logf` (redacted logging),
-`p.AddSkill` (a system-prompt fragment), `p.OnUnload` (cleanup).
+`p.AddSkill` (a system-prompt fragment), `p.OnClose` (cleanup).
 
 Services: `loop`, `model/<name>`, `threads`, `memory`, `secrets`, `audit`,
 `approver`, `agent`, `workspace`, `sandbox/<name>`, `db`.
@@ -128,8 +142,8 @@ Every call fails closed with the missing capability name. The admin policy's
 `grants` can only narrow what a module declares.
 
 Modules also cannot create host directories. A file-backed module is given a
-directory that already exists; the application (or `WithPersistence` /
-`WithAudit`) creates it.
+directory that already exists; the module's `Prepare` func (used by the
+`Persistence` and `Audit` presets) creates it before the module applies.
 
 ## The build-time check
 

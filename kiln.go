@@ -8,7 +8,7 @@
 // processes and databases only through the sdk broker, and only with the
 // capabilities the admin policy grants.
 //
-//	a, _ := kiln.New(kiln.WithModel("openai:gpt-4.1"))
+//	a, _ := kiln.New(kiln.Config{Model: "openai:gpt-4.1"})
 //	defer a.Close()
 //	res, _ := a.Generate(ctx, "Hello!")
 //	fmt.Println(res.Text)
@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 
@@ -31,16 +30,15 @@ import (
 type (
 	Message       = sdk.Message
 	ToolCall      = sdk.ToolCall
-	ToolDef       = sdk.Tool
+	Tool          = sdk.Tool
 	Usage         = sdk.Usage
 	Event         = sdk.Event
 	Step          = sdk.Step
 	Interrupt     = sdk.Interrupt
 	Decision      = sdk.Decision
 	Image         = sdk.Image
-	ModuleSpec    = engine.ModuleSpec
 	Module        = engine.Module
-	Profile       = engine.Profile
+	ModuleSpec    = engine.ModuleSpec
 	Policy        = engine.Policy
 	ModuleStatus  = engine.ModuleStatus
 	ModelRequest  = sdk.ModelRequest
@@ -55,9 +53,9 @@ type (
 )
 
 var (
-	ErrNoLoop       = errors.New("kiln: no \"loop\" service; load a loop module (e.g. loop)")
+	ErrNoLoop       = errors.New("kiln: no \"loop\" service; add loop.New() to Config.Modules")
 	ErrThreadBusy   = errors.New("kiln: thread was modified concurrently; retry")
-	ErrNoCheckpoint = errors.New("kiln: threads need a \"threads\" service; load threads_inmem, threads_file or threads_sql (or use WithPersistence)")
+	ErrNoCheckpoint = errors.New("kiln: threads need a \"threads\" service; add threads_inmem.New(), threads_file.New(dir) or threads_sql.New()")
 )
 
 // Agent is a started composition plus defaults for runs.
@@ -69,33 +67,24 @@ type Agent struct {
 	user         string
 	roles        []string
 	closeOnce    sync.Once
-	remote       *remote // set when the agent runs inside a sandbox (WithRunIn)
+	remote       *remote // set when the agent runs inside a sandbox (Config.RunIn)
 	saveEachStep bool
 }
 
 // New composes and starts an agent. Nothing runs until the composition is
-// valid. With no options it uses the secure policy, the default loop,
-// secrets and thread storage, and the provider implied by the model prefix.
-func New(opts ...Option) (*Agent, error) {
-	cfg := &config{}
-	for _, o := range opts {
-		o(cfg)
-	}
-	if cfg.runIn != nil {
+// valid. The default loop, secrets and thread storage are added unless a
+// module of the same family is in Config.Modules.
+func New(cfg Config) (*Agent, error) {
+	if cfg.RunIn != nil {
 		if InBox() {
-			return nil, errors.New("kiln: this process is a sandbox box; call kiln.ServeBox instead of WithRunIn")
+			return nil, errors.New("kiln: this process is a sandbox box; call kiln.ServeBox instead of Config.RunIn")
 		}
 		return newRemote(cfg)
 	}
 	return newLocal(cfg)
 }
 
-func newLocal(cfg *config) (*Agent, error) {
-	for _, f := range cfg.prepare {
-		if err := f(); err != nil {
-			return nil, fmt.Errorf("kiln: %w", err)
-		}
-	}
+func newLocal(cfg Config) (*Agent, error) {
 	prof, pol, err := resolve(cfg)
 	if err != nil {
 		return nil, err
@@ -113,9 +102,9 @@ func newLocal(cfg *config) (*Agent, error) {
 	return a, nil
 }
 
-func newAgent(cfg *config, prof *engine.Profile) *Agent {
+func newAgent(cfg Config, prof *engine.Profile) *Agent {
 	a := &Agent{model: prof.Model, instructions: prof.Instructions, maxSteps: prof.MaxSteps,
-		user: cfg.user, roles: cfg.roles, saveEachStep: cfg.saveEachStep}
+		user: cfg.User, roles: cfg.Roles, saveEachStep: cfg.SaveEachStep}
 	if a.instructions == "" {
 		a.instructions = "You are a helpful assistant."
 	}
@@ -125,14 +114,14 @@ func newAgent(cfg *config, prof *engine.Profile) *Agent {
 // facadeModules are the modules the agent itself contributes: the "agent"
 // service (runs started from jobs and webhooks) and inline tools.
 func facadeModules(a *Agent, tools []sdk.Tool) []engine.Module {
-	ms := []engine.Module{{Name: "agent_service", Provides: []string{"agent"}, Apply: func(m *sdk.Module) error {
+	ms := []engine.Module{{Name: "agent_service", Provides: []string{"agent"}, Apply: func(m *sdk.Scope) error {
 		return m.Provide("agent", &sdk.AgentService{Run: func(c context.Context, thread, user, prompt string) (*sdk.RunResult, error) {
 			var res *Result
 			var err error
 			if thread != "" {
-				res, err = a.Thread(thread).Generate(c, prompt, AsUser(user))
+				res, err = a.Thread(thread).Generate(c, prompt, Run{User: user})
 			} else {
-				res, err = a.Generate(c, prompt, AsUser(user))
+				res, err = a.Generate(c, prompt, Run{User: user})
 			}
 			if err != nil {
 				return nil, err
@@ -141,9 +130,11 @@ func facadeModules(a *Agent, tools []sdk.Tool) []engine.Module {
 		}})
 	}}}
 	if len(tools) > 0 {
-		ms = append(ms, engine.Module{Name: "inline_tools", Apply: func(m *sdk.Module) error {
+		ms = append(ms, engine.Module{Name: "inline_tools", Apply: func(m *sdk.Scope) error {
 			for _, t := range tools {
-				m.AddTool(t)
+				if err := m.AddTool(t); err != nil {
+					return err
+				}
 			}
 			return nil
 		}})
@@ -151,17 +142,47 @@ func facadeModules(a *Agent, tools []sdk.Tool) []engine.Module {
 	return ms
 }
 
-// compose validates the registry and the profile rows against the policy.
-// It runs no module code.
-func compose(cfg *config, prof *engine.Profile, pol *engine.Policy, a *Agent) (*engine.Plan, error) {
-	reg := append(std.All(), cfg.modules...)
-	reg = append(reg, facadeModules(a, cfg.tools)...)
+// compose validates the registry and the resolved profile rows against the
+// policy. It runs no module code.
+func compose(cfg Config, prof *engine.Profile, pol *engine.Policy, a *Agent) (*engine.Plan, error) {
+	reg := append(registry(cfg.Modules), facadeModules(a, cfg.Tools)...)
 	specs := append([]engine.ModuleSpec{{Use: "agent_service"}}, prof.Modules...)
-	if len(cfg.tools) > 0 {
+	if len(cfg.Tools) > 0 {
 		specs = append(specs, engine.ModuleSpec{Use: "inline_tools"})
 	}
-	specs = autoSpecs(specs, reg, pol, cfg.noDefaults)
-	return engine.Compose(engine.Options{Registry: reg, Specs: specs, Policy: pol, Logger: cfg.logger})
+	specs = autoSpecs(specs, reg, pol)
+	return engine.Compose(engine.Options{Registry: reg, Specs: specs, Policy: pol, Logger: cfg.Logger})
+}
+
+// registry is the standard catalog with the application's modules layered
+// on top: an application descriptor replaces the standard one of the same
+// name, so the explicit composition style works for standard
+// modules too.
+func registry(modules []engine.Module) []engine.Module {
+	all := std.All()
+	byName := make(map[string]engine.Module, len(all)+len(modules))
+	order := make([]string, 0, len(all)+len(modules))
+	for _, m := range all {
+		if _, ok := byName[m.Name]; !ok {
+			order = append(order, m.Name)
+		}
+		byName[m.Name] = m
+	}
+	for _, m := range modules {
+		if _, ok := byName[m.Name]; !ok {
+			order = append(order, m.Name)
+		}
+		// Configuration belongs to an instance, not the shared descriptor:
+		// otherwise one instance's config leaks into another of the same
+		// module. resolve copies it into the spec.
+		m.Config = nil
+		byName[m.Name] = m
+	}
+	out := make([]engine.Module, 0, len(order))
+	for _, name := range order {
+		out = append(out, byName[name])
+	}
+	return out
 }
 
 // Close disposes every module (running their cleanups). It is safe to call
@@ -200,7 +221,7 @@ type Result struct {
 	Usage        sdk.Usage
 	FinishReason string // stop | max_steps | interrupted | tool:<name>
 	Interrupts   []sdk.Interrupt
-	Messages     []sdk.Message // full history, feed back with WithHistory
+	Messages     []sdk.Message // full history, feed back with Run.History
 	Thread       string
 	Changes      []Change // files written by tool_fs during this run
 }
@@ -218,70 +239,66 @@ func (r *Result) ToolCalls() []sdk.ToolCall {
 func (r *Result) Interrupted() bool { return len(r.Interrupts) > 0 }
 
 // Generate runs the agent to completion on a prompt.
-func (a *Agent) Generate(ctx context.Context, prompt string, opts ...RunOption) (*Result, error) {
-	ro := a.runOpts(opts)
-	st := a.newState(ro)
-	st.Messages = append(st.Messages, ro.history...)
-	if prompt != "" || len(ro.images) > 0 {
-		st.Messages = append(st.Messages, sdk.Message{Role: sdk.RoleUser, Content: prompt, Images: ro.images})
+func (a *Agent) Generate(ctx context.Context, prompt string, run ...Run) (*Result, error) {
+	r := one(run)
+	st := a.newState(r)
+	st.Messages = append(st.Messages, r.History...)
+	if prompt != "" || len(r.Images) > 0 {
+		st.Messages = append(st.Messages, sdk.Message{Role: sdk.RoleUser, Content: prompt, Images: r.Images})
 	}
-	return a.run(ctx, st, ro)
+	return a.exec(ctx, st, r)
 }
 
-// Resume continues a run that stopped with interrupts, without a
-// thread storage: the state travels in the previous Result.
-func (a *Agent) Resume(ctx context.Context, prev *Result, decisions []sdk.Decision, opts ...RunOption) (*Result, error) {
-	ro := a.runOpts(opts)
-	st := a.newState(ro)
+// Resume continues a run that stopped with interrupts, without thread
+// storage: the state travels in the previous Result.
+func (a *Agent) Resume(ctx context.Context, prev *Result, decisions []sdk.Decision, run ...Run) (*Result, error) {
+	r := one(run)
+	st := a.newState(r)
 	st.Messages = append([]sdk.Message{}, prev.Messages...)
 	st.Pending = prev.Interrupts
 	st.Decisions = decisions
-	return a.run(ctx, st, ro)
+	return a.exec(ctx, st, r)
 }
 
-func (a *Agent) runOpts(opts []RunOption) *runOptions {
-	ro := &runOptions{user: a.user, roles: a.roles}
-	for _, o := range opts {
-		o(ro)
-	}
-	return ro
-}
-
-func (a *Agent) newState(ro *runOptions) *sdk.RunState {
+func (a *Agent) newState(r Run) *sdk.RunState {
 	st := &sdk.RunState{
-		ID: ro.runID, Model: a.model, System: a.instructions, MaxSteps: a.maxSteps, User: ro.user, Roles: ro.roles,
-		StopOnTools: ro.stopOn, ToolChoice: ro.toolChoice, Temperature: ro.temperature, MaxTokens: ro.maxTokens,
-		ResponseSchema: ro.schema, ResponseName: ro.schemaName, Values: map[string]any{}, Tools: ro.tools,
+		ID: r.RunID, Model: a.model, System: a.instructions, MaxSteps: a.maxSteps,
+		User: a.user, Roles: a.roles,
+		StopOnTools: r.StopOnTools, ToolChoice: r.ToolChoice, Temperature: r.Temperature, MaxTokens: r.MaxTokens,
+		ResponseSchema: r.Schema, ResponseName: r.SchemaName, Values: map[string]any{}, Tools: r.Tools,
 	}
-	if ro.model != "" {
-		st.Model = ro.model
+	if r.Model != "" {
+		st.Model = r.Model
 	}
-	if ro.system != "" {
-		st.System = ro.system
+	if r.Instructions != "" {
+		st.System = r.Instructions
 	}
-	if ro.maxSteps > 0 {
-		st.MaxSteps = ro.maxSteps
+	if r.MaxSteps > 0 {
+		st.MaxSteps = r.MaxSteps
+	}
+	if r.User != "" {
+		st.User, st.Roles = r.User, r.Roles
 	}
 	return st
 }
 
-func (a *Agent) run(ctx context.Context, st *sdk.RunState, ro *runOptions) (*Result, error) {
+func (a *Agent) exec(ctx context.Context, st *sdk.RunState, r Run) (*Result, error) {
 	if a.remote != nil {
-		return a.remote.run(ctx, st, ro)
+		return a.remote.run(ctx, st, r)
 	}
 	snap := a.eng.Root().Snapshot() // module changes never land mid-run
 	loop, ok := snap.Services["loop"].(*sdk.Loop)
 	if !ok {
 		return nil, ErrNoLoop
 	}
-	st.Streaming = ro.onEvent != nil
-	st.Checkpoint = ro.checkpoint
+	st.Streaming = r.OnEvent != nil
+	st.Checkpoint = r.checkpoint
 	st.Emit = func(e sdk.Event) {
-		if ro.onEvent != nil {
-			ro.onEvent(e)
+		if r.OnEvent != nil {
+			r.OnEvent(e)
 		}
-		if ro.onStep != nil && e.Type == "step_start" {
-			ro.onStep(st)
+		if r.onStep != nil && e.Type == "step_start" {
+			r.onStep(st)
 		}
 	}
 	res, err := loop.Run(ctx, snap, st)
@@ -290,16 +307,6 @@ func (a *Agent) run(ctx context.Context, st *sdk.RunState, ro *runOptions) (*Res
 	}
 	return &Result{Text: res.Text, Steps: res.Steps, Usage: res.Usage, FinishReason: res.FinishReason,
 		Interrupts: res.Interrupts, Messages: res.Messages, Thread: st.Thread, Changes: changesOf(st.Values)}, nil
-}
-
-// GenerateText is a one-shot helper: start an agent, run once, close.
-func GenerateText(ctx context.Context, model, prompt string, opts ...Option) (*Result, error) {
-	a, err := New(append([]Option{WithModel(model)}, opts...)...)
-	if err != nil {
-		return nil, err
-	}
-	defer a.Close()
-	return a.Generate(ctx, prompt)
 }
 
 // ---- Approvals ----
@@ -351,78 +358,70 @@ func providerSpec(model string) (engine.ModuleSpec, bool) {
 
 // ---- Resolution ----
 
-// resolve merges the profiles, the options and the defaults into one profile,
-// and picks the policy. The result is what compose validates.
-func resolve(cfg *config) (*engine.Profile, *engine.Policy, error) {
-	prof := &engine.Profile{}
-	if !cfg.noDefaults {
-		prof.Modules = []engine.ModuleSpec{{Use: "loop"}, {Use: "secrets_env"}, {Use: "threads_inmem"}}
+// resolve turns Config into the profile Compose validates: the defaults,
+// the application's modules, then the provider implied by the model.
+func resolve(cfg Config) (*engine.Profile, *engine.Policy, error) {
+	if cfg.Model == "" {
+		return nil, nil, errors.New("kiln: no model; set Config.Model to \"provider:model\"")
 	}
-	for _, path := range cfg.profiles {
-		var p engine.Profile
-		if err := engine.ReadJSON(path, &p); err != nil {
-			return nil, nil, err
-		}
-		prof.Merge(&p)
-	}
-	prof.Merge(&engine.Profile{Model: cfg.model, Instructions: cfg.instructions, MaxSteps: cfg.maxSteps, Modules: cfg.specs})
-	if !cfg.noDefaults {
-		prof.Modules = dropOverriddenDefaults(prof.Modules)
-	}
-	if prof.Model == "" {
-		prof.Model = os.Getenv("KILN_MODEL")
-	}
-	if prof.Model == "" {
-		return nil, nil, errors.New("kiln: no model; use WithModel(\"provider:model\") or set KILN_MODEL")
-	}
-	// The model prefix implies a provider row, unless the application already
-	// loads that module: its own configuration then wins.
-	if spec, ok := providerSpec(prof.Model); ok && !cfg.noDefaults {
-		have := false
-		for _, s := range prof.Modules {
-			if s.Use == spec.Use {
-				have = true
+	prof := &engine.Profile{Model: cfg.Model, Instructions: cfg.Instructions, MaxSteps: cfg.MaxSteps}
+	// Defaults come first. A module of the same family takes the default's
+	// place, so it starts as early as the default it replaces.
+	used := make([]bool, len(cfg.Modules))
+	for _, d := range []struct{ family, use string }{
+		{"loop", "loop"},
+		{"secrets_", "secrets_env"},
+		{"threads_", "threads_inmem"},
+	} {
+		found := false
+		for i, m := range cfg.Modules {
+			if matchesFamily(m.Name, d.family) {
+				prof.Modules = append(prof.Modules, specOf(m))
+				used[i], found = true, true
+				break
 			}
 		}
-		if !have {
-			prof.Modules = append(prof.Modules, spec)
+		if !found {
+			prof.Modules = append(prof.Modules, engine.ModuleSpec{Use: d.use})
 		}
 	}
-	var pol *engine.Policy
-	switch {
-	case cfg.policyObj != nil:
-		pol = cfg.policyObj
-	case cfg.policyPath != "":
-		pol = &engine.Policy{}
-		if err := engine.ReadJSON(cfg.policyPath, pol); err != nil {
-			return nil, nil, err
+	for i, m := range cfg.Modules {
+		if !used[i] {
+			prof.Modules = append(prof.Modules, specOf(m))
 		}
-	default:
+	}
+	// The model prefix implies a provider row, unless the application
+	// configures that provider itself.
+	if spec, ok := providerSpec(cfg.Model); ok && !hasModule(cfg.Modules, spec.Use) {
+		prof.Modules = append(prof.Modules, spec)
+	}
+	pol := cfg.Policy
+	if pol == nil {
 		pol = engine.SecurePolicy()
 	}
 	return prof, pol, nil
 }
 
-// Defaults give way to a user module of the same family, so adding
-// threads_file replaces threads_inmem instead of clashing with it.
-func dropOverriddenDefaults(specs []engine.ModuleSpec) []engine.ModuleSpec {
-	families := map[string]string{"loop": "loop", "secrets_env": "secrets_", "threads_inmem": "threads_"}
-	var out []engine.ModuleSpec
-	for i, s := range specs {
-		fam, isDefault := families[s.Name()]
-		overridden := false
-		if isDefault {
-			for _, o := range specs[i+1:] {
-				if o.Use != s.Use && strings.HasPrefix(o.Use, fam) {
-					overridden = true
-				}
-			}
-		}
-		if !overridden {
-			out = append(out, s)
+func specOf(m engine.Module) engine.ModuleSpec {
+	return engine.ModuleSpec{Use: m.Name, As: m.As, Config: m.Config, Priority: m.Priority}
+}
+
+// matchesFamily reports whether a module belongs to a default's family.
+// A trailing "_" means prefix; otherwise the name must match exactly.
+func matchesFamily(name, family string) bool {
+	if strings.HasSuffix(family, "_") {
+		return strings.HasPrefix(name, family)
+	}
+	return name == family
+}
+
+func hasModule(modules []engine.Module, name string) bool {
+	for _, m := range modules {
+		if m.Name == name {
+			return true
 		}
 	}
-	return out
+	return false
 }
 
 // autoModules maps a service that a module requires to the standard module
@@ -440,10 +439,7 @@ var autoModules = map[string]string{
 // enabled module provides, until nothing more is added. It is static: the
 // added rows go through compose like any other, and a policy that denies a
 // default leaves the requirement unmet, which compose then reports.
-func autoSpecs(specs []engine.ModuleSpec, reg []engine.Module, pol *engine.Policy, noDefaults bool) []engine.ModuleSpec {
-	if noDefaults {
-		return specs
-	}
+func autoSpecs(specs []engine.ModuleSpec, reg []engine.Module, pol *engine.Policy) []engine.ModuleSpec {
 	byName := map[string]engine.Module{}
 	for _, m := range reg {
 		byName[m.Name] = m
@@ -510,7 +506,7 @@ func (a *Agent) AsTool(name, description string) sdk.Tool {
 		Meta:        map[string]any{"subagent": true},
 		Run: func(ctx context.Context, args map[string]any) (string, error) {
 			ri := sdk.RunInfoFrom(ctx)
-			res, err := a.Generate(ctx, sdk.ArgString(args, "task"), AsUser(ri.User, ri.Roles...))
+			res, err := a.Generate(ctx, sdk.ArgString(args, "task"), Run{User: ri.User, Roles: ri.Roles})
 			if err != nil {
 				return "", err
 			}

@@ -7,4 +7,4 @@ import (
 
 var Module = engine.Module{Name: "alpha", Provides: []string{"alpha.svc"}, Apply: Apply}
 
-func Apply(p *sdk.Module) error { return p.Provide("alpha.svc", 1) }
+func Apply(p *sdk.Scope) error { return p.Provide("alpha.svc", 1) }

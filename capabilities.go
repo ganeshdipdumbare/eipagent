@@ -1,174 +1,150 @@
 package kiln
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/ganeshdipdumbare/kiln/engine"
+	"github.com/ganeshdipdumbare/kiln/modules/std"
+	"github.com/ganeshdipdumbare/kiln/sdk"
 )
 
-// Options for common setups. Each one loads standard modules with
-// sensible config, and its comment names them, so moving to WithPlugin
-// for finer control is one step. Calling one twice merges (approvals,
-// MCP servers) or replaces (the rest).
-
-// WithPersistence keeps conversations (threads, including paused
-// approvals) and long-term memory across restarts.
+// Presets are preconfigured standard modules for Config.Modules. They are
+// values, not a second way to compose: put them in the same list.
 //
-//	WithPersistence("memory", "")                 // threads_inmem + memory_inmem (the default; lost on exit)
-//	WithPersistence("file", ".kiln/data")     // threads_file + memory_file under that directory
-//	WithPersistence("postgres", "secret://DSN")   // db_sql + threads_sql + memory_sql; any replica serves any thread
+//	a, err := kiln.New(kiln.Config{
+//		Model:   "openai:gpt-4.1",
+//		Modules: append(kiln.Approvals("refund"), kiln.Audit(".kiln/audit.jsonl")...),
+//	})
+
+// Persistence keeps conversations (threads, including paused approvals)
+// and long-term memory across restarts.
+//
+//	Persistence("memory", "")                    // threads_inmem + memory_inmem (default)
+//	Persistence("file", ".kiln/data")            // threads_file + memory_file
+//	Persistence("postgres", "secret://DSN")      // db_sql + threads_sql + memory_sql
 //
 // For postgres, import the driver once: import _ "github.com/ganeshdipdumbare/kiln/drivers/postgres".
-func WithPersistence(kind, target string) Option {
-	return func(c *config) {
-		var add []engine.ModuleSpec
-		switch strings.ToLower(kind) {
-		case "file":
-			if target == "" {
-				target = ".kiln"
-			}
-			add = []engine.ModuleSpec{
-				{Use: "threads_file", Config: map[string]any{"dir": filepath.Join(target, "threads")}},
-				{Use: "memory_file", Config: map[string]any{"path": filepath.Join(target, "memory.json")}},
-			}
-			// The modules work inside directories they are given; the facade
-			// creates them before the agent starts.
-			dir := target
-			c.prepare = append(c.prepare, func() error { return os.MkdirAll(filepath.Join(dir, "threads"), 0o700) })
-		case "postgres", "sql":
-			add = []engine.ModuleSpec{
-				{Use: "db_sql", Config: map[string]any{"dsn": target}},
-				{Use: "threads_sql"}, {Use: "memory_sql"},
-			}
-		default: // "memory"
-			add = []engine.ModuleSpec{{Use: "threads_inmem"}, {Use: "memory_inmem"}}
+func Persistence(kind, target string) []engine.Module {
+	switch strings.ToLower(kind) {
+	case "file":
+		if target == "" {
+			target = ".kiln"
 		}
-		c.specs = replaceKinds(c.specs, add, "threads_", "memory_", "db_sql")
+		dir := filepath.Join(target, "threads")
+		t := must("threads_file")
+		t.Config = map[string]any{"dir": dir}
+		// Modules work inside directories they are given; the engine creates
+		// them before the module applies.
+		t.Prepare = func() error { return os.MkdirAll(dir, 0o700) }
+		m := must("memory_file")
+		m.Config = map[string]any{"path": filepath.Join(target, "memory.json")}
+		return []engine.Module{t, m}
+	case "postgres", "sql":
+		db := must("db_sql")
+		db.Config = map[string]any{"dsn": target}
+		return []engine.Module{db, must("threads_sql"), must("memory_sql")}
+	default:
+		return []engine.Module{must("threads_inmem"), must("memory_inmem")}
 	}
 }
 
-// WithApprovals pauses before the named tools until a person decides
-// (approve, edit, reject or respond); resume with Thread.Resume. Loads
-// hook_approval.
-func WithApprovals(tools ...string) Option {
-	return func(c *config) {
-		for i, s := range c.specs {
-			if s.Name() == "hook_approval" {
-				on, _ := s.Config["interrupt_on"].(map[string]any)
-				for _, t := range tools {
-					on[t] = true
-				}
-				c.specs[i] = s
-				return
-			}
-		}
-		on := map[string]any{}
-		for _, t := range tools {
-			on[t] = true
-		}
-		c.specs = append(c.specs, engine.ModuleSpec{Use: "hook_approval", Config: map[string]any{"interrupt_on": on}})
+// Approvals pauses before the named tools until a person decides
+// (approve, edit, reject or respond); resume with Thread.Resume.
+func Approvals(tools ...string) []engine.Module {
+	m := must("hook_approval")
+	on := map[string]any{}
+	for _, t := range tools {
+		on[t] = true
 	}
+	m.Config = map[string]any{"interrupt_on": on}
+	return []engine.Module{m}
 }
 
-// WithSandbox runs shell and file tools inside a sandbox per thread
-// instead of on the host: "docker" (sandbox_docker), "microsandbox"
-// (sandbox_microsandbox: a microVM), "local" (sandbox_local: no
-// isolation, for development) or a provider you load yourself. Loads sandbox_<provider> + workspace_sandbox.
-func WithSandbox(provider string) Option {
-	return func(c *config) {
-		add := []engine.ModuleSpec{{Use: "workspace_sandbox", Config: map[string]any{"provider": provider}}}
-		if provider == "docker" || provider == "microsandbox" || provider == "local" {
-			add = append([]engine.ModuleSpec{{Use: "sandbox_" + provider}}, add...)
-		}
-		c.specs = replaceKinds(c.specs, add, "workspace_")
-	}
+// Approver decides human-in-the-loop interrupts synchronously (for example
+// by prompting in a CLI). Return nil to leave one pending.
+func Approver(fn func(ctx context.Context, in Interrupt) (*Decision, error)) []engine.Module {
+	return []engine.Module{{Name: "approver_inline", Provides: []string{"approver"}, Apply: func(m *sdk.Scope) error {
+		return m.Provide("approver", &sdk.Approver{Decide: fn})
+	}}}
 }
 
-// WithAudit writes a tamper-evident audit log (hash-chained JSON lines)
-// of every model call, tool call, approval and module change. Loads
-// audit_file. Verify it with audit.Verify.
-func WithAudit(path string) Option {
-	return func(c *config) {
-		c.prepare = append(c.prepare, func() error { return os.MkdirAll(filepath.Dir(path), 0o700) })
-		c.specs = replaceKinds(c.specs, []engine.ModuleSpec{{Use: "audit_file", Config: map[string]any{"path": path}}}, "audit_file")
+// Sandbox runs shell and file tools inside a sandbox per thread instead of
+// on the host: "docker", "microsandbox", "local" (no isolation, for
+// development) or a provider you load yourself.
+func Sandbox(provider string) []engine.Module {
+	ws := must("workspace_sandbox")
+	ws.Config = map[string]any{"provider": provider}
+	if provider == "docker" || provider == "microsandbox" || provider == "local" {
+		return []engine.Module{must("sandbox_" + provider), ws}
 	}
+	return []engine.Module{ws}
 }
 
-// WithTracing sends traces of every run, model call and tool call to an
+// Audit writes a tamper-evident audit log (hash-chained JSON lines) of
+// every model call, tool call, approval and module change. Verify it with
+// audit.Verify.
+func Audit(path string) []engine.Module {
+	m := must("audit_file")
+	m.Config = map[string]any{"path": path}
+	m.Prepare = func() error { return os.MkdirAll(filepath.Dir(path), 0o700) }
+	return []engine.Module{m}
+}
+
+// Tracing sends traces of every run, model call and tool call to an
 // OpenTelemetry collector over OTLP/HTTP, e.g. "http://localhost:4318".
-// Loads trace_otlp.
-func WithTracing(endpoint string) Option {
-	return func(c *config) {
-		c.specs = replaceKinds(c.specs, []engine.ModuleSpec{{Use: "trace_otlp", Config: map[string]any{"endpoint": endpoint}}}, "trace_otlp")
-	}
+func Tracing(endpoint string) []engine.Module {
+	m := must("trace_otlp")
+	m.Config = map[string]any{"endpoint": endpoint}
+	return []engine.Module{m}
 }
 
-// WithMCP adds the tools of an MCP server, named "<name>__<tool>". The
-// target is a command and its arguments (stdio), or one https URL
-// (streamable HTTP). Loads tool_mcp.
+// MCP adds the tools of an MCP server, named "<name>__<tool>". The target
+// is a command and its arguments (stdio), or one https URL.
 //
-//	WithMCP("github", "npx", "-y", "@modelcontextprotocol/server-github")
-//	WithMCP("docs", "https://mcp.example.com/mcp")
-func WithMCP(name, target string, args ...string) Option {
-	return func(c *config) {
-		srv := map[string]any{"name": name}
-		if strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") {
-			srv["url"] = target
-		} else {
-			a := make([]any, len(args))
-			for i, x := range args {
-				a[i] = x
-			}
-			srv["command"], srv["args"] = target, a
+//	MCP("github", "npx", "-y", "@modelcontextprotocol/server-github")
+//	MCP("docs", "https://mcp.example.com/mcp")
+func MCP(name, target string, args ...string) []engine.Module {
+	srv := map[string]any{"name": name}
+	if strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") {
+		srv["url"] = target
+	} else {
+		a := make([]any, len(args))
+		for i, x := range args {
+			a[i] = x
 		}
-		for i, s := range c.specs {
-			if s.Name() == "tool_mcp" {
-				list, _ := s.Config["servers"].([]any)
-				s.Config["servers"] = append(list, srv)
-				c.specs[i] = s
-				return
-			}
-		}
-		c.specs = append(c.specs, engine.ModuleSpec{Use: "tool_mcp", Config: map[string]any{"servers": []any{srv}}})
+		srv["command"], srv["args"] = target, a
 	}
+	m := must("tool_mcp")
+	m.Config = map[string]any{"servers": []any{srv}}
+	return []engine.Module{m}
 }
 
-// WithWebSearch gives the model a web_search tool. The backend is
-// "duckduckgo" (no key), "tavily" (secret://TAVILY_API_KEY), "brave"
-// (secret://BRAVE_API_KEY) or "searxng" (set base_url with WithPlugin).
-// Loads tool_websearch; add tool_fetch to let it read the pages.
-func WithWebSearch(backend string) Option {
-	return func(c *config) {
-		c.specs = replaceKinds(c.specs, []engine.ModuleSpec{{Use: "tool_websearch", Config: map[string]any{"backend": backend}}}, "tool_websearch")
-	}
+// WebSearch gives the model a web_search tool. The backend is "duckduckgo"
+// (no key), "tavily" (secret://TAVILY_API_KEY), "brave"
+// (secret://BRAVE_API_KEY) or "searxng" (set base_url in its Config).
+func WebSearch(backend string) []engine.Module {
+	m := must("tool_websearch")
+	m.Config = map[string]any{"backend": backend}
+	return []engine.Module{m}
 }
 
-// WithThinking turns on model reasoning at the given effort: low,
-// medium, high, xhigh or max. Each provider gets its own setting
-// (Anthropic adaptive thinking, OpenAI reasoning_effort, Gemini
-// thinkingConfig). Loads hook_thinking.
-func WithThinking(effort string) Option {
-	return func(c *config) {
-		c.specs = replaceKinds(c.specs, []engine.ModuleSpec{{Use: "hook_thinking", Config: map[string]any{"effort": effort}}}, "hook_thinking")
-	}
+// Thinking turns on model reasoning at the given effort: low, medium, high,
+// xhigh or max. Each provider gets its own setting.
+func Thinking(effort string) []engine.Module {
+	m := must("hook_thinking")
+	m.Config = map[string]any{"effort": effort}
+	return []engine.Module{m}
 }
 
-// replaceKinds drops rows whose module (current or old name) starts with
-// any of the prefixes, then appends add.
-func replaceKinds(specs, add []engine.ModuleSpec, prefixes ...string) []engine.ModuleSpec {
-	var out []engine.ModuleSpec
-	for _, s := range specs {
-		drop := false
-		for _, p := range prefixes {
-			if strings.HasPrefix(s.Use, p) {
-				drop = true
-			}
-		}
-		if !drop {
-			out = append(out, s)
-		}
+// must returns a standard module descriptor. Names are compile-time
+// constants, so a missing one is a broken build of modules/std.
+func must(name string) engine.Module {
+	m, ok := std.Get(name)
+	if !ok {
+		panic("kiln: standard module " + name + " is missing from modules/std")
 	}
-	return append(out, add...)
+	return m
 }

@@ -33,14 +33,14 @@ import (
 //
 // Example:
 //
-//	kiln.WithModel("openai:gpt-4.1") // also deepseek:, ollama:, openrouter:, groq:
+//	kiln.Config{Model: "openai:gpt-4.1"} // also deepseek:, ollama:, openrouter:, groq:
 //	// Any other OpenAI-compatible server, e.g. vLLM, then WithModel("vllm:qwen3-32b"):
-//	kiln.WithModuleConfig("model_openai", map[string]any{"name": "vllm", "base_url": "http://gpu-box:8000/v1", "api_key": ""})
+//	model_openai.New(map[string]any{"name": "vllm", "base_url": "http://gpu-box:8000/v1", "api_key": ""})
 var Permissions = []string{"net"}
 
 var Requires = []string{"?secrets"} // secret:// keys/headers are optional
 
-func Apply(p *sdk.Module) error {
+func Apply(p *sdk.Scope) error {
 	name := p.ConfigString("name", "openai")
 	base := strings.TrimRight(p.ConfigString("base_url", "https://api.openai.com/v1"), "/")
 	keyRef := "secret://OPENAI_API_KEY"
@@ -377,3 +377,13 @@ func readStream(r io.Reader, emit func(sdk.Chunk)) (*sdk.ModelResponse, error) {
 
 // Module is the compiled form of "model_openai". modules/std registers it.
 var Module = engine.Module{Name: "model_openai", Requires: Requires, Provides: []string{"model/*"}, Permissions: Permissions, Secrets: []string{"OPENAI_API_KEY"}, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}

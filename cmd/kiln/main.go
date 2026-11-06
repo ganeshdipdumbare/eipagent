@@ -2,10 +2,10 @@
 // one-shot runner, an evaluator, trace and audit viewers, and tools for the
 // module set.
 //
-//	kiln [repl] -model openai:gpt-4.1 -profile kiln.json
+//	kiln [repl] -model openai:gpt-4.1 -use tool_time
 //	kiln run -model ... "summarize README.md"
 //	kiln eval -model ... cases.json   (grade the agent on a dataset; see package evals)
-//	kiln config dump -profile kiln.json (show what composes and what each module may use)
+//	kiln config dump -use tool_time (show what composes and what each module may use)
 //	kiln module list                  (every standard module: provides, permissions)
 //	kiln module check [dir]           (static check of module packages; CI gate)
 //	kiln module manifest [dir]        (JSON: modules, requires, provides, capabilities)
@@ -13,7 +13,7 @@
 //	kiln audit verify audit.jsonl
 //
 // Application modules are compiled into your own program with
-// kiln.WithModule; this CLI runs the standard modules only.
+// kiln.Config.Modules; this CLI runs the standard modules only.
 package main
 
 import (
@@ -27,6 +27,7 @@ import (
 	"strings"
 
 	"github.com/ganeshdipdumbare/kiln"
+	"github.com/ganeshdipdumbare/kiln/engine"
 	"github.com/ganeshdipdumbare/kiln/evals"
 	"github.com/ganeshdipdumbare/kiln/internal/modulecheck"
 	"github.com/ganeshdipdumbare/kiln/modules/std"
@@ -36,8 +37,8 @@ import (
 )
 
 type common struct {
-	model, profile, policy, user string
-	use                          multi
+	model, policy, user string
+	use                 multi
 }
 
 type multi []string
@@ -47,30 +48,31 @@ func (m *multi) Set(v string) error { *m = append(*m, v); return nil }
 
 func (c *common) flags(fs *flag.FlagSet) {
 	fs.StringVar(&c.model, "model", "", "provider:model (or KILN_MODEL)")
-	fs.StringVar(&c.profile, "profile", "", "profile JSON")
 	fs.StringVar(&c.policy, "policy", "", "admin policy JSON")
 	fs.StringVar(&c.user, "user", "", "user id for runs")
-	fs.Var(&c.use, "use", "run a standard module by name (repeatable; see kiln module list)")
+	fs.Var(&c.use, "use", "add a standard module by name (repeatable; see kiln module list)")
 }
 
-func (c *common) options() []kiln.Option {
-	var o []kiln.Option
-	if c.model != "" {
-		o = append(o, kiln.WithModel(c.model))
-	}
-	if c.profile != "" {
-		o = append(o, kiln.WithProfile(c.profile))
+func (c *common) config() (kiln.Config, error) {
+	cfg := kiln.Config{Model: c.model, User: c.user}
+	if cfg.Model == "" {
+		cfg.Model = os.Getenv("KILN_MODEL")
 	}
 	if c.policy != "" {
-		o = append(o, kiln.WithPolicyFile(c.policy))
+		pol := &kiln.Policy{}
+		if err := engine.ReadJSON(c.policy, pol); err != nil {
+			return cfg, err
+		}
+		cfg.Policy = pol
 	}
-	if len(c.use) > 0 {
-		o = append(o, kiln.WithModules(c.use...))
+	for _, name := range c.use {
+		m, ok := std.Get(name)
+		if !ok {
+			return cfg, fmt.Errorf("unknown module %q (see kiln module list)", name)
+		}
+		cfg.Modules = append(cfg.Modules, m)
 	}
-	if c.user != "" {
-		o = append(o, kiln.WithUser(c.user))
-	}
-	return o
+	return cfg, nil
 }
 
 func main() {
@@ -84,7 +86,7 @@ func main() {
 	// A sandbox box runs the same program: serve the agent over JSON-RPC on
 	// stdin/stdout, with the profile and policy the host uploaded.
 	if kiln.InBox() {
-		if err := kiln.ServeBox(ctx, os.Stdin, os.Stdout); err != nil {
+		if err := kiln.ServeBox(ctx, os.Stdin, os.Stdout, kiln.Config{}); err != nil {
 			fmt.Fprintln(os.Stderr, "kiln:", err)
 			os.Exit(1)
 		}
@@ -131,7 +133,11 @@ func evalCmd(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	a, err := kiln.New(c.options()...)
+	cfg, err := c.config()
+	if err != nil {
+		return err
+	}
+	a, err := kiln.New(cfg)
 	if err != nil {
 		return err
 	}
@@ -163,7 +169,11 @@ func run(ctx context.Context, args []string) error {
 	if prompt == "" {
 		return fmt.Errorf("run: no prompt")
 	}
-	a, err := kiln.New(c.options()...)
+	cfg, err := c.config()
+	if err != nil {
+		return err
+	}
+	a, err := kiln.New(cfg)
 	if err != nil {
 		return err
 	}
@@ -202,7 +212,11 @@ func repl(ctx context.Context, args []string) error {
 	thread := fs.String("thread", "repl", "thread id")
 	fs.Parse(args)
 	in := bufio.NewScanner(os.Stdin)
-	opts := append(c.options(), kiln.WithApprover(func(ctx context.Context, it kiln.Interrupt) (*kiln.Decision, error) {
+	cfg, err := c.config()
+	if err != nil {
+		return err
+	}
+	cfg.Modules = append(cfg.Modules, kiln.Approver(func(ctx context.Context, it kiln.Interrupt) (*kiln.Decision, error) {
 		fmt.Printf("\n  ? %s [y/N/reason] ", it.Message)
 		if !in.Scan() {
 			return nil, nil
@@ -214,8 +228,8 @@ func repl(ctx context.Context, args []string) error {
 		}
 		d := kiln.Reject(it.ID, ans)
 		return &d, nil
-	}))
-	a, err := kiln.New(opts...)
+	})...)
+	a, err := kiln.New(cfg)
 	if err != nil {
 		return err
 	}
@@ -262,7 +276,11 @@ func configCmd(args []string) error {
 	var c common
 	c.flags(fs)
 	fs.Parse(args[1:])
-	a, err := kiln.New(c.options()...)
+	cfg, err := c.config()
+	if err != nil {
+		return err
+	}
+	a, err := kiln.New(cfg)
 	if err != nil {
 		return err
 	}

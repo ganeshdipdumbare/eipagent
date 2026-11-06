@@ -30,7 +30,7 @@ func tensorlakeProvider() engine.Module {
 		Name:        "sandbox_tensorlake",
 		Provides:    []string{"sandbox/tensorlake"},
 		Permissions: []string{"env", "fs:read", "fs:write"},
-		Apply: func(p *sdk.Module) error {
+		Apply: func(p *sdk.Scope) error {
 			opts := []tensorlake.Option{}
 			if key := p.ConfigString("api_key", ""); key != "" {
 				opts = append(opts, tensorlake.WithAPIKey(key))
@@ -139,7 +139,7 @@ func waitSandbox(ctx context.Context, client *tensorlake.Client, id string) erro
 	return fmt.Errorf("tensorlake: sandbox %s did not become running", id)
 }
 
-func wrapTensorlake(p *sdk.Module, client *tensorlake.Client, id, wd string) *sdk.Sandbox {
+func wrapTensorlake(p *sdk.Scope, client *tensorlake.Client, id, wd string) *sdk.Sandbox {
 	abs := func(p string) string {
 		if strings.HasPrefix(p, "/") {
 			return p
@@ -426,14 +426,14 @@ func lines(r *tensorlake.ProcessOutputResponse) string {
 }
 
 // envOr and envInt read a host variable through the module's "env" grant.
-func envOr(p *sdk.Module, key, def string) string {
+func envOr(p *sdk.Scope, key, def string) string {
 	if v, err := p.Env(key); err == nil && v != "" {
 		return v
 	}
 	return def
 }
 
-func envInt(p *sdk.Module, key string, def int) int {
+func envInt(p *sdk.Scope, key string, def int) int {
 	if v, err := p.Env(key); err == nil && v != "" {
 		fmt.Sscanf(v, "%d", &def)
 	}

@@ -23,8 +23,8 @@ import (
 //
 // Example:
 //
-//	kiln.WithModuleConfig("hook_cache", map[string]any{"ttl": "1h"})
-func Apply(p *sdk.Module) error {
+//	hook_cache.New(map[string]any{"ttl": "1h"})
+func Apply(p *sdk.Scope) error {
 	ttl := p.ConfigString("ttl", "5m")
 	if ttl != "5m" && ttl != "1h" {
 		return fmt.Errorf("hook_cache: ttl must be 5m or 1h, got %q", ttl)
@@ -41,3 +41,13 @@ func Apply(p *sdk.Module) error {
 
 // Module is the compiled form of "hook_cache". modules/std registers it.
 var Module = engine.Module{Name: "hook_cache", Requires: nil, Provides: nil, Permissions: nil, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}

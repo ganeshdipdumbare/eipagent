@@ -22,12 +22,12 @@ import (
 //
 // Example:
 //
-//	kiln.WithModuleConfig("sandbox_docker", map[string]any{"image": "python:3.12-slim", "pids_limit": 128})
-//	kiln.WithModules("workspace_sandbox", "tool_shell", "tool_fs")
-//	// Shortcut: kiln.WithSandbox("docker")
+//	sandbox_docker.New(map[string]any{"image": "python:3.12-slim", "pids_limit": 128})
+//	kiln.Config{Modules: []kiln.Module{workspace_sandbox.New(), tool_shell.New(), tool_fs.New()}}
+//	// Shortcut: kiln.Sandbox("docker")
 var Permissions = []string{"exec"}
 
-func Apply(p *sdk.Module) error {
+func Apply(p *sdk.Scope) error {
 	bin := p.ConfigString("binary", "docker")
 	image := p.ConfigString("image", "alpine:3")
 	name := p.ConfigString("name", "docker")
@@ -250,3 +250,13 @@ func container(id, provider, wd string, run runner, start starter) *sdk.Sandbox 
 
 // Module is the compiled form of "sandbox_docker". modules/std registers it.
 var Module = engine.Module{Name: "sandbox_docker", Requires: nil, Provides: []string{"sandbox/*"}, Permissions: Permissions, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}

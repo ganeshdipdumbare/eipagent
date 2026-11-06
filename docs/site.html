@@ -139,11 +139,7 @@
   <div class="section" id="composition">
     <div class="section-head reveal"><span class="section-label">02 / Composition lab</span><h2 data-toc="Composition lab">Compose modules.<br>Watch the plan run.</h2></div>
     <p class="section-lede reveal">Toggle a module and the build config, the capability summary and the run trace update. <strong>Illustrative:</strong> in a real app the module set is fixed at compile time, so a change means rebuild and redeploy. The host keeps the keys; the sandbox gets placeholders.</p>
-    <div class="code" data-title="go"><pre><code class="language-go">agent, err := kiln.New(
-	kiln.WithModel("openai:gpt-4.1"),                 // model_openai
-	kiln.WithModuleConfig("hook_retry", nil),          // a standard module, configured
-	kiln.WithModule(orders.Module),                    // your own, compiled in
-)
+    <div class="code" data-title="go"><pre><code class="language-go">agent, err := kiln.New(kiln.Config{Model: "openai:gpt-4.1", Modules: []kiln.Module{hook_retry.New(nil), orders.Module}})
 if err != nil {
 	// kiln: module orders requires "db", which no enabled module provides
 	// (add one of: db_sql, memory_sql, threads_sql)
@@ -312,16 +308,12 @@ type WeatherIn struct {
 func main() {
 	ctx := context.Background()
 
-	weather := kiln.Tool("weather", "Current weather for a city",
+	weather := kiln.NewTool("weather", "Current weather for a city",
 		func(ctx context.Context, in WeatherIn) (string, error) {
 			return "18°C and light rain in " + in.City, nil
 		})
 
-	agent, err := kiln.New(
-		kiln.WithModel("anthropic:claude-sonnet-5-5"),
-		kiln.WithInstructions("You are a concise travel assistant."),
-		kiln.WithTools(weather),
-	)
+	agent, err := kiln.New(kiln.Config{Model: "anthropic:claude-sonnet-5-5", Instructions: "You are a concise travel assistant.", Tools: []kiln.Tool{weather}})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -345,7 +337,7 @@ func main() {
     <li><b>Streaming:</b> range over <code>agent.Stream(ctx, prompt).Text()</code>. <a href="#streaming">Streaming</a>.</li>
     <li><b>An approval:</b> load <code>hook_approval</code> and resume with <code>Thread.Resume</code>. <a href="#human-in-the-loop">Human in the loop</a>.</li>
     <li><b>Production state:</b> move threads and memory to Postgres. <a href="#production-checklist">Production checklist</a>.</li>
-    <li><b>A module:</b> one Go file with <code>func Apply(p *sdk.Module) error</code>. <a href="#modules">Modules in five minutes</a>.</li>
+    <li><b>A module:</b> one Go file with <code>func Apply(p *sdk.Scope) error</code>. <a href="#modules">Modules in five minutes</a>.</li>
   </ul>
   <div class="note"><b>Stuck?</b><div><p>See <a href="#troubleshooting">Troubleshooting &amp; FAQ</a> for private module errors, missing keys, Ollama and thread issues.</p></div></div>
 </section>
@@ -361,8 +353,8 @@ func main() {
       <tr><td><b>Step</b></td><td>One model call inside a run, plus the tool calls it asked for. A run takes up to <code>MaxSteps</code> steps. <a href="#agent-loop">The agent loop</a></td></tr>
       <tr><td><b>Thread</b></td><td>A conversation saved across runs under an ID (<code>agent.Thread(id)</code>), including runs paused for approval. Stored by the <code>threads</code> service. <a href="#threads">Threads</a></td></tr>
       <tr><td><b>Model string</b></td><td><code>provider:model</code>, for example <code>anthropic:claude-sonnet-5-5</code>. The part before the colon picks the provider module, which loads by itself. <a href="#providers">Providers</a></td></tr>
-      <tr><td><b>Module</b></td><td>A unit of behaviour: a compiled Go package that exports a descriptor and <code>func Apply(p *sdk.Module) error</code>. The loop, providers, tools, memory, sandboxes and policy are all modules. <a href="#modules">Modules</a></td></tr>
-      <tr><td><b><code>*sdk.Module</code></b></td><td>The handle every <code>Apply</code> receives. Through it a module adds tools and hooks, provides and uses services, reads its config and secrets. <a href="#module-api">Module API</a></td></tr>
+      <tr><td><b>Module</b></td><td>A unit of behaviour: a compiled Go package that exports a descriptor and <code>func Apply(p *sdk.Scope) error</code>. The loop, providers, tools, memory, sandboxes and policy are all modules. <a href="#modules">Modules</a></td></tr>
+      <tr><td><b><code>*sdk.Scope</code></b></td><td>The handle every <code>Apply</code> receives. Through it a module adds tools and hooks, provides and uses services, reads its config and secrets. <a href="#module-api">Module API</a></td></tr>
       <tr><td><b>Service</b></td><td>A named value one module provides (<code>p.Provide</code>) and others use (<code>p.Service</code>): <code>loop</code>, <code>model/&lt;name&gt;</code>, <code>threads</code>, <code>memory</code>, <code>secrets</code>, <code>workspace</code> … A module lists the services it needs in its descriptor's <code>Requires</code>; that is how modules depend on each other without knowing each other.</td></tr>
       <tr><td><b>Hook</b></td><td>Code a module runs at a fixed point of every run: before a step, around a model call, after a model reply, around a tool call, at start and end. Retries, approvals, redaction and limits are hooks. <a href="#kind-hooks">Hooks</a></td></tr>
       <tr><td><b>Tool</b></td><td>A function the model can call: a name, a JSON Schema for its arguments and a <code>Run</code> func. Pass your own with <code>WithTools</code>, or load tool modules. <a href="#tools">Tools</a></td></tr>
@@ -370,7 +362,7 @@ func main() {
       <tr><td><b>Interrupt</b> and <b>decision</b></td><td>A run pauses with an interrupt (for example, a tool call waiting for approval); a person answers with a decision (approve, edit, reject, respond) and the run resumes. <a href="#human-in-the-loop">Human in the loop</a></td></tr>
       <tr><td><b>Permission</b></td><td>A capability a module declares in its descriptor's <code>Permissions</code>: <code>net</code>, <code>exec</code>, <code>fs:read</code>, <code>fs:write</code>, <code>env</code>, <code>env:secrets</code>, <code>db</code>. A broker call without the grant fails. <a href="#module-permissions">Permissions</a></td></tr>
       <tr><td><b>Grant</b></td><td>Which secrets a module may read. A secret reference looks like <code>secret://NAME</code>; each module sees only the names granted to it. <a href="#kind-secrets">Secrets</a></td></tr>
-      <tr><td><b>Profile</b></td><td>A JSON file (<code>kiln.json</code>) listing the model, instructions and modules with their config, instead of Go options. <a href="#modules">Modules</a></td></tr>
+      <tr><td><b>Config</b></td><td>The one input to <code>kiln.New</code>: model, instructions, tools, policy and the <code>Modules</code> slice. <a href="#modules">Modules</a></td></tr>
       <tr><td><b>Policy</b></td><td>The admin's file: modules that are required, allowed or denied, locked modules that always run first, and rules on every model and tool call. <a href="#kind-policy">Policy</a></td></tr>
       <tr><td><b>Snapshot</b></td><td>The modules' tools, hooks and services, frozen at the start of each run, so the run is stable.</td></tr>
       <tr><td><b>Workspace</b> and <b>sandbox</b></td><td>Where shell and file tools act: the host folder (<code>workspace_local</code>) or a container or microVM per thread (<code>workspace_sandbox</code> with a <code>sandbox_*</code> module). <a href="#kind-sandboxes">Sandboxes</a></td></tr>
@@ -424,7 +416,7 @@ go run ./examples/ollama                 # every demo</code></pre></div>
     <tbody>
       <tr><td><code>ErrThreadBusy</code></td><td>Another writer saved this thread first. Reload the thread and retry; optimistic locking prevents silent overwrites.</td></tr>
       <tr><td>A paused approval disappeared after a restart</td><td>Use <code>threads_sql</code> or <code>threads_file</code>, not <code>threads_inmem</code>. The pause is saved with the thread.</td></tr>
-      <tr><td>Another replica cannot resume an approval</td><td>All replicas must share the same <code>threads</code> store. Use <code>WithPersistence("postgres", "secret://DATABASE_URL")</code>.</td></tr>
+      <tr><td>Another replica cannot resume an approval</td><td>All replicas must share the same <code>threads</code> store. Use <code>kiln.Persistence("postgres", "secret://DATABASE_URL")</code>.</td></tr>
       <tr><td><code>Generate</code> is refused after an interrupt</td><td>Call <code>Resume</code> with a decision first. A waiting thread does not accept a new message.</td></tr>
     </tbody>
   </table></div>
@@ -443,11 +435,11 @@ go run ./examples/ollama                 # every demo</code></pre></div>
   <h3>Can I run everything offline?</h3>
   <p>Yes. Use <code>mock:demo</code> for deterministic tests or <code>ollama:&lt;model&gt;</code> for a local model. The test suite runs offline.</p>
   <h3>Can I use my own provider or gateway?</h3>
-  <p>Yes. Any OpenAI-compatible server works through <code>model_openai</code>: set <code>base_url</code> and an optional key in <code>kiln.json</code>. See <a href="#providers">Providers</a>.</p>
+  <p>Yes. Any OpenAI-compatible server works through <code>model_openai</code>: configure <code>model_openai.New</code> with <code>base_url</code> and an optional key. See <a href="#providers">Providers</a>.</p>
   <h3>Where does conversation state live?</h3>
   <p>In the <code>threads</code> service. It is in-memory by default; use <code>threads_file</code> for one machine or <code>threads_sql</code> for shared Postgres storage.</p>
   <h3>Is the agent safe with untrusted modules?</h3>
-  <p>Permissions and the trust gate are defense in depth, not a hard boundary. For untrusted code, run the agent in a container or microVM with <code>WithRunIn</code>. See <a href="#security">Security</a>.</p>
+  <p>Permissions and the trust gate are defense in depth, not a hard boundary. For untrusted code, run the agent in a container or microVM with <code>Config.RunIn</code>. See <a href="#security">Security</a>.</p>
   <h3>How do I get production-ready?</h3>
   <p>Work through the <a href="#production-checklist">production checklist</a>.</p>
 </section>
@@ -496,33 +488,35 @@ func New(cfg Config) (*Server, error) {
 	if os.Getenv("MAIL_RELAY_TOKEN") == "" {
 		os.Setenv("MAIL_RELAY_TOKEN", "demo-relay-token-5f2c9a") // a stand-in; production reads it from Vault
 	}
-	opts := []kiln.Option{
-		kiln.WithModel(cfg.Model),
-		kiln.WithInstructions(instructions),
-		kiln.WithMaxSteps(8),
-		kiln.WithTools(Tools(shop)...),
-		// Business rule: refunds above the limit wait for a supervisor.
-		kiln.WithModule(RefundPolicy(cfg.RefundLimit)),
-		// Email goes out through a module that alone may read the relay token.
-		kiln.WithModuleConfig("secrets_env", map[string]any{"allow": []any{"MAIL_RELAY_TOKEN"}, "grants": map[string]any{"mailer": []any{"MAIL_RELAY_TOKEN"}}}),
-		kiln.WithModule(Mailer(shop)),
-		// Every outgoing email needs a human OK.
-		kiln.WithModuleConfig("hook_approval", map[string]any{"interrupt_on": map[string]any{
-			"send_email": map[string]any{"allowed": []any{"approve", "edit", "reject"}, "description": "Send this email to the customer?"},
-		}}),
-		// Card numbers never reach the model.
-		kiln.WithModuleConfig("hook_pii", map[string]any{"types": []any{"credit_card"}, "strategy": "mask"}),
-		kiln.WithModuleConfig("hook_limits", map[string]any{"tool_calls_run": 12}),
-		// Durable threads (pauses survive restarts) and a tamper-evident log.
-		kiln.WithModuleConfig("threads_file", map[string]any{"dir": filepath.Join(cfg.DataDir, "threads")}),
-		kiln.WithModuleConfig("audit_file", map[string]any{"path": filepath.Join(cfg.DataDir, "audit.jsonl")}),
-		kiln.WithModule(Inspector()),
-		kiln.WithLogger(func(scope, msg string) {}),
+	cfg2 := kiln.Config{
+		Model:        cfg.Model,
+		Instructions: instructions,
+		MaxSteps:     8,
+		Tools:        Tools(shop),
+		Modules: []kiln.Module{
+			// Business rule: refunds above the limit wait for a supervisor.
+			RefundPolicy(cfg.RefundLimit),
+			// Email goes out through a module that alone may read the relay token.
+			secrets_env.New(map[string]any{"allow": []any{"MAIL_RELAY_TOKEN"}, "grants": map[string]any{"mailer": []any{"MAIL_RELAY_TOKEN"}}}),
+			Mailer(shop),
+			// Every outgoing email needs a human OK.
+			hook_approval.New(map[string]any{"interrupt_on": map[string]any{
+				"send_email": map[string]any{"allowed": []any{"approve", "edit", "reject"}, "description": "Send this email to the customer?"},
+			}}),
+			// Card numbers never reach the model.
+			hook_pii.New(map[string]any{"types": []any{"credit_card"}, "strategy": "mask"}),
+			hook_limits.New(map[string]any{"tool_calls_run": 12}),
+			// Durable threads (pauses survive restarts) and a tamper-evident log.
+			threads_file.New(map[string]any{"dir": filepath.Join(cfg.DataDir, "threads")}),
+			audit_file.New(map[string]any{"path": filepath.Join(cfg.DataDir, "audit.jsonl")}),
+			Inspector(),
+		},
+		Logger: func(scope, msg string) {},
 	}
 	if strings.HasPrefix(cfg.Model, "demo:") {
-		opts = append(opts, kiln.WithModule(DemoModel()))
+		cfg2.Modules = append(cfg2.Modules, DemoModel())
 	}
-	agent, err := kiln.New(opts...)
+	agent, err := kiln.New(cfg2)
 	if err != nil {
 		return nil, err
 	}
@@ -538,7 +532,7 @@ func New(cfg Config) (*Server, error) {
 	Amount  float64 `json:"amount" desc:"amount in USD"`
 	Reason  string  `json:"reason" desc:"short reason for the refund"`
 }
-refund := kiln.WithMeta(kiln.Tool("issue_refund", "Refund money to the customer's card",
+refund := kiln.WithMeta(kiln.NewTool("issue_refund", "Refund money to the customer's card",
 	func(ctx context.Context, in RefundIn) (string, error) {
 		o, err := shop.Refund(in.OrderID, in.Amount)
 		if err != nil {
@@ -555,7 +549,7 @@ refund := kiln.WithMeta(kiln.Tool("issue_refund", "Refund money to the customer'
 // supervisor approves, edits or rejects it. The pause is durable: it is
 // stored with the thread and survives a server restart.
 func RefundPolicy(limit float64) kiln.Module {
-	return kiln.Module{Name: "refund_policy", Apply: func(p *sdk.Module) error {
+	return kiln.Module{Name: "refund_policy", Apply: func(p *sdk.Scope) error {
 		p.WrapTool(func(c context.Context, req *sdk.ToolRequest, next sdk.ToolHandler) (*sdk.ToolResult, error) {
 			if req.Call.Name != "issue_refund" || req.Decision != nil {
 				return next(c, req) // other tools, or a supervisor already decided
@@ -594,7 +588,7 @@ func RefundPolicy(limit float64) kiln.Module {
 		writeErr(w, 401, errors.New("unknown user"))
 		return
 	}
-	stream := s.agent.Thread(r.PathValue("id")).Stream(r.Context(), body.Text, kiln.AsUser(body.User, u.Role))
+	stream := s.agent.Thread(r.PathValue("id")).Stream(r.Context(), body.Text, kiln.Run{User: body.User, Roles: []string{u.Role}})
 	sendSSE(w, stream)
 }</code></pre></div><div class="code" data-title="app/server.go"><pre><code class="language-go">// sendSSE forwards every agent event to the browser, then the result.
 func sendSSE(w http.ResponseWriter, stream *kiln.Stream) {
@@ -662,7 +656,7 @@ func (s *Server) approvals(w http.ResponseWriter, r *http.Request) {
 	for i := range body.Decisions {
 		body.Decisions[i].By = body.User // recorded in the audit log
 	}
-	stream := s.agent.Thread(r.PathValue("id")).ResumeStream(r.Context(), body.Decisions, kiln.AsUser(body.User, u.Role))
+	stream := s.agent.Thread(r.PathValue("id")).ResumeStream(r.Context(), body.Decisions, kiln.Run{User: body.User, Roles: []string{u.Role}})
 	sendSSE(w, stream)
 }</code></pre></div>
 
@@ -703,8 +697,8 @@ for (;;) {
   <h3>A secret only one module can read</h3>
   <p>Emails go out through a mail relay that needs a token. Instead of a global variable, a small <code>mailer</code> module owns the <code>send_email</code> tool and asks the <code>secrets</code> service for the token each time it sends. <code>secrets_env</code> grants <code>MAIL_RELAY_TOKEN</code> to <code>mailer</code> and nobody else. The core tells the provider which module is asking, so another module can't claim to be <code>mailer</code>.</p>
   <div class="code" data-title="app/tools.go"><pre><code class="language-go">func Mailer(shop *Shop) kiln.Module {
-	return kiln.Module{Name: "mailer", Requires: []string{"secrets"}, Apply: func(p *sdk.Module) error {
-		p.AddTool(kiln.Tool("send_email", "Email the customer",
+	return kiln.Module{Name: "mailer", Requires: []string{"secrets"}, Apply: func(p *sdk.Scope) error {
+		p.AddTool(kiln.NewTool("send_email", "Email the customer",
 			func(c context.Context, in EmailIn) (string, error) {
 				if _, err := p.Secret("secret://MAIL_RELAY_TOKEN"); err != nil {
 					return "", fmt.Errorf("mail relay: %w", err)
@@ -718,7 +712,7 @@ for (;;) {
   <p>Approve an email and open the Activity tab: you'll see <code>Secret MAIL_RELAY_TOKEN · granted to mailer</code>, and the <code>send_email</code> row names <code>mailer</code> as the module that ran it. Every row carries the run id, so you can group a run's model calls, tool calls and secret reads. The token's value is never written. If it ever showed up in a tool result, a model reply or an error, the audit log, traces and logs would show <code>[REDACTED]</code> instead.</p>
 
   <h3>Add a module</h3>
-  <p>Modules are compiled in. To add one, write a Go package that exports <code>engine.Module</code>, import it, pass it with <code>kiln.WithModule</code>, and rebuild the server. The app's own <code>RefundPolicy</code> and <code>Mailer</code> are examples of this. See <a href="#custom-modules">Custom modules</a>.</p>
+  <p>Modules are compiled in. To add one, write a Go package that exports <code>engine.Module</code>, import it, put it in <code>Config.Modules</code>, and rebuild the server. The app's own <code>RefundPolicy</code> and <code>Mailer</code> are examples of this. See <a href="#custom-modules">Custom modules</a>.</p>
 
   <h3>What the SDK handles for you</h3>
   <div class="table"><table>
@@ -729,7 +723,7 @@ for (;;) {
     <tr><td>Approve, edit or reject a call</td><td>Rewrite messages by hand so the model understands</td><td><code>Approve</code>, <code>Edit</code>, <code>Reject</code> decisions; the loop feeds the outcome back to the model</td></tr>
     <tr><td>Know who approved what</td><td>Ad-hoc logging</td><td><code>Decision.By</code> plus <code>audit_file</code>, hash-chained and verifiable</td></tr>
     <tr><td>Keep card numbers away from the model</td><td>Scrub every prompt path</td><td><code>hook_pii</code> masks them before every model call</td></tr>
-    <tr><td>Add or change behaviour</td><td>Ship a rebuild and redeploy</td><td>Write a Go module, pass it to <code>WithModule</code>, then rebuild; <a href="#custom-modules">Custom modules</a></td></tr>
+    <tr><td>Add or change behaviour</td><td>Ship a rebuild and redeploy</td><td>Write a Go module, put it in <code>Config.Modules</code>, then rebuild; <a href="#custom-modules">Custom modules</a></td></tr>
     <tr><td>Give one component an API key, and only that one</td><td>Environment variables every package can read</td><td>Per-module grants in <code>secrets_env</code> or <code>secrets_vault</code>; every read audited; values redacted from logs, traces and audit</td></tr>
     <tr><td>Stream tokens and tool activity to a UI</td><td>Provider-specific streaming code</td><td>One <code>Events()</code> iterator, the same for every provider</td></tr>
     <tr><td>Two supervisors clicking at once</td><td>Locks around your storage</td><td>Versioned saves return <code>ErrThreadBusy</code> to the second writer</td></tr>
@@ -916,24 +910,20 @@ warning: modules/model_openai/model_openai.go:67: [undeclared-provide] model_ope
       <tr><td><code>mock</code></td><td><code>model_mock</code></td><td>none (offline tests)</td></tr>
     </tbody>
   </table></div>
-  <p>Any OpenAI-compatible server, such as vLLM or an internal gateway, is one profile row away:</p>
-  <div class="code" data-title="kiln.json"><pre><code class="language-json">{
-  "model": "local:llama-3.3-70b",
-  "modules": [
-    { "use": "model_openai", "as": "local_model",
-      "config": { "name": "local", "base_url": "http://vllm:8000/v1", "api_key": "" } }
-  ]
-}</code></pre></div>
-  <p>Override the model for one run with <code>kiln.Model("openai:gpt-4.1")</code>.</p>
+  <p>Any OpenAI-compatible server, such as vLLM or an internal gateway, is one module value:</p>
+  <div class="code" data-title="go"><pre><code class="language-go">local := model_openai.New(map[string]any{"name": "local", "base_url": "http://vllm:8000/v1", "api_key": ""})
+agent, _ := kiln.New(kiln.Config{Model: "local:llama-3.3-70b", Modules: []kiln.Module{local}})</code></pre></div>
+  <p>Override the model for one run with <code>kiln.Run{Model: "openai:gpt-4.1"}</code>.</p>
 </section>
 
 <section id="generating-text" class="page">
   <h1>Generating text</h1>
   <p><code>Generate</code> runs the agent until it has an answer and returns everything that happened.</p>
-  <div class="code" data-title="go"><pre><code class="language-go">res, err := agent.Generate(ctx, "Summarize our refund policy in two sentences.",
-	kiln.Temperature(0.2),
-	kiln.MaxSteps(5),
-)
+  <div class="code" data-title="go"><pre><code class="language-go">t := 0.2
+res, err := agent.Generate(ctx, "Summarize our refund policy in two sentences.", kiln.Run{
+	Temperature: &t,
+	MaxSteps:    5,
+})
 
 res.Text          // the final answer
 res.Steps         // each model call, with its tool results
@@ -973,18 +963,18 @@ res, err := s.Result()</code></pre></div>
 	Sort  string `json:"sort,omitempty" enum:"relevance,date"`
 }
 
-search := kiln.Tool("search_tickets", "Search support tickets",
+search := kiln.NewTool("search_tickets", "Search support tickets",
 	func(ctx context.Context, in SearchIn) ([]Ticket, error) {
 		return db.Search(ctx, in.Query, in.Limit)
 	})
 
-agent, _ := kiln.New(kiln.WithModel("openai:gpt-4.1"), kiln.WithTools(search))</code></pre></div>
+agent, _ := kiln.New(kiln.Config{Model: "openai:gpt-4.1", Tools: []kiln.Tool{search}})</code></pre></div>
   <ul>
     <li><b>Tags:</b> <code>json</code> names the field, <code>desc</code> describes it, and <code>enum</code> restricts its values. A field tagged <code>omitempty</code> or declared as a pointer is optional.</li>
     <li><b>Return values:</b> a string goes to the model as it is. Anything else is sent as JSON.</li>
     <li><b>Errors:</b> a returned error is shown to the model so it can recover. Return <code>sdk.Fatal(err)</code> to abort the run instead.</li>
     <li><b>Hints:</b> <code>kiln.ReadOnly(tool)</code> marks a tool as side-effect free, and <code>kiln.WithMeta(tool, "risk", "high")</code> flags a risky one. Policy and approval rules use these hints.</li>
-    <li><b>Per-run tools:</b> <code>kiln.RunTools(...)</code> adds tools for a single call.</li>
+    <li><b>Per-run tools:</b> <code>Run.Tools</code> adds tools for a single call.</li>
   </ul>
 </section>
 
@@ -1010,30 +1000,19 @@ fmt.Println(trip.City, trip.Packing)</code></pre></div>
 
 <section id="threads" class="page">
   <h1>Threads and memory</h1>
-  <p>A thread is a conversation that persists between calls. It lives in the <code>threads</code> service, in memory by default (<code>threads_inmem</code>); <code>WithPersistence</code> keeps it on disk or in Postgres.</p>
-  <div class="code" data-title="go"><pre><code class="language-go">agent, _ := kiln.New(
-	kiln.WithModel("openai:gpt-4.1"),
-	kiln.WithModuleConfig("threads_file", map[string]any{"dir": ".kiln/threads"}), // or threads_sql
-)
+  <p>A thread is a conversation that persists between calls. It lives in the <code>threads</code> service, in memory by default (<code>threads_inmem</code>); <code>kiln.Persistence</code> keeps it on disk or in Postgres.</p>
+  <div class="code" data-title="go"><pre><code class="language-go">agent, _ := kiln.New(kiln.Config{Model: "openai:gpt-4.1", Modules: []kiln.Module{threads_file.New(map[string]any{"dir": ".kiln/threads"})}})
 
 th := agent.Thread("customer-42")
 th.Generate(ctx, "My name is Ada.")
 res, _ := th.Generate(ctx, "What's my name?") // remembers the earlier turn
 msgs, _ := th.Messages(ctx)</code></pre></div>
   <p><b>Long-term memory</b> lasts across threads. Load <code>memory_inmem</code>, <code>memory_file</code> or <code>memory_sql</code>, plus <code>tool_memory</code>. The model then gets <code>remember</code> and <code>recall</code> tools, kept separately for each user.</p>
-  <div class="code" data-title="go"><pre><code class="language-go">agent, _ := kiln.New(
-	kiln.WithModel("openai:gpt-4.1"),
-	kiln.WithModules("memory_file", "tool_memory"),
-	kiln.WithUser("ada"),
-)</code></pre></div>
+  <div class="code" data-title="go"><pre><code class="language-go">agent, _ := kiln.New(kiln.Config{Model: "openai:gpt-4.1", User: "ada", Modules: []kiln.Module{memory_file.New(), tool_memory.New()}})</code></pre></div>
   <p>Long conversations stay inside the context window with <code>hook_compact</code> (or the simpler <code>hook_summarize</code>); see <a href="#agent-loop">Long runs</a>.</p>
   <h2>Save every step, continue, fork</h2>
-  <p>A thread is saved when a run ends or pauses. With <code>WithSaveEachStep</code> it is also saved before every model call, so if the process dies mid-run the work so far is kept, and <code>Continue</code> picks it up without a new message. <code>Fork</code> copies a thread to try another direction without touching the original.</p>
-  <div class="code" data-title="go"><pre><code class="language-go">agent, _ := kiln.New(
-	kiln.WithModel("openai:gpt-4.1"),
-	kiln.WithPersistence("postgres", "secret://DATABASE_URL"),
-	kiln.WithSaveEachStep(),
-)
+  <p>A thread is saved when a run ends or pauses. With <code>Config.SaveEachStep</code> it is also saved before every model call, so if the process dies mid-run the work so far is kept, and <code>Continue</code> picks it up without a new message. <code>Fork</code> copies a thread to try another direction without touching the original.</p>
+  <div class="code" data-title="go"><pre><code class="language-go">agent, _ := kiln.New(kiln.Config{Model: "openai:gpt-4.1", SaveEachStep: true, Modules: kiln.Persistence("postgres", "secret://DATABASE_URL")})
 
 th := agent.Thread("report-7")
 if _, err := th.Generate(ctx, "Research X and write a report"); err != nil {
@@ -1048,13 +1027,9 @@ alt.Generate(ctx, "Now make it half as long") // report-7 is unchanged</code></p
 <section id="human-in-the-loop" class="page">
   <h1>Human in the loop</h1>
   <p>Pause before risky tools run. A person approves, edits, rejects or answers, and the run continues from where it stopped.</p>
-  <div class="code" data-title="go"><pre><code class="language-go">agent, _ := kiln.New(
-	kiln.WithModel("openai:gpt-4.1"),
-	kiln.WithTools(refund),
-	kiln.WithModuleConfig("hook_approval", map[string]any{
+  <div class="code" data-title="go"><pre><code class="language-go">agent, _ := kiln.New(kiln.Config{Model: "openai:gpt-4.1", Tools: []kiln.Tool{refund}, Modules: []kiln.Module{hook_approval.New(map[string]any{
 		"interrupt_on": map[string]any{"refund": true}, // or {"non_readonly": true}
-	}),
-)
+	})}})
 
 th := agent.Thread("ticket-981")
 res, _ := th.Generate(ctx, "Refund order A-17")
@@ -1065,20 +1040,20 @@ for res.Interrupted() {
 	// or kiln.Reject(id, why), kiln.Edit(id, args), kiln.Respond(id, text)
 }</code></pre></div>
   <p>If one model step asks for several approvals, each decision resumes only its own call. The model continues once every pending call has an answer.</p>
-  <div class="note"><b>Tip</b><div><p>The pause is saved with the thread. With <code>threads_sql</code>, another process can resume it, hours later and on a different machine.</p><p>To decide right away instead, for example by prompting in a CLI, pass <code>kiln.WithApprover(func(ctx, in) (*Decision, error))</code>.</p></div></div>
+  <div class="note"><b>Tip</b><div><p>The pause is saved with the thread. With <code>threads_sql</code>, another process can resume it, hours later and on a different machine.</p><p>To decide right away instead, for example by prompting in a CLI, pass <code>kiln.Approver(func(ctx, in) (*Decision, error))</code>.</p></div></div>
   <p>To let a model screen calls before a person sees them, add <code>hook_review</code>. A reviewer model approves, denies or escalates each call.</p>
-  <div class="code" data-title="go"><pre><code class="language-go">kiln.WithModuleConfig("hook_review", map[string]any{"model": "anthropic:claude-haiku-5-5"})</code></pre></div>
+  <div class="code" data-title="go"><pre><code class="language-go">hook_review.New(map[string]any{"model": "anthropic:claude-haiku-5-5"})</code></pre></div>
 </section>
 
 
 <section id="agent-loop" class="page">
   <h1>The agent loop</h1>
   <p>An agent calls the model, runs the tools it asks for, sends the results back, and repeats until the model answers. The loop is a module itself (<code>loop</code>), so you can replace it.</p>
-  <div class="code" data-title="go"><pre><code class="language-go">res, _ := agent.Generate(ctx, "Research and summarize X",
-	kiln.MaxSteps(10),                // default 20
-	kiln.StopOnTool("submit_report"), // finish after this tool runs
-	kiln.ToolChoice("required"),      // auto | none | required | a tool name
-)</code></pre></div>
+  <div class="code" data-title="go"><pre><code class="language-go">res, _ := agent.Generate(ctx, "Research and summarize X", kiln.Run{
+	MaxSteps:    10,                        // default 20
+	StopOnTools: []string{"submit_report"}, // finish after this tool runs
+	ToolChoice:  "required",                // auto | none | required | a tool name
+})</code></pre></div>
   <p>Hooks can change any step:</p>
   <ul>
     <li><code>BeforeStep</code> rewrites the next request: its model, messages or tools.</li>
@@ -1095,17 +1070,16 @@ for res.Interrupted() {
       <tr><td>too many tools (big MCP servers)</td><td><a href="#module-tool_search"><code>tool_search</code></a></td><td>Shows only a <code>search_tools</code> tool past <code>threshold</code>; each search reveals the matching tools.</td></tr>
       <tr><td>the model loses track of a multi-step task</td><td><a href="#module-tool_plan"><code>tool_plan</code></a></td><td>A task list the model keeps, shown back to it each step.</td></tr>
       <tr><td>the model repeats the same call</td><td><a href="#module-hook_loop_detect"><code>hook_loop_detect</code></a></td><td>Refuses a call repeated more than <code>max_repeats</code> times; stops the run after <code>stop_after</code>.</td></tr>
-      <tr><td>a crash loses the run</td><td><code>WithSaveEachStep</code></td><td>Saves the thread before each model call; <code>Thread.Continue</code> resumes (<a href="#threads">Threads</a>).</td></tr>
+      <tr><td>a crash loses the run</td><td><code>Config.SaveEachStep</code></td><td>Saves the thread before each model call; <code>Thread.Continue</code> resumes (<a href="#threads">Threads</a>).</td></tr>
     </tbody>
   </table></div>
-  <div class="code" data-title="go"><pre><code class="language-go">agent, _ := kiln.New(
-	kiln.WithModel("anthropic:claude-sonnet-5-5"),
-	kiln.WithMCP("github", "npx", "-y", "@modelcontextprotocol/server-github"),
-	kiln.WithModuleConfig("hook_compact", map[string]any{"max_fraction": 0.8, "tool": true}),
-	kiln.WithModuleConfig("tool_search", map[string]any{"threshold": 15}),
-	kiln.WithModules("tool_plan", "hook_loop_detect", "hook_tool_output_limit"),
-	kiln.WithModuleConfig("hook_cache", nil), // long runs resend the same prefix: cache it
-)</code></pre></div>
+  <div class="code" data-title="go"><pre><code class="language-go">modules := append(kiln.MCP("github", "npx", "-y", "@modelcontextprotocol/server-github"),
+	hook_compact.New(map[string]any{"max_fraction": 0.8, "tool": true}),
+	tool_search.New(map[string]any{"threshold": 15}),
+	tool_plan.New(), hook_loop_detect.New(), hook_tool_output_limit.New(),
+	hook_cache.New(nil)) // long runs resend the same prefix: cache it
+
+agent, _ := kiln.New(kiln.Config{Model: "anthropic:claude-sonnet-5-5", Modules: modules})</code></pre></div>
   <p>Each step emits a <code>context_usage</code> event (<code>tokens</code>, <code>window</code>, <code>fraction</code>, <code>compacted</code>) when <code>hook_compact</code> is loaded, and <code>res.Usage.CacheReadTokens</code> shows what caching saved.</p>
 </section>
 
@@ -1122,7 +1096,7 @@ for res.Interrupted() {
      "expect": {"judge": "Apologises and offers a refund or replacement.", "no_tools": ["issue_refund"]}}
   ]
 }</code></pre></div>
-  <div class="code" data-title="terminal"><pre><code class="language-bash">kiln eval -profile kiln.json cases.json     # exits 1 if any case fails; -json for the full report</code></pre></div>
+  <div class="code" data-title="terminal"><pre><code class="language-bash">kiln eval -model mock:x cases.json           # exits 1 if any case fails; -json for the full report</code></pre></div>
   <p>Or from Go, for example in a test:</p>
   <div class="code" data-title="go"><pre><code class="language-go">ds, _ := evals.Load("cases.json")
 rep, err := evals.Run(ctx, agent, ds, evals.Options{Parallel: 4})
@@ -1147,20 +1121,15 @@ fmt.Print(rep.Summary())
 <section id="multi-agent" class="page">
   <h1>Subagents and handoffs</h1>
   <p>A subagent is called as a tool and returns an answer. A handoff gives the conversation to another agent for the rest of the thread.</p>
-  <div class="code" data-title="go"><pre><code class="language-go">agent, _ := kiln.New(
-	kiln.WithModel("openai:gpt-4.1"),
-	kiln.WithModules("tool_time"),
-	kiln.WithModuleConfig("tool_subagents", map[string]any{"agents": []any{
+  <div class="code" data-title="go"><pre><code class="language-go">agent, _ := kiln.New(kiln.Config{Model: "openai:gpt-4.1", Modules: []kiln.Module{tool_time.New(), tool_subagents.New(map[string]any{"agents": []any{
 		map[string]any{"name": "researcher", "description": "Finds facts",
 			"instructions": "Research carefully.", "tools": []any{"current_time"}},
 		map[string]any{"name": "billing", "description": "Invoices and refunds",
 			"instructions": "You are billing support.", "mode": "handoff"},
-	}}),
-)</code></pre></div>
+	}})}})</code></pre></div>
   <p>A whole agent, with its own modules, model and policy, can also become a tool:</p>
-  <div class="code" data-title="go"><pre><code class="language-go">legal, _ := kiln.New(kiln.WithModel("anthropic:claude-sonnet-5-5"), kiln.WithProfile("legal.json"))
-main, _ := kiln.New(kiln.WithModel("openai:gpt-4.1"),
-	kiln.WithTools(legal.AsTool("legal_expert", "Answers legal questions")))</code></pre></div>
+  <div class="code" data-title="go"><pre><code class="language-go">legal, _ := kiln.New(kiln.Config{Model: "anthropic:claude-sonnet-5-5"})
+main, _ := kiln.New(kiln.Config{Model: "openai:gpt-4.1", Tools: []kiln.Tool{legal.AsTool("legal_expert", "Answers legal questions")}})</code></pre></div>
 </section>
 
 <section id="lifecycles" class="page">
@@ -1168,11 +1137,11 @@ main, _ := kiln.New(kiln.WithModel("openai:gpt-4.1"),
   <p>Everything in kiln follows a fixed lifecycle, so you always know what happens and in what order.</p>
 
   <h3>Agent</h3>
-  <div class="flow" role="img" aria-label="Agent lifecycle"><div class="row"><span class="node ">New(opts…)</span><span class="edge">merge policy, profiles, options</span><span class="node info">compose</span><span class="edge">valid plan, dependency order</span><span class="node ok">Ready</span><span class="edge">Close()</span><span class="node ">Closed</span></div><div class="row"><span class="node info">compose</span><span class="edge">invalid plan, or a module fails to start</span><span class="node bad">New returns the error · all rolled back</span></div><div class="row"><span class="node ok">Ready</span><span class="edge">Generate · Stream · Thread (concurrently)</span><span class="node ok">Ready</span></div></div>
+  <div class="flow" role="img" aria-label="Agent lifecycle"><div class="row"><span class="node ">New(Config)</span><span class="edge">merge policy, defaults, Config.Modules</span><span class="node info">compose</span><span class="edge">valid plan, dependency order</span><span class="node ok">Ready</span><span class="edge">Close()</span><span class="node ">Closed</span></div><div class="row"><span class="node info">compose</span><span class="edge">invalid plan, or a module fails to start</span><span class="node bad">New returns the error · all rolled back</span></div><div class="row"><span class="node ok">Ready</span><span class="edge">Generate · Stream · Thread (concurrently)</span><span class="node ok">Ready</span></div></div>
   <ul>
     <li><b><code>New</code> composes, then starts:</b>
       <ol>
-        <li>Merge the policy, the profiles and the options into one list of module rows; defaults give way to a module of the same family.</li>
+        <li>Merge <code>Config.Modules</code> and the defaults into one list of module rows, then apply the policy; defaults give way to a module of the same family.</li>
         <li>Add the standard provider for any required service that has none; those show as <code>auto</code>.</li>
         <li>Validate the plan without running any module: unknown or denied modules, duplicate providers, missing requirements (with a hint) and cycles.</li>
         <li>Start in dependency order; policy-required rows (audit, policy, secrets) start in the order the policy lists them.</li>
@@ -1197,18 +1166,20 @@ main, _ := kiln.New(kiln.WithModel("openai:gpt-4.1"),
   <p class="lede">Everything the agent does, from the model and tools to approvals, memory, sandboxes and audit, comes from a module. A module is a compiled Go package that declares what it needs, what it provides and which capabilities it uses.</p>
 
   <h2>Most apps don't need module names</h2>
-  <p>Common setups are options. Each one enables the right modules for you, and says which in its doc comment:</p>
-  <div class="code" data-title="go"><pre><code class="language-go">agent, _ := kiln.New(
-	kiln.WithModel("anthropic:claude-sonnet-5-5"),              // enables model_anthropic
-	kiln.WithTools(lookupOrder, issueRefund),                   // your Go functions as tools
-	kiln.WithApprovals("issue_refund"),                         // hook_approval
-	kiln.WithPersistence("postgres", "secret://DATABASE_URL"),  // threads_sql + memory_sql + db_sql
-	kiln.WithSandbox("docker"),                                 // sandbox_docker + workspace_sandbox
-	kiln.WithAudit("/var/log/kiln/audit.log"),              // audit_file
-	kiln.WithTracing("http://otel-collector:4318"),             // trace_otlp
-	kiln.WithMCP("github", "npx", "-y", "@modelcontextprotocol/server-github"), // tool_mcp
-)</code></pre></div>
-  <p>Plumbing resolves itself too. Add <code>tool_shell</code> and it gets a workspace to run in; add <code>threads_sql</code> and it gets the database connection. Those show as <code>auto</code> in <code>agent.Status()</code>. When you need more control, configure a module by name with <code>kiln.WithModuleConfig(name, config)</code>. <a href="#modules-choose">What to use when</a> lists every goal, with its option and its modules.</p>
+  <p>Common setups are presets. Each returns module values and says which modules it enables:</p>
+  <div class="code" data-title="go"><pre><code class="language-go">modules := append(kiln.Approvals("issue_refund"),                    // hook_approval
+	kiln.Persistence("postgres", "secret://DATABASE_URL")...)      // threads_sql + memory_sql + db_sql
+modules = append(modules, kiln.Sandbox("docker")...)                 // sandbox_docker + workspace_sandbox
+modules = append(modules, kiln.Audit("/var/log/kiln/audit.log")...)
+modules = append(modules, kiln.Tracing("http://otel-collector:4318")...)
+modules = append(modules, kiln.MCP("github", "npx", "-y", "@modelcontextprotocol/server-github")...)
+
+agent, _ := kiln.New(kiln.Config{
+	Model:   "anthropic:claude-sonnet-5-5", // enables model_anthropic
+	Tools:   []kiln.Tool{lookupOrder, issueRefund},
+	Modules: modules,
+})</code></pre></div>
+  <p>Plumbing resolves itself too. Add <code>tool_shell</code> and it gets a workspace to run in; add <code>threads_sql</code> and it gets the database connection. Those show as <code>auto</code> in <code>agent.Status()</code>. When you need more control, configure a module with its own <code>New(...)</code>. <a href="#modules-choose">What to use when</a> lists every goal, with its option and its modules.</p>
 
   <h2>What a module is</h2>
   <p>A module is one Go package that exports a descriptor and one function, <code>Apply</code>. <code>Provides</code> and <code>Permissions</code> are enforced: <code>Provide</code> of a name that isn't declared fails, and a broker call without the capability fails.</p>
@@ -1234,7 +1205,7 @@ import (
 // Module answers questions about office hours.
 var Module = engine.Module{
 	Name: "office",
-	Apply: func(p *sdk.Module) error {
+	Apply: func(p *sdk.Scope) error {
 		hours := p.ConfigString("hours", "Mon-Fri 9:00-17:00")
 		p.AddTool(sdk.Tool{
 			Name:        "office_hours",
@@ -1247,11 +1218,7 @@ var Module = engine.Module{
 		return nil
 	},
 }</code></pre></div>
-  <div class="code" data-title="go"><pre><code class="language-go">agent, _ := kiln.New(
-	kiln.WithModel("openai:gpt-4.1"),
-	kiln.WithModule(office.Module),
-	kiln.WithModuleConfig("office", map[string]any{"hours": "Mon-Sat 8:00-20:00"}),
-)</code></pre></div>
+  <div class="code" data-title="go"><pre><code class="language-go">agent, _ := kiln.New(kiln.Config{Model: "openai:gpt-4.1", Modules: []kiln.Module{office.Module, office.New(map[string]any{"hours": "Mon-Sat 8:00-20:00"})}})</code></pre></div>
   <p>A module isn't one "kind": the same module may add tools, wrap calls and provide a service. You never have to classify it.</p>
 
   <h2>The rules in one list</h2>
@@ -1261,7 +1228,7 @@ var Module = engine.Module{
     <li><b><code>Provides</code></b> lists the services <code>Apply</code> will register. <code>Provide</code> of anything else is refused.</li>
     <li><b><code>Permissions</code></b> lists the capabilities it uses: <span class="perm">net</span><span class="perm">exec</span><span class="perm">fs:read</span><span class="perm">fs:write</span><span class="perm">env</span><span class="perm">env:secrets</span><span class="perm">db</span>. See <a href="#module-permissions">Capabilities</a>.</li>
     <li><b><code>Secrets</code></b> lists the only secret names it may resolve.</li>
-    <li><b>Register it</b> with <code>kiln.WithModule(m)</code>. See <a href="#custom-modules">Custom modules</a> for packages in other Go modules and for wrapping an existing library.</li>
+    <li><b>Register it</b> by adding <code>m</code> to <code>Config.Modules</code>. See <a href="#custom-modules">Custom modules</a> for packages in other Go modules and for wrapping an existing library.</li>
   </ul>
   <p>Composition happens in four steps, and <code>New</code> never returns a half-built agent:</p>
   <div class="states" aria-label="Composition steps">
@@ -1292,7 +1259,7 @@ var Module = engine.Module{
 
 <section id="custom-modules" class="page" data-nav="Custom modules">
   <h1>Custom modules</h1>
-  <p class="lede">A custom module is an ordinary Go package that exports one descriptor. Import it like any Go library, pass it to <code>kiln.WithModule</code>, and it is compiled into your program and validated with everything else.</p>
+  <p class="lede">A custom module is an ordinary Go package that exports one descriptor. Import it like any Go library, put it in <code>Config.Modules</code>, and it is compiled into your program and validated with everything else.</p>
 
   <h2>Write the package</h2>
   <p>The package exports <code>var Module = engine.Module{...}</code>. <code>Name</code> must be unique, and match the package directory when you run <code>kiln module check</code>.</p>
@@ -1309,7 +1276,7 @@ import (
 
 var Module = engine.Module{
 	Name: "weather",
-	Apply: func(p *sdk.Module) error {
+	Apply: func(p *sdk.Scope) error {
 		unit := p.ConfigString("unit", "celsius")
 		p.AddTool(sdk.Tool{
 			Name:        "weather",
@@ -1328,36 +1295,36 @@ var Module = engine.Module{
 }</code></pre></div>
 
   <h2>Import and register it</h2>
-  <p>Import the package and pass the descriptor. <code>WithModuleConfig</code> configures the row it registered; there is no separate loading step.</p>
+  <p>Import the package and put its value in <code>Config.Modules</code>. Its <code>New(...)</code> returns it configured; there is no separate loading step.</p>
   <div class="code" data-title="main.go"><pre><code class="language-go">import (
 	"github.com/ganeshdipdumbare/kiln"
 	"github.com/acme/agent/weather"
 )
 
-agent, err := kiln.New(
-	kiln.WithModel("openai:gpt-4.1"),
-	kiln.WithModule(weather.Module),
-	kiln.WithModuleConfig("weather", map[string]any{"unit": "fahrenheit"}),
-)</code></pre></div>
+agent, err := kiln.New(kiln.Config{Model: "openai:gpt-4.1", Modules: []kiln.Module{weather.Module, weather.New(map[string]any{"unit": "fahrenheit"})}})</code></pre></div>
 
   <p>The package can live in another Go module. Fetch it like any library; no registry or lock file is involved:</p>
   <div class="code" data-title="terminal"><pre><code class="language-bash">go get github.com/acme/kiln-weather@v1.2.0
 # or work locally:
 # go mod edit -replace github.com/acme/kiln-weather=../kiln-weather</code></pre></div>
 
-  <h2>WithModule, WithModuleConfig, WithModules</h2>
+  <h2>One way to compose</h2>
   <div class="table"><table>
-    <thead><tr><th>Call</th><th>Use it to</th></tr></thead>
+    <thead><tr><th>You want</th><th>Write</th></tr></thead>
     <tbody>
-      <tr><td><code>WithModule(m)</code></td><td>register and enable a compiled module descriptor</td></tr>
-      <tr><td><code>WithModuleConfig(name, cfg)</code></td><td>configure the enabled row; it replaces the row <code>WithModule</code> added</td></tr>
-      <tr><td><code>WithModuleSpec(spec)</code></td><td>full row: <code>Use</code>, <code>As</code> (instance name), <code>Config</code>, <code>Priority</code>, <code>Disabled</code></td></tr>
-      <tr><td><code>WithModules(names...)</code></td><td>enable modules already in the compiled registry; it does not import anything</td></tr>
+      <tr><td>add a module</td><td><code>Modules: []kiln.Module{weather.New(nil)}</code></td></tr>
+      <tr><td>configure it</td><td><code>weather.New(map[string]any{"unit": "celsius"})</code></td></tr>
+      <tr><td>a second instance</td><td>set <code>.As</code> on the value</td></tr>
+      <tr><td>start order</td><td>set <code>.Priority</code>, or order the slice</td></tr>
     </tbody>
   </table></div>
-  <p>Use <code>WithModuleSpec</code> to add another instance of the same module with different config:</p>
-  <div class="code" data-title="go"><pre><code class="language-go">kiln.WithModule(weather.Module),
-kiln.WithModuleSpec(kiln.ModuleSpec{Use: "weather", As: "weather_us", Config: map[string]any{"unit": "fahrenheit"}}),</code></pre></div>
+  <p>There is no name-based enable, no profile file and no runtime registry: the slice is the composition.</p>
+  <p>Add another instance of the same module with different config:</p>
+  <div class="code" data-title="go"><pre><code class="language-go">modules := []kiln.Module{weather.New(map[string]any{"unit": "celsius"})}
+
+us := weather.New(map[string]any{"unit": "fahrenheit"})
+us.As = "weather_us" // a second instance of the same module
+modules = append(modules, us)</code></pre></div>
 
   <h2>Wrapping an existing Go library</h2>
   <p><code>engine.Module</code> is a struct, not an interface, so a library cannot satisfy it directly. Write one small adapter that exposes the parts you want the model to use:</p>
@@ -1373,7 +1340,7 @@ import (
 	"github.com/acme/fxlib"
 )
 
-var Module = engine.Module{Name: "rates", Apply: func(p *sdk.Module) error {
+var Module = engine.Module{Name: "rates", Apply: func(p *sdk.Scope) error {
 	client := fxlib.NewClient()
 	p.AddTool(sdk.Tool{
 		Name:        "fx_rate",
@@ -1402,8 +1369,8 @@ var Module = engine.Module{Name: "rates", Apply: func(p *sdk.Module) error {
   <h2>What is not supported</h2>
   <ul>
     <li><b>Runtime loading.</b> There is no <code>WithModuleDir</code>, module store, <code>Load</code>, <code>Reload</code>, <code>Unload</code> or <code>.so</code> loading.</li>
-    <li><b>Importing by string.</b> <code>WithModules("github.com/acme/weather")</code> is not a thing; import the package in Go and pass its descriptor.</li>
-    <li><b>Hot reload.</b> Change the module, rebuild, redeploy. A box started by <code>WithRunIn</code> gets its modules compiled into the uploaded program.</li>
+    <li><b>Importing by string.</b> <code>Config.Modules</code> with that package imported is not a thing; import the package in Go and pass its descriptor.</li>
+    <li><b>Hot reload.</b> Change the module, rebuild, redeploy. A box started by <code>Config.RunIn</code> gets its modules compiled into the uploaded program.</li>
   </ul>
 
   <h2>Check it</h2>
@@ -1424,10 +1391,10 @@ kiln module check ./examples/custom-module</code></pre></div>
     <tbody>
       <tr><td>use OpenAI, Anthropic, Gemini, DeepSeek, Ollama, OpenRouter or Groq</td><td><code>WithModel("anthropic:…")</code></td><td><code>model_*</code> (loads itself)</td><td><a href="#kind-models">Models</a></td></tr>
       <tr><td>fall back to another model (on errors or refusals), or retry on errors</td><td></td><td><code>hook_fallback</code>, <code>hook_retry</code></td><td><a href="#kind-hooks">Hooks</a></td></tr>
-      <tr><td>let the model call my Go function</td><td><code>WithTools(kiln.Tool(…))</code></td><td>(none)</td><td><a href="#tools">Tools</a></td></tr>
-      <tr><td>let the model run shell commands or edit files</td><td><code>WithModules("tool_shell", "tool_fs")</code></td><td><code>tool_shell</code>, <code>tool_fs</code> (+ workspace, auto)</td><td><a href="#kind-tools">Tools</a></td></tr>
+      <tr><td>let the model call my Go function</td><td><code>WithTools(kiln.NewTool(…))</code></td><td>(none)</td><td><a href="#tools">Tools</a></td></tr>
+      <tr><td>let the model run shell commands or edit files</td><td><code>tool_shell.New(), tool_fs.New()</code></td><td><code>tool_shell</code>, <code>tool_fs</code> (+ workspace, auto)</td><td><a href="#kind-tools">Tools</a></td></tr>
       <tr><td>…but in a container, not on my machine</td><td><code>WithSandbox("docker")</code></td><td><code>sandbox_docker</code>, <code>workspace_sandbox</code></td><td><a href="#kind-sandboxes">Sandboxes</a></td></tr>
-      <tr><td>run the whole agent inside a sandbox</td><td><code>WithRunIn(…)</code></td><td><code>sandbox_*</code></td><td><a href="#kind-sandboxes">Sandboxes</a></td></tr>
+      <tr><td>run the whole agent inside a sandbox</td><td><code>Config.RunIn(…)</code></td><td><code>sandbox_*</code></td><td><a href="#kind-sandboxes">Sandboxes</a></td></tr>
       <tr><td>use tools from an MCP server</td><td><code>WithMCP(name, …)</code></td><td><code>tool_mcp</code></td><td><a href="#kind-tools">Tools</a></td></tr>
       <tr><td>let the model fetch web pages from allowed hosts</td><td></td><td><code>tool_fetch</code></td><td><a href="#kind-tools">Tools</a></td></tr>
       <tr><td>let the model search the web</td><td><code>WithWebSearch("duckduckgo")</code></td><td><code>tool_websearch</code></td><td><a href="#kind-tools">Tools</a></td></tr>
@@ -1442,22 +1409,22 @@ kiln module check ./examples/custom-module</code></pre></div>
       <tr><td>let the model keep a task list</td><td></td><td><code>tool_plan</code></td><td><a href="#agent-loop">Long runs</a></td></tr>
       <tr><td>stop repeated calls, cap huge tool results</td><td></td><td><code>hook_loop_detect</code>, <code>hook_tool_output_limit</code></td><td><a href="#agent-loop">Long runs</a></td></tr>
       <tr><td>block, redact or retry on what goes in and out</td><td></td><td><code>hook_guardrails</code></td><td><a href="#kind-hooks">Hooks</a></td></tr>
-      <tr><td>keep a run's progress if the process dies</td><td><code>WithSaveEachStep()</code></td><td>(threads)</td><td><a href="#threads">Threads</a></td></tr>
+      <tr><td>keep a run's progress if the process dies</td><td><code>Config.SaveEachStep</code></td><td>(threads)</td><td><a href="#threads">Threads</a></td></tr>
       <tr><td>test the agent on a set of cases</td><td><code>kiln eval</code></td><td>(package <code>evals</code>)</td><td><a href="#evals">Evals</a></td></tr>
       <tr><td>turn on model reasoning (thinking) with one setting</td><td><code>WithThinking("high")</code></td><td><code>hook_thinking</code></td><td><a href="#kind-hooks">Hooks</a></td></tr>
       <tr><td>cut cost and latency with prompt caching</td><td></td><td><code>hook_cache</code></td><td><a href="#kind-hooks">Hooks</a></td></tr>
       <tr><td>retry when structured output doesn't match the schema</td><td></td><td><code>hook_output_validate</code></td><td><a href="#kind-hooks">Hooks</a></td></tr>
-      <tr><td>keep conversations (and paused approvals) across restarts</td><td><code>WithPersistence("file" | "postgres", …)</code></td><td><code>threads_file</code> / <code>threads_sql</code></td><td><a href="#kind-threads-memory">Threads and memory</a></td></tr>
-      <tr><td>let the agent remember facts between conversations</td><td><code>WithPersistence(…)</code> + <code>WithModules("tool_memory")</code></td><td><code>memory_*</code>, <code>tool_memory</code></td><td><a href="#kind-threads-memory">Threads and memory</a></td></tr>
-      <tr><td>run several replicas that share state</td><td><code>WithPersistence("postgres", …)</code></td><td><code>threads_sql</code>, <code>memory_sql</code>, <code>db_sql</code></td><td><a href="#kind-threads-memory">Threads and memory</a></td></tr>
+      <tr><td>keep conversations (and paused approvals) across restarts</td><td><code>kiln.Persistence("file" | "postgres", …)</code></td><td><code>threads_file</code> / <code>threads_sql</code></td><td><a href="#kind-threads-memory">Threads and memory</a></td></tr>
+      <tr><td>let the agent remember facts between conversations</td><td><code>kiln.Persistence(…)</code> + <code>tool_memory.New()</code></td><td><code>memory_*</code>, <code>tool_memory</code></td><td><a href="#kind-threads-memory">Threads and memory</a></td></tr>
+      <tr><td>run several replicas that share state</td><td><code>kiln.Persistence("postgres", …)</code></td><td><code>threads_sql</code>, <code>memory_sql</code>, <code>db_sql</code></td><td><a href="#kind-threads-memory">Threads and memory</a></td></tr>
       <tr><td>start runs on a schedule</td><td></td><td><code>trigger_schedule</code></td><td><a href="#kind-triggers">Triggers</a></td></tr>
       <tr><td>start runs from a webhook (GitHub, Stripe …)</td><td></td><td><code>trigger_webhook</code></td><td><a href="#kind-triggers">Triggers</a></td></tr>
       <tr><td>keep a tamper-evident log of everything</td><td><code>WithAudit(path)</code></td><td><code>audit_file</code></td><td><a href="#kind-telemetry">Telemetry and audit</a></td></tr>
       <tr><td>ship the audit log to a SIEM</td><td></td><td><code>audit_http</code></td><td><a href="#kind-telemetry">Telemetry and audit</a></td></tr>
       <tr><td>see traces in Grafana, Honeycomb, Datadog …</td><td><code>WithTracing(endpoint)</code></td><td><code>trace_otlp</code></td><td><a href="#kind-telemetry">Telemetry and audit</a></td></tr>
       <tr><td>keep API keys out of config and code</td><td></td><td><code>secrets_env</code>, <code>secrets_vault</code></td><td><a href="#kind-secrets">Secrets</a></td></tr>
-      <tr><td>enforce company rules (read-only mode, allowed models, budgets)</td><td><code>WithPolicyFile(…)</code></td><td><code>policy</code></td><td><a href="#kind-policy">Policy</a></td></tr>
-      <tr><td>write my own module</td><td><code>WithModule(m)</code></td><td>(your Go package)</td><td><a href="#custom-modules">Custom modules</a></td></tr>
+      <tr><td>enforce company rules (read-only mode, allowed models, budgets)</td><td><code>Config.Policy</code></td><td><code>policy</code></td><td><a href="#kind-policy">Policy</a></td></tr>
+      <tr><td>write my own module</td><td><code>Modules: []kiln.Module{m}</code></td><td>(your Go package)</td><td><a href="#custom-modules">Custom modules</a></td></tr>
     </tbody>
   </table></div>
 </section>
@@ -1469,12 +1436,12 @@ kiln module check ./examples/custom-module</code></pre></div>
   <ul>
     <li><b>Use a tool</b> when the <i>model</i> should decide whether and when something happens: look up an order, search, run a query, send an email.</li>
     <li><b>Use a <a href="#kind-hooks">hook</a> instead</b> when it must happen on every call regardless of what the model wants: logging, approval, redaction, limits.</li>
-    <li><b>In your own app</b>, <code>kiln.Tool(name, description, func)</code> is the shortest path: typed input, schema derived for you (<a href="#tools">Tools</a>). Write a tool <i>module</i> when the tool should be shared, configured from a profile or shipped as a package; see <a href="#custom-modules">Custom modules</a>.</li>
+    <li><b>In your own app</b>, <code>kiln.NewTool(name, description, func)</code> is the shortest path: typed input, schema derived for you (<a href="#tools">Tools</a>). Write a tool <i>module</i> when the tool should be shared, configured from Go or shipped as a package; see <a href="#custom-modules">Custom modules</a>.</li>
   </ul>
   <h2>Built-in tool modules</h2>
   <!-- gen:builtins tools -->
 <div class="builtins">
-<div class="builtin" id="module-tool_fetch"><div class="bhead"><code>tool_fetch</code><span class="bsum">adds 1 tool (http_fetch) · permissions net</span></div><p>Fetches web pages for the model. Egress is restricted: only hosts in allow_hosts (glob patterns, e.g. &#34;*.example.com&#34;), and never private, loopback or link-local addresses (SSRF protection) unless allow_private.</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModuleConfig(&#34;tool_fetch&#34;, map[string]any{
+<div class="builtin" id="module-tool_fetch"><div class="bhead"><code>tool_fetch</code><span class="bsum">adds 1 tool (http_fetch) · permissions net</span></div><p>Fetches web pages for the model. Egress is restricted: only hosts in allow_hosts (glob patterns, e.g. &#34;*.example.com&#34;), and never private, loopback or link-local addresses (SSRF protection) unless allow_private.</p><div class="code" data-title="example"><pre><code class="language-go">tool_fetch.New(map[string]any{
 	&#34;allow_hosts&#34;: []any{&#34;*.wikipedia.org&#34;, &#34;docs.python.org&#34;},
 	&#34;max_bytes&#34;:   200000,
 })</code></pre></div><details><summary>Config and details</summary><pre>Fetches web pages for the model. Egress is restricted: only hosts in
@@ -1483,17 +1450,17 @@ loopback or link-local addresses (SSRF protection) unless allow_private.
 
 Config: allow_hosts (required; [&#34;*&#34;] = any public host), allow_private
 (false), max_bytes (500000), timeout_seconds (20).</pre></details></div>
-<div class="builtin" id="module-tool_fs"><div class="bhead"><code>tool_fs</code><span class="bsum">adds 6 tools (edit_file, find_files, grep, list_dir, read_file, write_file) · wraps tool calls · runs at run start · uses workspace · requires workspace · no permissions</span></div><p>File tools in the &#34;workspace&#34; world: read_file, write_file, edit_file, list_dir, find_files, grep. Writes are recorded per run (Result.Changes) so hosts can show a review diff.</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModuleConfig(&#34;tool_fs&#34;, map[string]any{&#34;readonly&#34;: true}) // only read_file, list_dir, find_files, grep</code></pre></div><details><summary>Config and details</summary><pre>File tools in the &#34;workspace&#34; world: read_file, write_file, edit_file,
+<div class="builtin" id="module-tool_fs"><div class="bhead"><code>tool_fs</code><span class="bsum">adds 6 tools (edit_file, find_files, grep, list_dir, read_file, write_file) · wraps tool calls · runs at run start · uses workspace · requires workspace · no permissions</span></div><p>File tools in the &#34;workspace&#34; world: read_file, write_file, edit_file, list_dir, find_files, grep. Writes are recorded per run (Result.Changes) so hosts can show a review diff.</p><div class="code" data-title="example"><pre><code class="language-go">tool_fs.New(map[string]any{&#34;readonly&#34;: true}) // only read_file, list_dir, find_files, grep</code></pre></div><details><summary>Config and details</summary><pre>File tools in the &#34;workspace&#34; world: read_file, write_file, edit_file,
 list_dir, find_files, grep. Writes are recorded per run (Result.Changes)
 so hosts can show a review diff.
 
 Config: max_read (200000 bytes), readonly (true = only read tools).</pre></details></div>
-<div class="builtin" id="module-tool_mcp"><div class="bhead"><code>tool_mcp</code><span class="bsum">adds tools named at runtime · requires ?secrets · permissions net, exec</span></div><p>Model Context Protocol client: connects to MCP servers and registers their tools as &#34;&lt;server&gt;__&lt;tool&gt;&#34;.</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModuleConfig(&#34;tool_mcp&#34;, map[string]any{&#34;servers&#34;: []any{
+<div class="builtin" id="module-tool_mcp"><div class="bhead"><code>tool_mcp</code><span class="bsum">adds tools named at runtime · requires ?secrets · permissions net, exec</span></div><p>Model Context Protocol client: connects to MCP servers and registers their tools as &#34;&lt;server&gt;__&lt;tool&gt;&#34;.</p><div class="code" data-title="example"><pre><code class="language-go">tool_mcp.New(map[string]any{&#34;servers&#34;: []any{
 	map[string]any{&#34;name&#34;: &#34;github&#34;, &#34;command&#34;: &#34;npx&#34;, &#34;args&#34;: []any{&#34;-y&#34;, &#34;@modelcontextprotocol/server-github&#34;},
 		&#34;env&#34;: map[string]any{&#34;GITHUB_PERSONAL_ACCESS_TOKEN&#34;: &#34;secret://GITHUB_TOKEN&#34;}},
 	map[string]any{&#34;name&#34;: &#34;docs&#34;, &#34;url&#34;: &#34;https://mcp.example.com/mcp&#34;},
 }})
-// Shortcut: kiln.WithMCP(&#34;github&#34;, &#34;npx&#34;, &#34;-y&#34;, &#34;@modelcontextprotocol/server-github&#34;)</code></pre></div><details><summary>Config and details</summary><pre>Model Context Protocol client: connects to MCP servers and registers
+// Shortcut: kiln.MCP(&#34;github&#34;, &#34;npx&#34;, &#34;-y&#34;, &#34;@modelcontextprotocol/server-github&#34;)</code></pre></div><details><summary>Config and details</summary><pre>Model Context Protocol client: connects to MCP servers and registers
 their tools as &#34;&lt;server&gt;__&lt;tool&gt;&#34;.
 
 Config:
@@ -1507,10 +1474,10 @@ Config:
 	  allow_insecure: false,     // allow http with headers (loopback is always allowed)
 	  timeout_seconds: 60
 	}]</pre></details></div>
-<div class="builtin" id="module-tool_memory"><div class="bhead"><code>tool_memory</code><span class="bsum">adds 2 tools (recall, remember) · uses memory · requires memory · no permissions</span></div><p>Long-term memory tools over the &#34;memory&#34; service. Notes are kept per user (namespace [&#34;memories&#34;, user]). Config: namespace.</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModules(&#34;memory_file&#34;, &#34;tool_memory&#34;)
+<div class="builtin" id="module-tool_memory"><div class="bhead"><code>tool_memory</code><span class="bsum">adds 2 tools (recall, remember) · uses memory · requires memory · no permissions</span></div><p>Long-term memory tools over the &#34;memory&#34; service. Notes are kept per user (namespace [&#34;memories&#34;, user]). Config: namespace.</p><div class="code" data-title="example"><pre><code class="language-go">kiln.Config{Modules: []kiln.Module{memory_file.New(), tool_memory.New()}}
 // &#34;Remember that I prefer window seats&#34; -&gt; remember; later &#34;Book my usual seat&#34; -&gt; recall</code></pre></div><details><summary>Config and details</summary><pre>Long-term memory tools over the &#34;memory&#34; service. Notes are kept per
 user (namespace [&#34;memories&#34;, user]). Config: namespace.</pre></details></div>
-<div class="builtin" id="module-tool_plan"><div class="bhead"><code>tool_plan</code><span class="bsum">adds 3 tools (plan_read, plan_update, plan_write) · wraps tool calls · rewrites each step · runs at run end · uses memory · requires ?memory · no permissions</span></div><p>Gives the model a task list it keeps up to date: plan_write sets the tasks, plan_update changes one task&#39;s status, plan_read shows the list. The current plan is shown to the model with the newest tool result each step (not in the system prompt, so prompt caching keeps working).</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModules(&#34;tool_plan&#34;)</code></pre></div><details><summary>Config and details</summary><pre>Gives the model a task list it keeps up to date: plan_write sets the
+<div class="builtin" id="module-tool_plan"><div class="bhead"><code>tool_plan</code><span class="bsum">adds 3 tools (plan_read, plan_update, plan_write) · wraps tool calls · rewrites each step · runs at run end · uses memory · requires ?memory · no permissions</span></div><p>Gives the model a task list it keeps up to date: plan_write sets the tasks, plan_update changes one task&#39;s status, plan_read shows the list. The current plan is shown to the model with the newest tool result each step (not in the system prompt, so prompt caching keeps working).</p><div class="code" data-title="example"><pre><code class="language-go">kiln.Config{Modules: []kiln.Module{tool_plan.New()}}</code></pre></div><details><summary>Config and details</summary><pre>Gives the model a task list it keeps up to date: plan_write sets the
 tasks, plan_update changes one task&#39;s status, plan_read shows the list.
 The current plan is shown to the model with the newest tool result
 each step (not in the system prompt, so prompt caching keeps working).
@@ -1520,8 +1487,8 @@ service loaded they survive restarts.
 
 Config: max_tasks (default 30), reminder (default true: show the plan
 each step).</pre></details></div>
-<div class="builtin" id="module-tool_sandbox"><div class="bhead"><code>tool_sandbox</code><span class="bsum">adds 6 tools (sandbox_create, sandbox_destroy, sandbox_exec, sandbox_list, sandbox_read_file, sandbox_write_file) · requires sandbox/* · no permissions</span></div><p>Lets the model start and use sandboxes on demand: sandbox_create, sandbox_exec, sandbox_write_file, sandbox_read_file, sandbox_list, sandbox_destroy. Boxes belong to the thread that made them and are destroyed when the module unloads.</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModules(&#34;sandbox_docker&#34;)
-kiln.WithModuleConfig(&#34;tool_sandbox&#34;, map[string]any{
+<div class="builtin" id="module-tool_sandbox"><div class="bhead"><code>tool_sandbox</code><span class="bsum">adds 6 tools (sandbox_create, sandbox_destroy, sandbox_exec, sandbox_list, sandbox_read_file, sandbox_write_file) · requires sandbox/* · no permissions</span></div><p>Lets the model start and use sandboxes on demand: sandbox_create, sandbox_exec, sandbox_write_file, sandbox_read_file, sandbox_list, sandbox_destroy. Boxes belong to the thread that made them and are destroyed when the module unloads.</p><div class="code" data-title="example"><pre><code class="language-go">kiln.Config{Modules: []kiln.Module{sandbox_docker.New()}}
+tool_sandbox.New(map[string]any{
 	&#34;provider&#34;:  &#34;docker&#34;,
 	&#34;images&#34;:    []any{&#34;python:3.12-slim&#34;, &#34;node:22-slim&#34;},
 	&#34;max_boxes&#34;: 2,
@@ -1532,7 +1499,7 @@ destroyed when the module unloads.
 
 Config: provider (&#34;docker&#34;), image, network (&#34;none&#34;), memory_mb, cpus,
 max_boxes (3 per thread), images (allowed images; [] = any).</pre></details></div>
-<div class="builtin" id="module-tool_search"><div class="bhead"><code>tool_search</code><span class="bsum">adds 1 tool (search_tools) · wraps tool calls · rewrites each step · runs at run end · no permissions</span></div><p>Loads tools on demand. When a step would offer more than threshold tools, the model sees only the always-visible ones plus a search_tools tool; each search reveals the matching tools for the rest of the run. Useful once MCP servers bring dozens of tools.</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModuleConfig(&#34;tool_search&#34;, map[string]any{
+<div class="builtin" id="module-tool_search"><div class="bhead"><code>tool_search</code><span class="bsum">adds 1 tool (search_tools) · wraps tool calls · rewrites each step · runs at run end · no permissions</span></div><p>Loads tools on demand. When a step would offer more than threshold tools, the model sees only the always-visible ones plus a search_tools tool; each search reveals the matching tools for the rest of the run. Useful once MCP servers bring dozens of tools.</p><div class="code" data-title="example"><pre><code class="language-go">tool_search.New(map[string]any{
 	&#34;threshold&#34;: 10,
 	&#34;always&#34;:    []any{&#34;read_file&#34;, &#34;bash&#34;},
 })</code></pre></div><details><summary>Config and details</summary><pre>Loads tools on demand. When a step would offer more than threshold
@@ -1549,17 +1516,17 @@ Config:
 	threshold:   hide tools only when there are more than this many (default 15)
 	always:      tools that stay visible, globs like &#34;github__*&#34; (default none)
 	max_results: tools a search reveals at most (default 5)</pre></details></div>
-<div class="builtin" id="module-tool_shell"><div class="bhead"><code>tool_shell</code><span class="bsum">adds 1 tool (bash) · uses workspace · requires workspace · no permissions</span></div><p>A bash tool that runs in the &#34;workspace&#34; world (host workspace or sandbox).</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModuleConfig(&#34;tool_shell&#34;, map[string]any{&#34;timeout_seconds&#34;: 60, &#34;max_output&#34;: 10000})
-kiln.WithSandbox(&#34;docker&#34;) // run it in a container instead of on the host</code></pre></div><details><summary>Config and details</summary><pre>A bash tool that runs in the &#34;workspace&#34; world (host workspace or sandbox).
+<div class="builtin" id="module-tool_shell"><div class="bhead"><code>tool_shell</code><span class="bsum">adds 1 tool (bash) · uses workspace · requires workspace · no permissions</span></div><p>A bash tool that runs in the &#34;workspace&#34; world (host workspace or sandbox).</p><div class="code" data-title="example"><pre><code class="language-go">tool_shell.New(map[string]any{&#34;timeout_seconds&#34;: 60, &#34;max_output&#34;: 10000})
+kiln.Sandbox(&#34;docker&#34;) // run it in a container instead of on the host</code></pre></div><details><summary>Config and details</summary><pre>A bash tool that runs in the &#34;workspace&#34; world (host workspace or sandbox).
 
 Config: timeout_seconds (120), max_output (30000 chars).</pre></details></div>
-<div class="builtin" id="module-tool_skills"><div class="bhead"><code>tool_skills</code><span class="bsum">adds 2 tools (load_skill, read_skill_file) · permissions fs:read</span></div><p>Agent skills: folders containing SKILL.md (YAML-ish front matter with name and description, then instructions). Only names and descriptions go into the system prompt; the model loads a skill&#39;s body (and files next to it) on demand, which keeps prompts small.</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModuleConfig(&#34;tool_skills&#34;, map[string]any{&#34;dirs&#34;: []any{&#34;./skills&#34;}}) // skills/&lt;name&gt;/SKILL.md</code></pre></div><details><summary>Config and details</summary><pre>Agent skills: folders containing SKILL.md (YAML-ish front matter with
+<div class="builtin" id="module-tool_skills"><div class="bhead"><code>tool_skills</code><span class="bsum">adds 2 tools (load_skill, read_skill_file) · permissions fs:read</span></div><p>Agent skills: folders containing SKILL.md (YAML-ish front matter with name and description, then instructions). Only names and descriptions go into the system prompt; the model loads a skill&#39;s body (and files next to it) on demand, which keeps prompts small.</p><div class="code" data-title="example"><pre><code class="language-go">tool_skills.New(map[string]any{&#34;dirs&#34;: []any{&#34;./skills&#34;}}) // skills/&lt;name&gt;/SKILL.md</code></pre></div><details><summary>Config and details</summary><pre>Agent skills: folders containing SKILL.md (YAML-ish front matter with
 name and description, then instructions). Only names and descriptions
 go into the system prompt; the model loads a skill&#39;s body (and files
 next to it) on demand, which keeps prompts small.
 
 Config: dirs (default [&#34;skills&#34;]).</pre></details></div>
-<div class="builtin" id="module-tool_subagents"><div class="bhead"><code>tool_subagents</code><span class="bsum">adds 1 tool (transfer_back) · adds tools named at runtime · rewrites each step · checks model replies · requires loop · no permissions</span></div><p>Multi-agent: subagents exposed as tools, and handoffs that switch which agent is talking.</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModuleConfig(&#34;tool_subagents&#34;, map[string]any{&#34;agents&#34;: []any{
+<div class="builtin" id="module-tool_subagents"><div class="bhead"><code>tool_subagents</code><span class="bsum">adds 1 tool (transfer_back) · adds tools named at runtime · rewrites each step · checks model replies · requires loop · no permissions</span></div><p>Multi-agent: subagents exposed as tools, and handoffs that switch which agent is talking.</p><div class="code" data-title="example"><pre><code class="language-go">tool_subagents.New(map[string]any{&#34;agents&#34;: []any{
 	map[string]any{&#34;name&#34;: &#34;researcher&#34;, &#34;description&#34;: &#34;Finds facts on the web&#34;,
 		&#34;instructions&#34;: &#34;Cite your sources.&#34;, &#34;tools&#34;: []any{&#34;web_search&#34;, &#34;http_fetch&#34;}, &#34;max_steps&#34;: 8},
 	map[string]any{&#34;name&#34;: &#34;billing&#34;, &#34;description&#34;: &#34;Handles refunds&#34;, &#34;mode&#34;: &#34;handoff&#34;},
@@ -1577,10 +1544,10 @@ Config:
 	}]
 
 Policy and audit hooks follow subagents (they run in the same snapshot).</pre></details></div>
-<div class="builtin" id="module-tool_time"><div class="bhead"><code>tool_time</code><span class="bsum">adds 1 tool (current_time) · no permissions</span></div><p>Returns the current time. Config: layout (Go time layout).</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModuleConfig(&#34;tool_time&#34;, map[string]any{&#34;layout&#34;: &#34;2006-01-02 15:04 MST&#34;})</code></pre></div></div>
-<div class="builtin" id="module-tool_websearch"><div class="bhead"><code>tool_websearch</code><span class="bsum">adds 1 tool (web_search) · requires ?secrets · permissions net</span></div><p>Web search for the model: a web_search tool returning titles, URLs and snippets. Pair it with tool_fetch to read the pages it finds.</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModuleConfig(&#34;tool_websearch&#34;, map[string]any{&#34;backend&#34;: &#34;tavily&#34;, &#34;max_results&#34;: 8})
-kiln.WithModuleConfig(&#34;tool_fetch&#34;, map[string]any{&#34;allow_hosts&#34;: []any{&#34;*&#34;}}) // to read the results
-// Shortcut: kiln.WithWebSearch(&#34;duckduckgo&#34;)</code></pre></div><details><summary>Config and details</summary><pre>Web search for the model: a web_search tool returning titles, URLs and
+<div class="builtin" id="module-tool_time"><div class="bhead"><code>tool_time</code><span class="bsum">adds 1 tool (current_time) · no permissions</span></div><p>Returns the current time. Config: layout (Go time layout).</p><div class="code" data-title="example"><pre><code class="language-go">tool_time.New(map[string]any{&#34;layout&#34;: &#34;2006-01-02 15:04 MST&#34;})</code></pre></div></div>
+<div class="builtin" id="module-tool_websearch"><div class="bhead"><code>tool_websearch</code><span class="bsum">adds 1 tool (web_search) · requires ?secrets · permissions net</span></div><p>Web search for the model: a web_search tool returning titles, URLs and snippets. Pair it with tool_fetch to read the pages it finds.</p><div class="code" data-title="example"><pre><code class="language-go">tool_websearch.New(map[string]any{&#34;backend&#34;: &#34;tavily&#34;, &#34;max_results&#34;: 8})
+tool_fetch.New(map[string]any{&#34;allow_hosts&#34;: []any{&#34;*&#34;}}) // to read the results
+// Shortcut: kiln.WebSearch(&#34;duckduckgo&#34;)</code></pre></div><details><summary>Config and details</summary><pre>Web search for the model: a web_search tool returning titles, URLs and
 snippets. Pair it with tool_fetch to read the pages it finds.
 
 Config:
@@ -1613,7 +1580,7 @@ import (
 // Config: greeting (&#34;Hello&#34;).
 var Module = engine.Module{Name: "weather", Provides: nil, Apply: Apply}
 
-func Apply(p *sdk.Module) error {
+func Apply(p *sdk.Scope) error {
 	greeting := p.ConfigString(&#34;greeting&#34;, &#34;Hello&#34;)
 	p.AddTool(sdk.Tool{
 		Name:        &#34;weather&#34;,
@@ -1633,14 +1600,10 @@ func Apply(p *sdk.Module) error {
 <!-- /gen:template -->
   <p>Load it and try it against the offline mock model, which calls the tool when its script says so:</p>
   <div class="code" data-title="weather_test.go"><pre><code class="language-go">func TestWeather(t *testing.T) {
-	a, err := kiln.New(
-		kiln.WithModel("mock:test"),
-		kiln.WithModuleConfig("model_mock", map[string]any{"script": []any{
+	a, err := kiln.New(kiln.Config{Model: "mock:test", Modules: []kiln.Module{model_mock.New(map[string]any{"script": []any{
 			map[string]any{"tool": "weather", "args": map[string]any{"name": "Oslo"}},
 			map[string]any{"text": "done"},
-		}}),
-		kiln.WithModule(Module),
-	)
+		}}), Module}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1684,11 +1647,11 @@ func Apply(p *sdk.Module) error {
   <h2>Built-in hook modules</h2>
   <!-- gen:builtins hooks -->
 <div class="builtins">
-<div class="builtin" id="module-hook_approval"><div class="bhead"><code>hook_approval</code><span class="bsum">wraps tool calls · no permissions</span></div><p>Human in the loop: pauses the run before chosen tool calls until a person approves, edits, rejects or answers them. Resume with Thread.Resume / Agent.Resume, or load an &#34;approver&#34; service to decide synchronously.</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModuleConfig(&#34;hook_approval&#34;, map[string]any{&#34;interrupt_on&#34;: map[string]any{
+<div class="builtin" id="module-hook_approval"><div class="bhead"><code>hook_approval</code><span class="bsum">wraps tool calls · no permissions</span></div><p>Human in the loop: pauses the run before chosen tool calls until a person approves, edits, rejects or answers them. Resume with Thread.Resume / Agent.Resume, or load an &#34;approver&#34; service to decide synchronously.</p><div class="code" data-title="example"><pre><code class="language-go">hook_approval.New(map[string]any{&#34;interrupt_on&#34;: map[string]any{
 	&#34;delete_file&#34;: true,
 	&#34;send_email&#34;:  map[string]any{&#34;allowed&#34;: []any{&#34;approve&#34;, &#34;edit&#34;, &#34;reject&#34;}, &#34;description&#34;: &#34;Send this email?&#34;},
 }})
-// Shortcut: kiln.WithApprovals(&#34;delete_file&#34;, &#34;send_email&#34;)</code></pre></div><details><summary>Config and details</summary><pre>Human in the loop: pauses the run before chosen tool calls until a
+// Shortcut: kiln.Approvals(&#34;delete_file&#34;, &#34;send_email&#34;)</code></pre></div><details><summary>Config and details</summary><pre>Human in the loop: pauses the run before chosen tool calls until a
 person approves, edits, rejects or answers them. Resume with
 Thread.Resume / Agent.Resume, or load an &#34;approver&#34; service to decide
 synchronously.
@@ -1699,7 +1662,7 @@ Config:
 	               &#34;*&#34; matches every tool
 	non_readonly:  true = also every tool not marked Meta.readonly
 	risk:          [&#34;high&#34;] = also tools whose Meta.risk is listed</pre></details></div>
-<div class="builtin" id="module-hook_cache"><div class="bhead"><code>hook_cache</code><span class="bsum">rewrites each step · no permissions</span></div><p>Prompt caching: reuses the unchanged prefix of each request (tools, system prompt, earlier messages) so long agent runs cost less and answer faster. It sets ModelRequest.Extra[&#34;kiln.cache&#34;]; model modules map it:</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModuleConfig(&#34;hook_cache&#34;, map[string]any{&#34;ttl&#34;: &#34;1h&#34;})</code></pre></div><details><summary>Config and details</summary><pre>Prompt caching: reuses the unchanged prefix of each request (tools,
+<div class="builtin" id="module-hook_cache"><div class="bhead"><code>hook_cache</code><span class="bsum">rewrites each step · no permissions</span></div><p>Prompt caching: reuses the unchanged prefix of each request (tools, system prompt, earlier messages) so long agent runs cost less and answer faster. It sets ModelRequest.Extra[&#34;kiln.cache&#34;]; model modules map it:</p><div class="code" data-title="example"><pre><code class="language-go">hook_cache.New(map[string]any{&#34;ttl&#34;: &#34;1h&#34;})</code></pre></div><details><summary>Config and details</summary><pre>Prompt caching: reuses the unchanged prefix of each request (tools,
 system prompt, earlier messages) so long agent runs cost less and
 answer faster. It sets ModelRequest.Extra[&#34;kiln.cache&#34;]; model modules
 map it:
@@ -1710,7 +1673,7 @@ map it:
 	gemini:    nothing to do (implicit caching)
 
 Config: ttl (5m | 1h, default 5m).</pre></details></div>
-<div class="builtin" id="module-hook_compact"><div class="bhead"><code>hook_compact</code><span class="bsum">adds 1 tool (compact_context) · wraps tool calls · rewrites each step · checks model replies · runs at run end · no permissions</span></div><p>Keeps a run inside the model&#39;s context window. Before each step it estimates the request&#39;s size and, past the trigger, applies the strategies in order, cheapest first, until the estimate is under the target. Edits stay in the run&#39;s history.</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModuleConfig(&#34;hook_compact&#34;, map[string]any{
+<div class="builtin" id="module-hook_compact"><div class="bhead"><code>hook_compact</code><span class="bsum">adds 1 tool (compact_context) · wraps tool calls · rewrites each step · checks model replies · runs at run end · no permissions</span></div><p>Keeps a run inside the model&#39;s context window. Before each step it estimates the request&#39;s size and, past the trigger, applies the strategies in order, cheapest first, until the estimate is under the target. Edits stay in the run&#39;s history.</p><div class="code" data-title="example"><pre><code class="language-go">hook_compact.New(map[string]any{
 	&#34;max_fraction&#34;:    0.8,
 	&#34;target_fraction&#34;: 0.5,
 	&#34;strategies&#34;:      []any{&#34;clear_tool_results&#34;, &#34;summarize&#34;},
@@ -1749,7 +1712,7 @@ Config:
 	keep_messages:     recent messages sliding_window and summarize keep (default 20)
 	summary_model:     model for summarize (default: the run&#39;s model)
 	tool:              give the model a compact_context tool (default false)</pre></details></div>
-<div class="builtin" id="module-hook_fallback"><div class="bhead"><code>hook_fallback</code><span class="bsum">wraps model calls · uses policy · no permissions</span></div><p>Falls back to other models when a model call fails, or when the model refuses (finish reason &#34;refusal&#34;: a safety stop or content filter).</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModuleConfig(&#34;hook_fallback&#34;, map[string]any{
+<div class="builtin" id="module-hook_fallback"><div class="bhead"><code>hook_fallback</code><span class="bsum">wraps model calls · uses policy · no permissions</span></div><p>Falls back to other models when a model call fails, or when the model refuses (finish reason &#34;refusal&#34;: a safety stop or content filter).</p><div class="code" data-title="example"><pre><code class="language-go">hook_fallback.New(map[string]any{
 	&#34;models&#34;:     []any{&#34;openai:gpt-4.1&#34;, &#34;gemini:gemini-2.5-pro&#34;},
 	&#34;on_refusal&#34;: true,
 })</code></pre></div><details><summary>Config and details</summary><pre>Falls back to other models when a model call fails, or when the model
@@ -1758,9 +1721,9 @@ refuses (finish reason &#34;refusal&#34;: a safety stop or content filter).
 Config: models ([&#34;anthropic:claude-...&#34;, &#34;openai:gpt-...&#34;]), tried in
 order after the requested model; on_refusal (true): also fall back on a
 refusal. Default priority 20 (outside hook_retry).</pre></details></div>
-<div class="builtin" id="module-hook_guard"><div class="bhead"><code>hook_guard</code><span class="bsum">wraps tool calls · no permissions</span></div><p>Vetoes tool calls whose arguments contain a blocked word. Config: words (default [&#34;password&#34;]).</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModuleConfig(&#34;hook_guard&#34;, map[string]any{&#34;words&#34;: []any{&#34;password&#34;, &#34;api_key&#34;}})</code></pre></div><details><summary>Config and details</summary><pre>Vetoes tool calls whose arguments contain a blocked word.
+<div class="builtin" id="module-hook_guard"><div class="bhead"><code>hook_guard</code><span class="bsum">wraps tool calls · no permissions</span></div><p>Vetoes tool calls whose arguments contain a blocked word. Config: words (default [&#34;password&#34;]).</p><div class="code" data-title="example"><pre><code class="language-go">hook_guard.New(map[string]any{&#34;words&#34;: []any{&#34;password&#34;, &#34;api_key&#34;}})</code></pre></div><details><summary>Config and details</summary><pre>Vetoes tool calls whose arguments contain a blocked word.
 Config: words (default [&#34;password&#34;]).</pre></details></div>
-<div class="builtin" id="module-hook_guardrails"><div class="bhead"><code>hook_guardrails</code><span class="bsum">wraps tool calls · rewrites each step · checks model replies · runs at run start · runs at run end · no permissions</span></div><p>Checks what goes in and out of the model against rules, and blocks, redacts or retries. Each rule looks at one place:</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModuleConfig(&#34;hook_guardrails&#34;, map[string]any{&#34;rules&#34;: []any{
+<div class="builtin" id="module-hook_guardrails"><div class="bhead"><code>hook_guardrails</code><span class="bsum">wraps tool calls · rewrites each step · checks model replies · runs at run start · runs at run end · no permissions</span></div><p>Checks what goes in and out of the model against rules, and blocks, redacts or retries. Each rule looks at one place:</p><div class="code" data-title="example"><pre><code class="language-go">hook_guardrails.New(map[string]any{&#34;rules&#34;: []any{
 	map[string]any{&#34;on&#34;: &#34;output&#34;, &#34;detect&#34;: &#34;secrets&#34;, &#34;action&#34;: &#34;redact&#34;},
 	map[string]any{&#34;on&#34;: &#34;tool_args&#34;, &#34;keywords&#34;: []any{&#34;DROP TABLE&#34;}, &#34;action&#34;: &#34;block&#34;,
 		&#34;message&#34;: &#34;Destructive SQL is not allowed.&#34;},
@@ -1785,7 +1748,7 @@ action is:
 	        max_retries times, then block
 
 Config: rules (required), max_retries (default 1).</pre></details></div>
-<div class="builtin" id="module-hook_limits"><div class="bhead"><code>hook_limits</code><span class="bsum">wraps model calls · wraps tool calls · runs at run end · no permissions</span></div><p>Caps model calls, tool calls and tokens per run and per thread.</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModuleConfig(&#34;hook_limits&#34;, map[string]any{
+<div class="builtin" id="module-hook_limits"><div class="bhead"><code>hook_limits</code><span class="bsum">wraps model calls · wraps tool calls · runs at run end · no permissions</span></div><p>Caps model calls, tool calls and tokens per run and per thread.</p><div class="code" data-title="example"><pre><code class="language-go">hook_limits.New(map[string]any{
 	&#34;model_calls_run&#34;: 20,
 	&#34;tokens_thread&#34;:   500000,
 	&#34;tools&#34;:           map[string]any{&#34;web_search&#34;: 5},
@@ -1797,15 +1760,15 @@ Config:
 	tokens_run, tokens_thread: 0 = unlimited
 	tools:          {tool name: max calls per run}
 	exit_behavior:  &#34;end&#34; (default: finish politely) | &#34;error&#34; (fail the run)</pre></details></div>
-<div class="builtin" id="module-hook_log"><div class="bhead"><code>hook_log</code><span class="bsum">wraps model calls · wraps tool calls · no permissions</span></div><p>Logs every model and tool call with timing. Config: args (log tool arguments, default true), results (log tool results, default false).</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModuleConfig(&#34;hook_log&#34;, map[string]any{&#34;results&#34;: true})</code></pre></div><details><summary>Config and details</summary><pre>Logs every model and tool call with timing. Config: args (log tool
+<div class="builtin" id="module-hook_log"><div class="bhead"><code>hook_log</code><span class="bsum">wraps model calls · wraps tool calls · no permissions</span></div><p>Logs every model and tool call with timing. Config: args (log tool arguments, default true), results (log tool results, default false).</p><div class="code" data-title="example"><pre><code class="language-go">hook_log.New(map[string]any{&#34;results&#34;: true})</code></pre></div><details><summary>Config and details</summary><pre>Logs every model and tool call with timing. Config: args (log tool
 arguments, default true), results (log tool results, default false).</pre></details></div>
-<div class="builtin" id="module-hook_loop_detect"><div class="bhead"><code>hook_loop_detect</code><span class="bsum">wraps tool calls · runs at run end · no permissions</span></div><p>Stops the model from repeating itself. When it calls the same tool with the same arguments more than max_repeats times in a run, the call is not run and the model is told to try something else; past stop_after repeats the run ends with an error.</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModuleConfig(&#34;hook_loop_detect&#34;, map[string]any{&#34;max_repeats&#34;: 2, &#34;stop_after&#34;: 4})</code></pre></div><details><summary>Config and details</summary><pre>Stops the model from repeating itself. When it calls the same tool
+<div class="builtin" id="module-hook_loop_detect"><div class="bhead"><code>hook_loop_detect</code><span class="bsum">wraps tool calls · runs at run end · no permissions</span></div><p>Stops the model from repeating itself. When it calls the same tool with the same arguments more than max_repeats times in a run, the call is not run and the model is told to try something else; past stop_after repeats the run ends with an error.</p><div class="code" data-title="example"><pre><code class="language-go">hook_loop_detect.New(map[string]any{&#34;max_repeats&#34;: 2, &#34;stop_after&#34;: 4})</code></pre></div><details><summary>Config and details</summary><pre>Stops the model from repeating itself. When it calls the same tool
 with the same arguments more than max_repeats times in a run, the call
 is not run and the model is told to try something else; past
 stop_after repeats the run ends with an error.
 
 Config: max_repeats (default 3), stop_after (default 6; 0 = never stop).</pre></details></div>
-<div class="builtin" id="module-hook_output_validate"><div class="bhead"><code>hook_output_validate</code><span class="bsum">rewrites each step · checks model replies · runs at run end · no permissions</span></div><p>Checks structured output (runs with a ResponseSchema) against the schema. When the final reply is not valid JSON or does not match, the model is asked again with the errors, up to max_retries times.</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModuleConfig(&#34;hook_output_validate&#34;, map[string]any{&#34;max_retries&#34;: 2})
+<div class="builtin" id="module-hook_output_validate"><div class="bhead"><code>hook_output_validate</code><span class="bsum">rewrites each step · checks model replies · runs at run end · no permissions</span></div><p>Checks structured output (runs with a ResponseSchema) against the schema. When the final reply is not valid JSON or does not match, the model is asked again with the errors, up to max_retries times.</p><div class="code" data-title="example"><pre><code class="language-go">hook_output_validate.New(map[string]any{&#34;max_retries&#34;: 2})
 // then: invoice, err := kiln.GenerateObject[Invoice](ctx, agent, &#34;Extract the invoice&#34;)</code></pre></div><details><summary>Config and details</summary><pre>Checks structured output (runs with a ResponseSchema) against the
 schema. When the final reply is not valid JSON or does not match, the
 model is asked again with the errors, up to max_retries times.
@@ -1814,7 +1777,7 @@ Validates type, required, properties, additionalProperties: false,
 items, enum, minItems/maxItems and minLength/maxLength.
 
 Config: max_retries (2), on_fail (error | accept, default error).</pre></details></div>
-<div class="builtin" id="module-hook_pii"><div class="bhead"><code>hook_pii</code><span class="bsum">wraps model calls · wraps tool calls · requires ?secrets · no permissions</span></div><p>Detects PII and redacts, masks, hashes or blocks it.</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModuleConfig(&#34;hook_pii&#34;, map[string]any{
+<div class="builtin" id="module-hook_pii"><div class="bhead"><code>hook_pii</code><span class="bsum">wraps model calls · wraps tool calls · requires ?secrets · no permissions</span></div><p>Detects PII and redacts, masks, hashes or blocks it.</p><div class="code" data-title="example"><pre><code class="language-go">hook_pii.New(map[string]any{
 	&#34;types&#34;:    []any{&#34;email&#34;, &#34;credit_card&#34;, &#34;phone&#34;},
 	&#34;strategy&#34;: &#34;mask&#34;,
 	&#34;patterns&#34;: map[string]any{&#34;order_id&#34;: `ORD-\d{6}`},
@@ -1834,13 +1797,13 @@ Config:
 	(input covers user, assistant and tool messages in the history,
 	including the string arguments of earlier tool calls)
 	patterns:   {name: regex} extra detectors</pre></details></div>
-<div class="builtin" id="module-hook_retry"><div class="bhead"><code>hook_retry</code><span class="bsum">wraps model calls · wraps tool calls · no permissions</span></div><p>Retries transient model failures (HTTP 429/5xx, network errors) with exponential backoff, and optionally failing tools.</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModuleConfig(&#34;hook_retry&#34;, map[string]any{&#34;max_retries&#34;: 5, &#34;initial_delay_ms&#34;: 1000, &#34;tool_retries&#34;: 1})</code></pre></div><details><summary>Config and details</summary><pre>Retries transient model failures (HTTP 429/5xx, network errors) with
+<div class="builtin" id="module-hook_retry"><div class="bhead"><code>hook_retry</code><span class="bsum">wraps model calls · wraps tool calls · no permissions</span></div><p>Retries transient model failures (HTTP 429/5xx, network errors) with exponential backoff, and optionally failing tools.</p><div class="code" data-title="example"><pre><code class="language-go">hook_retry.New(map[string]any{&#34;max_retries&#34;: 5, &#34;initial_delay_ms&#34;: 1000, &#34;tool_retries&#34;: 1})</code></pre></div><details><summary>Config and details</summary><pre>Retries transient model failures (HTTP 429/5xx, network errors) with
 exponential backoff, and optionally failing tools.
 
 Config: max_retries (3), initial_delay_ms (500), max_delay_ms (8000),
 backoff (2.0), jitter (true), tool_retries (0), retry_tools ([] = all).
 Default priority 10: inside hook_fallback, outside everything else.</pre></details></div>
-<div class="builtin" id="module-hook_review"><div class="bhead"><code>hook_review</code><span class="bsum">wraps tool calls · no permissions</span></div><p>Auto approval review: a reviewer model judges risky tool calls before they run. It approves, denies, or escalates to a human (hook_approval).</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModuleConfig(&#34;hook_review&#34;, map[string]any{
+<div class="builtin" id="module-hook_review"><div class="bhead"><code>hook_review</code><span class="bsum">wraps tool calls · no permissions</span></div><p>Auto approval review: a reviewer model judges risky tool calls before they run. It approves, denies, or escalates to a human (hook_approval).</p><div class="code" data-title="example"><pre><code class="language-go">hook_review.New(map[string]any{
 	&#34;model&#34;:  &#34;anthropic:claude-haiku-5-5&#34;,
 	&#34;tools&#34;:  []any{&#34;bash&#34;, &#34;write_file&#34;},
 	&#34;policy&#34;: &#34;Deny anything that deletes data or touches production.&#34;,
@@ -1853,8 +1816,8 @@ Config:
 	tools:   tools to review ([] = every tool not marked readonly)
 	policy:  extra guidance for the reviewer
 	on_error: escalate (default) | deny</pre></details></div>
-<div class="builtin" id="module-hook_stats"><div class="bhead"><code>hook_stats</code><span class="bsum">watches events · runs background work · no permissions</span></div><p>Counts tool calls; prints a summary when unloaded (Effect cleanup).</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModules(&#34;hook_stats&#34;) // prints tool-call counts when the agent closes</code></pre></div></div>
-<div class="builtin" id="module-hook_summarize"><div class="bhead"><code>hook_summarize</code><span class="bsum">rewrites each step · no permissions</span></div><p>Summarizes old history when it grows too long, keeping recent messages verbatim. Tool calls and their results are never split.</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModuleConfig(&#34;hook_summarize&#34;, map[string]any{
+<div class="builtin" id="module-hook_stats"><div class="bhead"><code>hook_stats</code><span class="bsum">watches events · runs background work · no permissions</span></div><p>Counts tool calls; prints a summary when unloaded (Effect cleanup).</p><div class="code" data-title="example"><pre><code class="language-go">kiln.Config{Modules: []kiln.Module{hook_stats.New()}} // prints tool-call counts when the agent closes</code></pre></div></div>
+<div class="builtin" id="module-hook_summarize"><div class="bhead"><code>hook_summarize</code><span class="bsum">rewrites each step · no permissions</span></div><p>Summarizes old history when it grows too long, keeping recent messages verbatim. Tool calls and their results are never split.</p><div class="code" data-title="example"><pre><code class="language-go">hook_summarize.New(map[string]any{
 	&#34;trigger_messages&#34;: 60,
 	&#34;keep_messages&#34;:    12,
 	&#34;model&#34;:            &#34;anthropic:claude-haiku-5-5&#34;,
@@ -1868,8 +1831,8 @@ Config:
 	keep_messages:    recent messages kept verbatim (default 10)
 	model:            model for the summary (default: the run&#39;s model)
 	prompt:           summary instruction</pre></details></div>
-<div class="builtin" id="module-hook_thinking"><div class="bhead"><code>hook_thinking</code><span class="bsum">rewrites each step · no permissions</span></div><p>Turns on model reasoning (thinking) with one provider-neutral setting. It sets ModelRequest.Extra[&#34;kiln.thinking&#34;]; each model module maps it:</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModuleConfig(&#34;hook_thinking&#34;, map[string]any{&#34;effort&#34;: &#34;high&#34;, &#34;models&#34;: []any{&#34;anthropic:*&#34;, &#34;openai:*&#34;}})
-// Shortcut: kiln.WithThinking(&#34;high&#34;)</code></pre></div><details><summary>Config and details</summary><pre>Turns on model reasoning (thinking) with one provider-neutral setting.
+<div class="builtin" id="module-hook_thinking"><div class="bhead"><code>hook_thinking</code><span class="bsum">rewrites each step · no permissions</span></div><p>Turns on model reasoning (thinking) with one provider-neutral setting. It sets ModelRequest.Extra[&#34;kiln.thinking&#34;]; each model module maps it:</p><div class="code" data-title="example"><pre><code class="language-go">hook_thinking.New(map[string]any{&#34;effort&#34;: &#34;high&#34;, &#34;models&#34;: []any{&#34;anthropic:*&#34;, &#34;openai:*&#34;}})
+// Shortcut: kiln.Thinking(&#34;high&#34;)</code></pre></div><details><summary>Config and details</summary><pre>Turns on model reasoning (thinking) with one provider-neutral setting.
 It sets ModelRequest.Extra[&#34;kiln.thinking&#34;]; each model module maps it:
 
 	anthropic: thinking {type: adaptive} + output_config.effort
@@ -1885,7 +1848,7 @@ Config:
 	models:        only for these models, globs like &#34;anthropic:*&#34; (default all)
 
 A run can override the effort with RunState.Values[&#34;thinking_effort&#34;].</pre></details></div>
-<div class="builtin" id="module-hook_tool_errors"><div class="bhead"><code>hook_tool_errors</code><span class="bsum">wraps tool calls · no permissions</span></div><p>Controls what happens when a tool fails.</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModuleConfig(&#34;hook_tool_errors&#34;, map[string]any{
+<div class="builtin" id="module-hook_tool_errors"><div class="bhead"><code>hook_tool_errors</code><span class="bsum">wraps tool calls · no permissions</span></div><p>Controls what happens when a tool fails.</p><div class="code" data-title="example"><pre><code class="language-go">hook_tool_errors.New(map[string]any{
 	&#34;on_error&#34;: &#34;message&#34;,
 	&#34;template&#34;: &#34;{tool} failed: {error}. Try another way.&#34;,
 })</code></pre></div><details><summary>Config and details</summary><pre>Controls what happens when a tool fails.
@@ -1895,7 +1858,7 @@ Config:
 	on_error: &#34;message&#34; (default: tell the model) | &#34;raise&#34; (abort the run)
 	template: message template; {tool} and {error} are replaced
 	tools:    only these tools ([] = all)</pre></details></div>
-<div class="builtin" id="module-hook_tool_output_limit"><div class="bhead"><code>hook_tool_output_limit</code><span class="bsum">wraps tool calls · no permissions</span></div><p>Caps how much of a tool&#39;s result reaches the model. A longer result keeps its beginning and end, with a note of how much was cut, so one huge file or log can&#39;t fill the context window.</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModuleConfig(&#34;hook_tool_output_limit&#34;, map[string]any{
+<div class="builtin" id="module-hook_tool_output_limit"><div class="bhead"><code>hook_tool_output_limit</code><span class="bsum">wraps tool calls · no permissions</span></div><p>Caps how much of a tool&#39;s result reaches the model. A longer result keeps its beginning and end, with a note of how much was cut, so one huge file or log can&#39;t fill the context window.</p><div class="code" data-title="example"><pre><code class="language-go">hook_tool_output_limit.New(map[string]any{
 	&#34;max_chars&#34;: 10000,
 	&#34;tools&#34;:     map[string]any{&#34;read_file&#34;: 40000},
 })</code></pre></div><details><summary>Config and details</summary><pre>Caps how much of a tool&#39;s result reaches the model. A longer result
@@ -1926,7 +1889,7 @@ import (
 // Config: block (tool names to refuse).
 var Module = engine.Module{Name: "timing", Provides: nil, Apply: Apply}
 
-func Apply(p *sdk.Module) error {
+func Apply(p *sdk.Scope) error {
 	blocked := map[string]bool{}
 	for _, t := range p.ConfigStrings(&#34;block&#34;) {
 		blocked[t] = true
@@ -1970,18 +1933,18 @@ func Apply(p *sdk.Module) error {
     <li><b>Load one yourself</b> to configure it: a different base URL (vLLM, LM Studio, a proxy), a key from <code>secrets_vault</code>, or several providers to switch between per run.</li>
     <li><b>Write one</b> for an API that isn't OpenAI-, Anthropic- or Gemini-compatible.</li>
   </ul>
-  <div class="code" data-title="go"><pre><code class="language-go">kiln.WithModuleConfig("model_openai", map[string]any{
+  <div class="code" data-title="go"><pre><code class="language-go">model_openai.New(map[string]any{
 	"name":     "vllm",                           // model strings "vllm:…"
 	"base_url": "http://gpu-box:8000/v1",
 	"api_key":  "secret://VLLM_TOKEN",
 })
-agent.Generate(ctx, "hi", kiln.Model("vllm:qwen3-32b"))</code></pre></div>
+agent.Generate(ctx, "hi", kiln.Run{Model: "vllm:qwen3-32b"})</code></pre></div>
   <h2>Built-in model modules</h2>
   <!-- gen:builtins models -->
 <div class="builtins">
-<div class="builtin" id="module-model_anthropic"><div class="bhead"><code>model_anthropic</code><span class="bsum">provides model/&lt;name&gt; · requires ?secrets · permissions net</span></div><p>Anthropic Messages API adapter, provided as &#34;model/&lt;name&gt;&#34;.</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModel(&#34;anthropic:claude-sonnet-5-5&#34;) // loads model_anthropic by itself
+<div class="builtin" id="module-model_anthropic"><div class="bhead"><code>model_anthropic</code><span class="bsum">provides model/&lt;name&gt; · requires ?secrets · permissions net</span></div><p>Anthropic Messages API adapter, provided as &#34;model/&lt;name&gt;&#34;.</p><div class="code" data-title="example"><pre><code class="language-go">kiln.Config{Model: &#34;anthropic:claude-sonnet-5-5&#34;} // loads model_anthropic by itself
 // A proxy, another key or a bigger output limit:
-kiln.WithModuleConfig(&#34;model_anthropic&#34;, map[string]any{
+model_anthropic.New(map[string]any{
 	&#34;base_url&#34;:   &#34;https://anthropic-proxy.internal&#34;,
 	&#34;api_key&#34;:    &#34;secret://ANTHROPIC_KEY_TEAM_A&#34;,
 	&#34;max_tokens&#34;: 16000,
@@ -1998,8 +1961,8 @@ Config:
 
 Structured output uses a tool named after the schema; when the model
 calls it, its input becomes the reply text.</pre></details></div>
-<div class="builtin" id="module-model_gemini"><div class="bhead"><code>model_gemini</code><span class="bsum">provides model/&lt;name&gt; · requires ?secrets · permissions net</span></div><p>Google Gemini adapter (generateContent / streamGenerateContent), provided as &#34;model/&lt;name&gt;&#34;.</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModel(&#34;gemini:gemini-2.5-pro&#34;) // loads model_gemini by itself
-kiln.WithModuleConfig(&#34;model_gemini&#34;, map[string]any{&#34;api_key&#34;: &#34;secret://GEMINI_KEY_TEAM_A&#34;})</code></pre></div><details><summary>Config and details</summary><pre>Google Gemini adapter (generateContent / streamGenerateContent),
+<div class="builtin" id="module-model_gemini"><div class="bhead"><code>model_gemini</code><span class="bsum">provides model/&lt;name&gt; · requires ?secrets · permissions net</span></div><p>Google Gemini adapter (generateContent / streamGenerateContent), provided as &#34;model/&lt;name&gt;&#34;.</p><div class="code" data-title="example"><pre><code class="language-go">kiln.Config{Model: &#34;gemini:gemini-2.5-pro&#34;} // loads model_gemini by itself
+model_gemini.New(map[string]any{&#34;api_key&#34;: &#34;secret://GEMINI_KEY_TEAM_A&#34;})</code></pre></div><details><summary>Config and details</summary><pre>Google Gemini adapter (generateContent / streamGenerateContent),
 provided as &#34;model/&lt;name&gt;&#34;.
 
 Config:
@@ -2008,8 +1971,8 @@ Config:
 	base_url: default https://generativelanguage.googleapis.com/v1beta
 	api_key:  literal or secret://NAME (default secret://GEMINI_API_KEY)
 	allow_insecure: allow a non-loopback http base_url with an api_key</pre></details></div>
-<div class="builtin" id="module-model_mock"><div class="bhead"><code>model_mock</code><span class="bsum">provides model/&lt;name&gt; · no permissions</span></div><p>A deterministic fake LLM for tests and offline demos, provided as &#34;model/mock&#34; (model string &#34;mock:anything&#34;).</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModel(&#34;mock:demo&#34;)
-kiln.WithModuleConfig(&#34;model_mock&#34;, map[string]any{&#34;script&#34;: []any{
+<div class="builtin" id="module-model_mock"><div class="bhead"><code>model_mock</code><span class="bsum">provides model/&lt;name&gt; · no permissions</span></div><p>A deterministic fake LLM for tests and offline demos, provided as &#34;model/mock&#34; (model string &#34;mock:anything&#34;).</p><div class="code" data-title="example"><pre><code class="language-go">kiln.Config{Model: &#34;mock:demo&#34;}
+model_mock.New(map[string]any{&#34;script&#34;: []any{
 	map[string]any{&#34;tool&#34;: &#34;weather&#34;, &#34;args&#34;: map[string]any{&#34;city&#34;: &#34;Lisbon&#34;}},
 	map[string]any{&#34;text&#34;: &#34;Bring an umbrella.&#34;},
 }})</code></pre></div><details><summary>Config and details</summary><pre>A deterministic fake LLM for tests and offline demos, provided as
@@ -2024,9 +1987,9 @@ Config:
 
 Heuristics: replies to a tool result by echoing it; &#34;time&#34; calls
 current_time; &#34;remember X&#34; calls remember; &#34;recall&#34; calls recall.</pre></details></div>
-<div class="builtin" id="module-model_openai"><div class="bhead"><code>model_openai</code><span class="bsum">provides model/&lt;name&gt; · requires ?secrets · permissions net</span></div><p>OpenAI-compatible chat completions adapter: OpenAI, DeepSeek, Ollama, vLLM, OpenRouter, Groq... Provided as &#34;model/&lt;name&gt;&#34;.</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModel(&#34;openai:gpt-4.1&#34;) // also deepseek:, ollama:, openrouter:, groq:
+<div class="builtin" id="module-model_openai"><div class="bhead"><code>model_openai</code><span class="bsum">provides model/&lt;name&gt; · requires ?secrets · permissions net</span></div><p>OpenAI-compatible chat completions adapter: OpenAI, DeepSeek, Ollama, vLLM, OpenRouter, Groq... Provided as &#34;model/&lt;name&gt;&#34;.</p><div class="code" data-title="example"><pre><code class="language-go">kiln.Config{Model: &#34;openai:gpt-4.1&#34;} // also deepseek:, ollama:, openrouter:, groq:
 // Any other OpenAI-compatible server, e.g. vLLM, then WithModel(&#34;vllm:qwen3-32b&#34;):
-kiln.WithModuleConfig(&#34;model_openai&#34;, map[string]any{&#34;name&#34;: &#34;vllm&#34;, &#34;base_url&#34;: &#34;http://gpu-box:8000/v1&#34;, &#34;api_key&#34;: &#34;&#34;})</code></pre></div><details><summary>Config and details</summary><pre>OpenAI-compatible chat completions adapter: OpenAI, DeepSeek, Ollama,
+model_openai.New(map[string]any{&#34;name&#34;: &#34;vllm&#34;, &#34;base_url&#34;: &#34;http://gpu-box:8000/v1&#34;, &#34;api_key&#34;: &#34;&#34;})</code></pre></div><details><summary>Config and details</summary><pre>OpenAI-compatible chat completions adapter: OpenAI, DeepSeek, Ollama,
 vLLM, OpenRouter, Groq... Provided as &#34;model/&lt;name&gt;&#34;.
 
 Config:
@@ -2070,7 +2033,7 @@ var Requires = []string{&#34;?secrets&#34;}
 
 var Module = engine.Module{Name: "acme", Requires: Requires, Provides: []string{"model/acme"}, Permissions: Permissions, Apply: Apply}
 
-func Apply(p *sdk.Module) error {
+func Apply(p *sdk.Scope) error {
 	base := strings.TrimRight(p.ConfigString(&#34;base_url&#34;, &#34;&#34;), &#34;/&#34;)
 	if base == &#34;&#34; {
 		return fmt.Errorf(&#34;acme: config base_url is required&#34;)
@@ -2165,7 +2128,7 @@ for k, v := range req.Extra {
   <ul>
     <li><b>Resolve the key per call</b> (<code>p.Secret</code> inside <code>Generate</code>), so rotated keys are picked up.</li>
     <li><b>Return <code>sdk.NewProviderError(name, status, body)</code></b> for HTTP failures. <code>hook_retry</code> and <code>hook_fallback</code> use it to tell transient errors (429, 5xx) apart.</li>
-    <li><b>Keys stay on the host.</b> With <code>WithRunIn</code>, providers always run on the host and the sandbox calls them back. Other secrets reach the sandbox only as placeholders (<a href="#runin-secrets">how</a>).</li>
+    <li><b>Keys stay on the host.</b> With <code>Config.RunIn</code>, providers always run on the host and the sandbox calls them back. Other secrets reach the sandbox only as placeholders (<a href="#runin-secrets">how</a>).</li>
   </ul>
 </section>
 
@@ -2183,43 +2146,43 @@ for k, v := range req.Extra {
   </table></div>
   <h2>When to use what</h2>
   <ul>
-    <li><b>One process, keep data across restarts:</b> <code>WithPersistence("file", dir)</code>.</li>
-    <li><b>Several replicas, or approvals resumed on another server:</b> <code>WithPersistence("postgres", "secret://DATABASE_URL")</code> and <code>import _ "github.com/ganeshdipdumbare/kiln/drivers/postgres"</code>. Any replica serves any thread; concurrent writes get <code>ErrThreadBusy</code> instead of overwriting.</li>
+    <li><b>One process, keep data across restarts:</b> <code>kiln.Persistence("file", dir)</code>.</li>
+    <li><b>Several replicas, or approvals resumed on another server:</b> <code>kiln.Persistence("postgres", "secret://DATABASE_URL")</code> and <code>import _ "github.com/ganeshdipdumbare/kiln/drivers/postgres"</code>. Any replica serves any thread; concurrent writes get <code>ErrThreadBusy</code> instead of overwriting.</li>
     <li><b>Memory the model manages itself:</b> add <code>tool_memory</code>.</li>
   </ul>
   <h2>Built-in modules</h2>
   <!-- gen:builtins threads-memory -->
 <div class="builtins">
 <div class="builtin" id="module-db_sql"><div class="bhead"><code>db_sql</code><span class="bsum">provides services named at runtime · permissions db</span></div><p>A shared database/sql pool, provided as &#34;db&#34; (or &#34;db/&lt;name&gt;&#34;). The driver must be linked into the host binary, e.g.</p><div class="code" data-title="example"><pre><code class="language-go">// import _ &#34;github.com/ganeshdipdumbare/kiln/drivers/postgres&#34;
-kiln.WithModuleConfig(&#34;db_sql&#34;, map[string]any{&#34;dsn&#34;: &#34;secret://DATABASE_URL&#34;, &#34;max_open&#34;: 20})</code></pre></div><details><summary>Config and details</summary><pre>A shared database/sql pool, provided as &#34;db&#34; (or &#34;db/&lt;name&gt;&#34;). The
+db_sql.New(map[string]any{&#34;dsn&#34;: &#34;secret://DATABASE_URL&#34;, &#34;max_open&#34;: 20})</code></pre></div><details><summary>Config and details</summary><pre>A shared database/sql pool, provided as &#34;db&#34; (or &#34;db/&lt;name&gt;&#34;). The
 driver must be linked into the host binary, e.g.
 
 	import _ &#34;kiln/drivers/postgres&#34; // registers &#34;pgx&#34;
 
 Config: driver (default &#34;pgx&#34;), dsn (literal or secret://NAME),
 name (service suffix), max_open (10), max_idle (5).</pre></details></div>
-<div class="builtin" id="module-memory_file"><div class="bhead"><code>memory_file</code><span class="bsum">provides memory · permissions fs:read, fs:write</span></div><p>Long-term store kept in one JSON file, provided as &#34;memory&#34;. Good for single-node and development use; use memory_sql for shared storage.</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModuleConfig(&#34;memory_file&#34;, map[string]any{&#34;path&#34;: &#34;.kiln/memory.json&#34;})
-kiln.WithModules(&#34;tool_memory&#34;) // lets the model remember and recall</code></pre></div><details><summary>Config and details</summary><pre>Long-term store kept in one JSON file, provided as &#34;memory&#34;. Good for
+<div class="builtin" id="module-memory_file"><div class="bhead"><code>memory_file</code><span class="bsum">provides memory · permissions fs:read, fs:write</span></div><p>Long-term store kept in one JSON file, provided as &#34;memory&#34;. Good for single-node and development use; use memory_sql for shared storage.</p><div class="code" data-title="example"><pre><code class="language-go">memory_file.New(map[string]any{&#34;path&#34;: &#34;.kiln/memory.json&#34;})
+kiln.Config{Modules: []kiln.Module{tool_memory.New()}} // lets the model remember and recall</code></pre></div><details><summary>Config and details</summary><pre>Long-term store kept in one JSON file, provided as &#34;memory&#34;. Good for
 single-node and development use; use memory_sql for shared storage.
 
 Config: path (default &#34;.kiln/store.json&#34;).</pre></details></div>
-<div class="builtin" id="module-memory_inmem"><div class="bhead"><code>memory_inmem</code><span class="bsum">provides memory · no permissions</span></div><p>In-memory long-term memory, provided as &#34;memory&#34;.</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModules(&#34;memory_inmem&#34;, &#34;tool_memory&#34;) // lost on exit</code></pre></div></div>
-<div class="builtin" id="module-memory_sql"><div class="bhead"><code>memory_sql</code><span class="bsum">provides memory · uses db · requires db · permissions db</span></div><p>Postgres long-term memory over the &#34;db&#34; service, provided as &#34;memory&#34;. Search is a case-insensitive substring match over keys and values.</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModuleConfig(&#34;db_sql&#34;, map[string]any{&#34;dsn&#34;: &#34;secret://DATABASE_URL&#34;})
-kiln.WithModuleConfig(&#34;memory_sql&#34;, map[string]any{&#34;table&#34;: &#34;agent_memory&#34;})
-// Shortcut with threads_sql too: kiln.WithPersistence(&#34;postgres&#34;, &#34;secret://DATABASE_URL&#34;)</code></pre></div><details><summary>Config and details</summary><pre>Postgres long-term memory over the &#34;db&#34; service, provided as &#34;memory&#34;.
+<div class="builtin" id="module-memory_inmem"><div class="bhead"><code>memory_inmem</code><span class="bsum">provides memory · no permissions</span></div><p>In-memory long-term memory, provided as &#34;memory&#34;.</p><div class="code" data-title="example"><pre><code class="language-go">kiln.Config{Modules: []kiln.Module{memory_inmem.New(), tool_memory.New()}} // lost on exit</code></pre></div></div>
+<div class="builtin" id="module-memory_sql"><div class="bhead"><code>memory_sql</code><span class="bsum">provides memory · uses db · requires db · permissions db</span></div><p>Postgres long-term memory over the &#34;db&#34; service, provided as &#34;memory&#34;. Search is a case-insensitive substring match over keys and values.</p><div class="code" data-title="example"><pre><code class="language-go">db_sql.New(map[string]any{&#34;dsn&#34;: &#34;secret://DATABASE_URL&#34;})
+memory_sql.New(map[string]any{&#34;table&#34;: &#34;agent_memory&#34;})
+// Shortcut with threads_sql too: kiln.Persistence(&#34;postgres&#34;, &#34;secret://DATABASE_URL&#34;)</code></pre></div><details><summary>Config and details</summary><pre>Postgres long-term memory over the &#34;db&#34; service, provided as &#34;memory&#34;.
 Search is a case-insensitive substring match over keys and values.
 
 Config: table (default &#34;eip_store&#34;).</pre></details></div>
-<div class="builtin" id="module-threads_file"><div class="bhead"><code>threads_file</code><span class="bsum">provides threads · permissions fs:read, fs:write</span></div><p>Thread storage keeping one JSON file per thread, provided as &#34;threads&#34;. Safe across processes on one machine (lock files).</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModuleConfig(&#34;threads_file&#34;, map[string]any{&#34;dir&#34;: &#34;.kiln/threads&#34;})
-// Shortcut with memory_file too: kiln.WithPersistence(&#34;file&#34;, &#34;.kiln&#34;)</code></pre></div><details><summary>Config and details</summary><pre>Thread storage keeping one JSON file per thread, provided as
+<div class="builtin" id="module-threads_file"><div class="bhead"><code>threads_file</code><span class="bsum">provides threads · permissions fs:read, fs:write</span></div><p>Thread storage keeping one JSON file per thread, provided as &#34;threads&#34;. Safe across processes on one machine (lock files).</p><div class="code" data-title="example"><pre><code class="language-go">threads_file.New(map[string]any{&#34;dir&#34;: &#34;.kiln/threads&#34;})
+// Shortcut with memory_file too: kiln.Persistence(&#34;file&#34;, &#34;.kiln&#34;)</code></pre></div><details><summary>Config and details</summary><pre>Thread storage keeping one JSON file per thread, provided as
 &#34;threads&#34;. Safe across processes on one machine (lock files).
 
 Config: dir (default &#34;.kiln/threads&#34;).</pre></details></div>
-<div class="builtin" id="module-threads_inmem"><div class="bhead"><code>threads_inmem</code><span class="bsum">provides threads · no permissions</span></div><p>In-memory thread storage, provided as &#34;threads&#34;. State is deep-copied (via JSON) so callers can&#39;t mutate stored history.</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModules(&#34;threads_inmem&#34;) // the default; lost on exit</code></pre></div><details><summary>Config and details</summary><pre>In-memory thread storage, provided as &#34;threads&#34;. State is
+<div class="builtin" id="module-threads_inmem"><div class="bhead"><code>threads_inmem</code><span class="bsum">provides threads · no permissions</span></div><p>In-memory thread storage, provided as &#34;threads&#34;. State is deep-copied (via JSON) so callers can&#39;t mutate stored history.</p><div class="code" data-title="example"><pre><code class="language-go">kiln.Config{Modules: []kiln.Module{threads_inmem.New()}} // the default; lost on exit</code></pre></div><details><summary>Config and details</summary><pre>In-memory thread storage, provided as &#34;threads&#34;. State is
 deep-copied (via JSON) so callers can&#39;t mutate stored history.</pre></details></div>
-<div class="builtin" id="module-threads_sql"><div class="bhead"><code>threads_sql</code><span class="bsum">provides threads · uses db · requires db · permissions db</span></div><p>Postgres thread storage over the &#34;db&#34; service, provided as &#34;threads&#34;. Optimistic versioning lets many stateless replicas share threads safely. The table is created on first load.</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModuleConfig(&#34;db_sql&#34;, map[string]any{&#34;dsn&#34;: &#34;secret://DATABASE_URL&#34;})
-kiln.WithModuleConfig(&#34;threads_sql&#34;, map[string]any{&#34;table&#34;: &#34;agent_threads&#34;})
-// Shortcut with memory_sql too: kiln.WithPersistence(&#34;postgres&#34;, &#34;secret://DATABASE_URL&#34;)</code></pre></div><details><summary>Config and details</summary><pre>Postgres thread storage over the &#34;db&#34; service, provided as
+<div class="builtin" id="module-threads_sql"><div class="bhead"><code>threads_sql</code><span class="bsum">provides threads · uses db · requires db · permissions db</span></div><p>Postgres thread storage over the &#34;db&#34; service, provided as &#34;threads&#34;. Optimistic versioning lets many stateless replicas share threads safely. The table is created on first load.</p><div class="code" data-title="example"><pre><code class="language-go">db_sql.New(map[string]any{&#34;dsn&#34;: &#34;secret://DATABASE_URL&#34;})
+threads_sql.New(map[string]any{&#34;table&#34;: &#34;agent_threads&#34;})
+// Shortcut with memory_sql too: kiln.Persistence(&#34;postgres&#34;, &#34;secret://DATABASE_URL&#34;)</code></pre></div><details><summary>Config and details</summary><pre>Postgres thread storage over the &#34;db&#34; service, provided as
 &#34;threads&#34;. Optimistic versioning lets many stateless replicas
 share threads safely. The table is created on first load.
 
@@ -2247,7 +2210,7 @@ import (
 // keeps items in memory; replace the map with your database.
 var Module = engine.Module{Name: "redis_memory", Provides: []string{"memory"}, Apply: Apply}
 
-func Apply(p *sdk.Module) error {
+func Apply(p *sdk.Scope) error {
 	var mu sync.Mutex
 	items := map[string]sdk.StoreItem{}
 	key := func(ns []string, k string) string { return strings.Join(ns, &#34;/&#34;) + &#34;#&#34; + k }
@@ -2311,10 +2274,7 @@ func Apply(p *sdk.Module) error {
     <li><b>The model creates its own sandboxes:</b> add <code>tool_sandbox</code>.</li>
     <li><b>The whole agent inside a sandbox</b>, secrets kept on the host:</li>
   </ul>
-  <div class="code" data-title="go"><pre><code class="language-go">agent, _ := kiln.New(
-	kiln.WithModel("openai:gpt-4.1"),
-	kiln.WithModules("tool_shell", "tool_fs", "github_issues"),
-	kiln.WithRunIn(kiln.RunIn{
+  <div class="code" data-title="go"><pre><code class="language-go">agent, _ := kiln.New(kiln.Config{Model: "openai:gpt-4.1", RunIn: &kiln.RunIn{
 		Provider: "docker",
 		Binary:   "./kiln-linux", // GOOS=linux go build -o kiln-linux ./cmd/kiln
 		// Where each secret's placeholder becomes the real value:
@@ -2324,13 +2284,12 @@ func Apply(p *sdk.Module) error {
 		Egress: []string{"GET proxy.golang.org"},
 		// Keep the audit log on the host, with a record of every request.
 		HostModules: []kiln.ModuleSpec{{Use: "audit_file"}},
-	}),
-)</code></pre></div>
+	}, Modules: []kiln.Module{tool_shell.New(), tool_fs.New(), github_issues.New()}})</code></pre></div>
   <h2 id="runin-secrets">Secrets in a sandboxed agent</h2>
-  <p>With <code>WithRunIn</code>, no secret value enters the sandbox: not through env vars, not through modules, and not through sandboxes the agent starts from inside it.</p>
+  <p>With <code>Config.RunIn</code>, no secret value enters the sandbox: not through env vars, not through modules, and not through sandboxes the agent starts from inside it.</p>
   <figure class="diagram">
     <div class="dg-scroll"><svg class="dg" viewBox="0 0 720 392" role="img" aria-labelledby="dg1-t dg1-d">
-      <title id="dg1-t">Where secrets live with WithRunIn</title>
+      <title id="dg1-t">Where secrets live with Config.RunIn</title>
       <desc id="dg1-d">The sandbox runs the agent and its modules and holds only placeholders. It has no network and one stdio stream to the host, which the host opened by connecting out to the sandbox service over TLS with its own key for that service. The host holds secrets and model keys, checks every request against its rules, swaps placeholders for real values only toward allowed destinations, refuses the rest and audits all of it.</desc>
       <defs>
         <marker id="dg1-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk" d="M0 0 10 5 0 10z"/></marker>
@@ -2419,7 +2378,7 @@ func Apply(p *sdk.Module) error {
   </table></div>
   <p>A bad rule stops <code>New</code> with an error, so a typo can't silently allow more than intended.</p>
   <h3>Audit</h3>
-  <p>Every request the box makes through the host is recorded as <code>sandbox.egress</code>: <code>decision</code> (<code>allowed</code> or <code>denied</code>), <code>method</code>, <code>host</code>, <code>path</code>, <code>status</code>, <code>ms</code>, the <code>secrets</code> it used (names, never values), and the <code>error</code> when it was refused or failed. The host also logs a line per request. Audit modules listed in the profile run in the box, so load <code>audit_file</code> or <code>audit_http</code> in <code>RunIn.HostModules</code> to keep these records on the host.</p>
+  <p>Every request the box makes through the host is recorded as <code>sandbox.egress</code>: <code>decision</code> (<code>allowed</code> or <code>denied</code>), <code>method</code>, <code>host</code>, <code>path</code>, <code>status</code>, <code>ms</code>, the <code>secrets</code> it used (names, never values), and the <code>error</code> when it was refused or failed. The host also logs a line per request. Audit modules listed in Config.Modules run in the box, so load <code>audit_file</code> or <code>audit_http</code> in <code>RunIn.HostModules</code> to keep these records on the host.</p>
   <ul>
     <li><b>Env is checked.</b> <code>RunIn.Spec</code> and every sandbox a module creates or runs a command in are refused if an env value holds a resolved secret, or a credential-looking name (<code>*_TOKEN</code>, <code>*_API_KEY</code>, <code>*PASSWORD*</code> …) has a value that isn't a placeholder.</li>
     <li><b>No way out to the host.</b> Mounts of <code>/</code> or a docker, podman or containerd socket are refused, so a box can't start containers outside these rules.</li>
@@ -2627,19 +2586,19 @@ func Apply(p *sdk.Module) error {
   <div class="note warn"><b>What it doesn't cover</b><div><p>Placeholders are swapped only in HTTP sent through Go's default transport. A module that needs the raw value in its own process (a database DSN, env for a stdio MCP server), or dials with its own transport like <code>tool_fetch</code>, can't use a secret inside the box: load it on the host with <code>RunIn.HostModules</code>. The host takes the box's word for which of its modules is asking, so grants between modules in the same box are only as strong as the box; a placeholder is still useless outside its <code>SecretHosts</code>. On the host without a sandbox, the agent already has the host's access, so none of this applies.</p></div></div>
   <h3>Run it on a self-hosted microVM</h3>
   <p><a href="https://firecracker-microvm.github.io/">Firecracker</a> is the microVM monitor behind AWS Lambda. <a href="https://github.com/ganeshdipdumbare/kiln/blob/main/examples/firecracker"><code>examples/firecracker</code></a> is a complete <code>sdk.SandboxProvider</code> that creates a tap device, boots a local microVM through the Firecracker API, connects to it over SSH, and runs the agent inside it. It is the same provider shape a hosted service would use, but self-hosted and free:</p>
-  <div class="code" data-title="go"><pre><code class="language-go">agent, _ := kiln.New(
-	kiln.WithModule(firecracker()), // examples/firecracker/provider.go
-	kiln.WithModules("tool_shell"),
-	kiln.WithRunIn(kiln.RunIn{
+  <div class="code" data-title="go"><pre><code class="language-go">agent, _ := kiln.New(kiln.Config{
+	Model:   "openai:gpt-4.1",
+	Modules: []kiln.Module{firecracker()}, // examples/firecracker/provider.go
+	RunIn: &kiln.RunIn{
 		Provider: "firecracker",
 		Binary:   "./kiln-linux", // GOOS=linux GOARCH=arm64 (or amd64) go build -o kiln-linux ./cmd/kiln
 		Spec:     sdk.SandboxSpec{CPUs: 1, MemoryMB: 512, Network: sdk.NetworkPolicy{Mode: "none"}},
-	}),
-)</code></pre></div>
+	},
+})</code></pre></div>
   <p>It needs Linux with <code>/dev/kvm</code> and passwordless <code>sudo -n</code>. The README shows the same setup inside a Lima VM with nested virtualization on Apple Silicon. The host keeps the model and secret values; the microVM gets only placeholders, and every request is recorded as <code>sandbox.egress</code>.</p>
   <h3>The same flow on a hosted service</h3>
   <p>The host/sandbox split does not depend on who owns the machines. Firecracker is the runnable stand-in; with a hosted provider, only the provider module changes:</p>
-  <div class="code" data-title="go"><pre><code class="language-go">kiln.WithRunIn(kiln.RunIn{
+  <div class="code" data-title="go"><pre><code class="language-go">kiln.Config.RunIn(kiln.RunIn{
 	Provider: "your_hosted_provider", // E2B, microsandbox cloud, Kubernetes...
 	Binary:   "./kiln-linux",
 	SecretHosts: map[string][]string{
@@ -2651,17 +2610,17 @@ func Apply(p *sdk.Module) error {
   <h2>Built-in modules</h2>
   <!-- gen:builtins sandboxes -->
 <div class="builtins">
-<div class="builtin" id="module-sandbox_docker"><div class="bhead"><code>sandbox_docker</code><span class="bsum">provides sandbox/&lt;name&gt; · permissions exec</span></div><p>Container sandboxes through the docker (or podman) CLI, provided as &#34;sandbox/docker&#34;. Containers run with no network by default, a read-only root filesystem off, dropped capabilities and no new privileges.</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModuleConfig(&#34;sandbox_docker&#34;, map[string]any{&#34;image&#34;: &#34;python:3.12-slim&#34;, &#34;pids_limit&#34;: 128})
-kiln.WithModules(&#34;workspace_sandbox&#34;, &#34;tool_shell&#34;, &#34;tool_fs&#34;)
-// Shortcut: kiln.WithSandbox(&#34;docker&#34;)</code></pre></div><details><summary>Config and details</summary><pre>Container sandboxes through the docker (or podman) CLI, provided as
+<div class="builtin" id="module-sandbox_docker"><div class="bhead"><code>sandbox_docker</code><span class="bsum">provides sandbox/&lt;name&gt; · permissions exec</span></div><p>Container sandboxes through the docker (or podman) CLI, provided as &#34;sandbox/docker&#34;. Containers run with no network by default, a read-only root filesystem off, dropped capabilities and no new privileges.</p><div class="code" data-title="example"><pre><code class="language-go">sandbox_docker.New(map[string]any{&#34;image&#34;: &#34;python:3.12-slim&#34;, &#34;pids_limit&#34;: 128})
+kiln.Config{Modules: []kiln.Module{workspace_sandbox.New(), tool_shell.New(), tool_fs.New()}}
+// Shortcut: kiln.Sandbox(&#34;docker&#34;)</code></pre></div><details><summary>Config and details</summary><pre>Container sandboxes through the docker (or podman) CLI, provided as
 &#34;sandbox/docker&#34;. Containers run with no network by default, a
 read-only root filesystem off, dropped capabilities and no new
 privileges.
 
 Config: binary (&#34;docker&#34;), image (&#34;alpine:3&#34;), name (&#34;docker&#34;),
 pids_limit (256), extra_args ([]).</pre></details></div>
-<div class="builtin" id="module-sandbox_local"><div class="bhead"><code>sandbox_local</code><span class="bsum">provides sandbox/local · permissions exec, fs:read, fs:write, env</span></div><p>Host &#34;sandbox&#34;: commands run as host processes inside a workdir, file access is confined to that workdir, and only allowlisted env vars are passed. NO isolation (Isolation &#34;none&#34;): for development, or when the whole agent already runs inside a sandbox. Provided as &#34;sandbox/local&#34;.</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModuleConfig(&#34;sandbox_local&#34;, map[string]any{&#34;workdir&#34;: &#34;.&#34;}) // no isolation: this project folder
-kiln.WithModules(&#34;workspace_local&#34;, &#34;tool_shell&#34;, &#34;tool_fs&#34;)</code></pre></div><details><summary>Config and details</summary><pre>Host &#34;sandbox&#34;: commands run as host processes inside a workdir, file
+<div class="builtin" id="module-sandbox_local"><div class="bhead"><code>sandbox_local</code><span class="bsum">provides sandbox/local · permissions exec, fs:read, fs:write, env</span></div><p>Host &#34;sandbox&#34;: commands run as host processes inside a workdir, file access is confined to that workdir, and only allowlisted env vars are passed. NO isolation (Isolation &#34;none&#34;): for development, or when the whole agent already runs inside a sandbox. Provided as &#34;sandbox/local&#34;.</p><div class="code" data-title="example"><pre><code class="language-go">sandbox_local.New(map[string]any{&#34;workdir&#34;: &#34;.&#34;}) // no isolation: this project folder
+kiln.Config{Modules: []kiln.Module{workspace_local.New(), tool_shell.New(), tool_fs.New()}}</code></pre></div><details><summary>Config and details</summary><pre>Host &#34;sandbox&#34;: commands run as host processes inside a workdir, file
 access is confined to that workdir, and only allowlisted env vars are
 passed. NO isolation (Isolation &#34;none&#34;): for development, or when the
 whole agent already runs inside a sandbox. Provided as &#34;sandbox/local&#34;.
@@ -2671,9 +2630,9 @@ directory instead of one per sandbox: every thread then shares it and
 its files outlive sandbox_destroy, so use it only for a single user&#39;s
 own workspace), env_allow ([&#34;PATH&#34;,&#34;HOME&#34;,&#34;LANG&#34;]; secret-looking
 names are refused unless env_secrets: true is set explicitly).</pre></details></div>
-<div class="builtin" id="module-sandbox_microsandbox"><div class="bhead"><code>sandbox_microsandbox</code><span class="bsum">provides sandbox/&lt;name&gt; · permissions exec</span></div><p>MicroVM sandboxes through the microsandbox CLI (msb), provided as &#34;sandbox/microsandbox&#34;. Each sandbox is its own lightweight VM with its own kernel, so it is a stronger boundary than a container. Sandboxes have no network by default; allowlist mode turns hosts into msb network rules.</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModuleConfig(&#34;sandbox_microsandbox&#34;, map[string]any{&#34;image&#34;: &#34;python&#34;})
-kiln.WithModuleConfig(&#34;workspace_sandbox&#34;, map[string]any{&#34;provider&#34;: &#34;microsandbox&#34;})
-kiln.WithModules(&#34;tool_shell&#34;, &#34;tool_fs&#34;)</code></pre></div><details><summary>Config and details</summary><pre>MicroVM sandboxes through the microsandbox CLI (msb), provided as
+<div class="builtin" id="module-sandbox_microsandbox"><div class="bhead"><code>sandbox_microsandbox</code><span class="bsum">provides sandbox/&lt;name&gt; · permissions exec</span></div><p>MicroVM sandboxes through the microsandbox CLI (msb), provided as &#34;sandbox/microsandbox&#34;. Each sandbox is its own lightweight VM with its own kernel, so it is a stronger boundary than a container. Sandboxes have no network by default; allowlist mode turns hosts into msb network rules.</p><div class="code" data-title="example"><pre><code class="language-go">sandbox_microsandbox.New(map[string]any{&#34;image&#34;: &#34;python&#34;})
+workspace_sandbox.New(map[string]any{&#34;provider&#34;: &#34;microsandbox&#34;})
+kiln.Config{Modules: []kiln.Module{tool_shell.New(), tool_fs.New()}}</code></pre></div><details><summary>Config and details</summary><pre>MicroVM sandboxes through the microsandbox CLI (msb), provided as
 &#34;sandbox/microsandbox&#34;. Each sandbox is its own lightweight VM with its
 own kernel, so it is a stronger boundary than a container. Sandboxes
 have no network by default; allowlist mode turns hosts into msb
@@ -2685,18 +2644,18 @@ extra_args ([]).
 To run on microsandbox cloud (private beta), set MSB_BACKEND=cloud and
 MSB_API_KEY in the host environment, or select a cloud profile with
 MSB_PROFILE. The same provider and msb CLI then create cloud sandboxes.</pre></details></div>
-<div class="builtin" id="module-workspace_local"><div class="bhead"><code>workspace_local</code><span class="bsum">provides workspace · uses sandbox/local · requires sandbox/local · no permissions</span></div><p>Shell and file tools act on the host, in one workspace directory (via sandbox/local). Provided as &#34;workspace&#34;. Use workspace_sandbox instead to move every shell/fs tool into isolated sandboxes.</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModuleConfig(&#34;sandbox_local&#34;, map[string]any{&#34;workdir&#34;: &#34;.&#34;})
-kiln.WithModules(&#34;workspace_local&#34;, &#34;tool_shell&#34;, &#34;tool_fs&#34;)</code></pre></div><details><summary>Config and details</summary><pre>Shell and file tools act on the host, in one workspace directory
+<div class="builtin" id="module-workspace_local"><div class="bhead"><code>workspace_local</code><span class="bsum">provides workspace · uses sandbox/local · requires sandbox/local · no permissions</span></div><p>Shell and file tools act on the host, in one workspace directory (via sandbox/local). Provided as &#34;workspace&#34;. Use workspace_sandbox instead to move every shell/fs tool into isolated sandboxes.</p><div class="code" data-title="example"><pre><code class="language-go">sandbox_local.New(map[string]any{&#34;workdir&#34;: &#34;.&#34;})
+kiln.Config{Modules: []kiln.Module{workspace_local.New(), tool_shell.New(), tool_fs.New()}}</code></pre></div><details><summary>Config and details</summary><pre>Shell and file tools act on the host, in one workspace directory
 (via sandbox/local). Provided as &#34;workspace&#34;. Use workspace_sandbox instead to
 move every shell/fs tool into isolated sandboxes.
 
 Load sandbox_local with config {workdir: &#34;.&#34;} to work in a project.</pre></details></div>
-<div class="builtin" id="module-workspace_sandbox"><div class="bhead"><code>workspace_sandbox</code><span class="bsum">runs at run start · runs at run end · provides workspace · runs background work · requires sandbox/* · no permissions</span></div><p>Shell and file tools act in a sandbox, one per thread, created lazily on first use and re-attached when a thread resumes in a new process. Provided as &#34;workspace&#34;.</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModuleConfig(&#34;workspace_sandbox&#34;, map[string]any{
+<div class="builtin" id="module-workspace_sandbox"><div class="bhead"><code>workspace_sandbox</code><span class="bsum">runs at run start · runs at run end · provides workspace · runs background work · requires sandbox/* · no permissions</span></div><p>Shell and file tools act in a sandbox, one per thread, created lazily on first use and re-attached when a thread resumes in a new process. Provided as &#34;workspace&#34;.</p><div class="code" data-title="example"><pre><code class="language-go">workspace_sandbox.New(map[string]any{
 	&#34;provider&#34;:         &#34;docker&#34;,
 	&#34;image&#34;:            &#34;python:3.12-slim&#34;,
 	&#34;idle_ttl_seconds&#34;: 900,
 })
-kiln.WithModules(&#34;sandbox_docker&#34;, &#34;tool_shell&#34;, &#34;tool_fs&#34;)</code></pre></div><details><summary>Config and details</summary><pre>Shell and file tools act in a sandbox, one per thread, created lazily
+kiln.Config{Modules: []kiln.Module{sandbox_docker.New(), tool_shell.New(), tool_fs.New()}}</code></pre></div><details><summary>Config and details</summary><pre>Shell and file tools act in a sandbox, one per thread, created lazily
 on first use and re-attached when a thread resumes in a new process.
 Provided as &#34;workspace&#34;.
 
@@ -2738,7 +2697,7 @@ var Permissions = []string{&#34;net&#34;}
 
 var Requires = []string{&#34;?secrets&#34;}
 
-func api(p *sdk.Module, c context.Context, method, url, tokenRef string, in, out any) error {
+func api(p *sdk.Scope, c context.Context, method, url, tokenRef string, in, out any) error {
 	var body io.Reader
 	if in != nil {
 		b, _ := json.Marshal(in)
@@ -2767,7 +2726,7 @@ func api(p *sdk.Module, c context.Context, method, url, tokenRef string, in, out
 	return nil
 }
 
-func open(p *sdk.Module, base, tokenRef, id string) *sdk.Sandbox {
+func open(p *sdk.Scope, base, tokenRef, id string) *sdk.Sandbox {
 	return &amp;sdk.Sandbox{
 		ID:       id,
 		Provider: &#34;firecracker&#34;,
@@ -2792,7 +2751,7 @@ func open(p *sdk.Module, base, tokenRef, id string) *sdk.Sandbox {
 
 var Module = engine.Module{Name: "firecracker", Requires: Requires, Provides: []string{"sandbox/firecracker"}, Permissions: Permissions, Apply: Apply}
 
-func Apply(p *sdk.Module) error {
+func Apply(p *sdk.Scope) error {
 	base := strings.TrimRight(p.ConfigString(&#34;url&#34;, &#34;&#34;), &#34;/&#34;)
 	if base == &#34;&#34; {
 		return fmt.Errorf(&#34;firecracker: config url is required&#34;)
@@ -2835,17 +2794,17 @@ func Apply(p *sdk.Module) error {
     <li><b>From a webhook</b> (GitHub, Stripe, your own systems): <code>trigger_webhook</code>. Every request must be HMAC-signed.</li>
     <li><b>From anything else</b> (Kafka, SQS, email): write one.</li>
   </ul>
-  <div class="code" data-title="go"><pre><code class="language-go">kiln.WithModuleConfig("trigger_schedule", map[string]any{"jobs": []any{
+  <div class="code" data-title="go"><pre><code class="language-go">trigger_schedule.New(map[string]any{"jobs": []any{
 	map[string]any{"name": "weekly-report", "schedule": "weekly fri 17:00",
 		"prompt": "Summarize this week's tickets", "user": "ops"},
 }})
-kiln.WithModuleConfig("trigger_webhook", map[string]any{"routes": []any{
+trigger_webhook.New(map[string]any{"routes": []any{
 	map[string]any{"path": "/github", "secret": "secret://GH_WEBHOOK_TOKEN", "thread": "gh-{repository.full_name}"},
 }})</code></pre></div>
   <h2>Built-in modules</h2>
   <!-- gen:builtins triggers -->
 <div class="builtins">
-<div class="builtin" id="module-trigger_schedule"><div class="bhead"><code>trigger_schedule</code><span class="bsum">adds 3 tools (schedule_cancel, schedule_create, schedule_list) · provides jobs · runs background work · uses agent, memory · requires agent, ?memory · no permissions</span></div><p>Scheduled and background agent runs. Gives the model schedule_create, schedule_list and schedule_cancel tools. Each job runs a prompt on its own thread. Job definitions persist in &#34;memory&#34; when one is loaded.</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModuleConfig(&#34;trigger_schedule&#34;, map[string]any{
+<div class="builtin" id="module-trigger_schedule"><div class="bhead"><code>trigger_schedule</code><span class="bsum">adds 3 tools (schedule_cancel, schedule_create, schedule_list) · provides jobs · runs background work · uses agent, memory · requires agent, ?memory · no permissions</span></div><p>Scheduled and background agent runs. Gives the model schedule_create, schedule_list and schedule_cancel tools. Each job runs a prompt on its own thread. Job definitions persist in &#34;memory&#34; when one is loaded.</p><div class="code" data-title="example"><pre><code class="language-go">trigger_schedule.New(map[string]any{
 	&#34;timezone&#34;: &#34;Europe/Berlin&#34;,
 	&#34;jobs&#34;: []any{map[string]any{&#34;name&#34;: &#34;daily-digest&#34;, &#34;schedule&#34;: &#34;daily 09:00&#34;,
 		&#34;prompt&#34;: &#34;Summarize yesterday&#39;s tickets&#34;, &#34;user&#34;: &#34;ops&#34;}},
@@ -2857,7 +2816,7 @@ Schedules: &#34;every 30m&#34; | &#34;daily 09:00&#34; | &#34;weekly fri 17:00&#
 
 Config: timezone (&#34;UTC&#34;), max_jobs (20 per user), jobs (predefined:
 [{name, schedule, prompt, user}]), tick_seconds (15).</pre></details></div>
-<div class="builtin" id="module-trigger_webhook"><div class="bhead"><code>trigger_webhook</code><span class="bsum">uses agent · requires agent · permissions net</span></div><p>Starts agent runs from webhooks. Every route requires an HMAC-SHA256 signature (&#34;X-Signature-256: sha256=&lt;hex&gt;&#34;) over &#34;METHOD\nPATH\n&lt;timestamp&gt;\n&lt;body&gt;&#34;, so only trusted senders can trigger work and a delivery for one route can&#39;t be replayed against another.</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModuleConfig(&#34;trigger_webhook&#34;, map[string]any{
+<div class="builtin" id="module-trigger_webhook"><div class="bhead"><code>trigger_webhook</code><span class="bsum">uses agent · requires agent · permissions net</span></div><p>Starts agent runs from webhooks. Every route requires an HMAC-SHA256 signature (&#34;X-Signature-256: sha256=&lt;hex&gt;&#34;) over &#34;METHOD\nPATH\n&lt;timestamp&gt;\n&lt;body&gt;&#34;, so only trusted senders can trigger work and a delivery for one route can&#39;t be replayed against another.</p><div class="code" data-title="example"><pre><code class="language-go">trigger_webhook.New(map[string]any{
 	&#34;addr&#34;: &#34;127.0.0.1:8787&#34;,
 	&#34;routes&#34;: []any{map[string]any{&#34;path&#34;: &#34;/github&#34;, &#34;secret&#34;: &#34;secret://GH_WEBHOOK_TOKEN&#34;,
 		&#34;user&#34;: &#34;github-bot&#34;, &#34;thread&#34;: &#34;gh-{repository.full_name}&#34;}},
@@ -2935,7 +2894,7 @@ var Requires = []string{&#34;agent&#34;, &#34;?secrets&#34;}
 
 var Module = engine.Module{Name: "github_hook", Requires: Requires, Provides: nil, Permissions: Permissions, Apply: Apply}
 
-func Apply(p *sdk.Module) error {
+func Apply(p *sdk.Scope) error {
 	agent := p.Service(&#34;agent&#34;).(*sdk.AgentService)
 	addr := p.ConfigString(&#34;addr&#34;, &#34;127.0.0.1:8090&#34;)
 	secretRef := p.ConfigString(&#34;secret&#34;, &#34;secret://github_hook_WEBHOOK_SECRET&#34;)
@@ -3065,22 +3024,22 @@ func Apply(p *sdk.Module) error {
     <li><b>Production traces:</b> <code>WithTracing("http://otel-collector:4318")</code> (<code>trace_otlp</code>).</li>
     <li><b>Evidence:</b> <code>WithAudit(path)</code> (<code>audit_file</code>), and <code>audit_http</code> to ship it off the machine.</li>
   </ul>
-  <div class="code" data-title="go"><pre><code class="language-go">kiln.WithModuleConfig("trace_file", map[string]any{"path": ".kiln/trace.jsonl"})
-kiln.WithModuleConfig("audit_file", map[string]any{"path": "/var/log/kiln/audit.jsonl"})</code></pre></div>
+  <div class="code" data-title="go"><pre><code class="language-go">trace_file.New(map[string]any{"path": ".kiln/trace.jsonl"})
+audit_file.New(map[string]any{"path": "/var/log/kiln/audit.jsonl"})</code></pre></div>
   <div class="code" data-title="terminal"><pre><code class="language-bash">go run ./cmd/kiln trace view .kiln/trace.jsonl > trace.html   # timeline of every run, model call and tool call</code></pre></div>
   <p>The audit log records every module load, model call and tool call, including who approved what. Each line is hash-chained to the one before, so <code>audit.Verify(path)</code> detects any edited or deleted line.</p>
 
   <h2>Send them off the machine</h2>
   <div class="code" data-title="go"><pre><code class="language-go">// Audit records to a SIEM or control plane: NDJSON batches, HMAC-signed, retried.
-kiln.WithModuleConfig("audit_file", map[string]any{"path": "-"}), // "-" = no local file
-kiln.WithModuleConfig("audit_http", map[string]any{
+audit_file.New(map[string]any{"path": "-"}), // "-" = no local file
+audit_http.New(map[string]any{
 	"url":      "https://siem.internal/kiln",
 	"hmac_key": "secret://AUDIT_HMAC_KEY",
 	"headers":  map[string]any{"Authorization": "secret://SIEM_TOKEN"},
 }),
 
 // Traces to any OpenTelemetry collector (OTLP/HTTP).
-kiln.WithModuleConfig("trace_otlp", map[string]any{"endpoint": "http://otel-collector:4318"}),</code></pre></div>
+trace_otlp.New(map[string]any{"endpoint": "http://otel-collector:4318"}),</code></pre></div>
   <p>The hash chain catches edits, but whoever can rewrite the whole file could recompute it. Give <code>audit_file</code> a <code>"key": "secret://AUDIT_CHAIN_KEY"</code> and each line also carries an HMAC that <code>audit.VerifyKeyed(path, key)</code> checks, or ship the log off the machine.</p>
   <p><code>audit_http</code> receives the same records as the local log, with their hashes, so the receiver can check the chain itself. <code>trace_otlp</code> sends one trace per run, with a span for each model call and each tool call, using the OpenTelemetry <code>gen_ai.*</code> attribute names.</p>
 
@@ -3102,12 +3061,12 @@ kiln.WithModuleConfig("trace_otlp", map[string]any{"endpoint": "http://otel-coll
   <h2>Built-in modules</h2>
   <!-- gen:builtins telemetry -->
 <div class="builtins">
-<div class="builtin" id="module-audit_file"><div class="bhead"><code>audit_file</code><span class="bsum">wraps model calls · wraps tool calls · provides audit · requires ?secrets · permissions fs:read, fs:write</span></div><p>Append-only, hash-chained audit log (JSON lines), provided as &#34;audit&#34;. Each line is {&#34;body&#34;: {...}, &#34;prev&#34;: &#34;&lt;hash&gt;&#34;, &#34;hash&#34;: sha256(prev + body)}, so removing or editing any line breaks the chain (kiln audit verify).</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModuleConfig(&#34;audit_file&#34;, map[string]any{
+<div class="builtin" id="module-audit_file"><div class="bhead"><code>audit_file</code><span class="bsum">wraps model calls · wraps tool calls · provides audit · requires ?secrets · permissions fs:read, fs:write</span></div><p>Append-only, hash-chained audit log (JSON lines), provided as &#34;audit&#34;. Each line is {&#34;body&#34;: {...}, &#34;prev&#34;: &#34;&lt;hash&gt;&#34;, &#34;hash&#34;: sha256(prev + body)}, so removing or editing any line breaks the chain (kiln audit verify).</p><div class="code" data-title="example"><pre><code class="language-go">audit_file.New(map[string]any{
 	&#34;path&#34;:    &#34;.kiln/audit.jsonl&#34;,
 	&#34;results&#34;: true,                      // also record tool results
 	&#34;key&#34;:     &#34;secret://AUDIT_HMAC_KEY&#34;, // sign each line
 })
-// Shortcut: kiln.WithAudit(&#34;.kiln/audit.jsonl&#34;)</code></pre></div><details><summary>Config and details</summary><pre>Append-only, hash-chained audit log (JSON lines), provided as &#34;audit&#34;.
+// Shortcut: kiln.Audit(&#34;.kiln/audit.jsonl&#34;)</code></pre></div><details><summary>Config and details</summary><pre>Append-only, hash-chained audit log (JSON lines), provided as &#34;audit&#34;.
 Each line is {&#34;body&#34;: {...}, &#34;prev&#34;: &#34;&lt;hash&gt;&#34;, &#34;hash&#34;: sha256(prev + body)},
 so removing or editing any line breaks the chain (kiln audit verify).
 
@@ -3129,8 +3088,8 @@ the key a rewritten log can&#39;t produce valid macs.
 Config: path (&#34;.kiln/audit.jsonl&#34;; &#34;-&#34; keeps no local file),
 args (log tool args, true), results (log tool results, false),
 key (secret://NAME, optional).</pre></details></div>
-<div class="builtin" id="module-audit_http"><div class="bhead"><code>audit_http</code><span class="bsum">provides audit/sink/http · runs background work · requires audit, ?secrets · permissions net</span></div><p>Ships the audit stream to an HTTP endpoint (a SIEM, a log pipeline or a control plane), provided as &#34;audit/sink/http&#34;. It receives every record audit_file writes (already redacted and hash-chained, so the receiver can verify the chain) and POSTs them in batches as NDJSON.</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModuleConfig(&#34;audit_file&#34;, map[string]any{&#34;path&#34;: &#34;-&#34;}) // no local file
-kiln.WithModuleConfig(&#34;audit_http&#34;, map[string]any{
+<div class="builtin" id="module-audit_http"><div class="bhead"><code>audit_http</code><span class="bsum">provides audit/sink/http · runs background work · requires audit, ?secrets · permissions net</span></div><p>Ships the audit stream to an HTTP endpoint (a SIEM, a log pipeline or a control plane), provided as &#34;audit/sink/http&#34;. It receives every record audit_file writes (already redacted and hash-chained, so the receiver can verify the chain) and POSTs them in batches as NDJSON.</p><div class="code" data-title="example"><pre><code class="language-go">audit_file.New(map[string]any{&#34;path&#34;: &#34;-&#34;}) // no local file
+audit_http.New(map[string]any{
 	&#34;url&#34;:      &#34;https://siem.example.com/ingest&#34;,
 	&#34;hmac_key&#34;: &#34;secret://SIEM_HMAC_KEY&#34;,
 	&#34;headers&#34;:  map[string]any{&#34;Authorization&#34;: &#34;secret://SIEM_TOKEN&#34;},
@@ -3147,18 +3106,18 @@ counted (a gap in seq tells the receiver).
 Config: url (required), headers ({name: value or secret://NAME}),
 hmac_key (secret://NAME), batch_size (100), flush_seconds (2),
 max_queue (10000), retries (3), timeout_seconds (10).</pre></details></div>
-<div class="builtin" id="module-trace_file"><div class="bhead"><code>trace_file</code><span class="bsum">wraps model calls · wraps tool calls · runs at run start · runs at run end · permissions fs:read, fs:write</span></div><p>Writes a trajectory trace: one JSON line per span (run, model call, tool call) with timing and hierarchy. View it with `kiln trace view`.</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModuleConfig(&#34;trace_file&#34;, map[string]any{&#34;path&#34;: &#34;.kiln/trace.jsonl&#34;, &#34;content&#34;: true})
+<div class="builtin" id="module-trace_file"><div class="bhead"><code>trace_file</code><span class="bsum">wraps model calls · wraps tool calls · runs at run start · runs at run end · permissions fs:read, fs:write</span></div><p>Writes a trajectory trace: one JSON line per span (run, model call, tool call) with timing and hierarchy. View it with `kiln trace view`.</p><div class="code" data-title="example"><pre><code class="language-go">trace_file.New(map[string]any{&#34;path&#34;: &#34;.kiln/trace.jsonl&#34;, &#34;content&#34;: true})
 // then: kiln trace view .kiln/trace.jsonl &gt; trace.html</code></pre></div><details><summary>Config and details</summary><pre>Writes a trajectory trace: one JSON line per span (run, model call,
 tool call) with timing and hierarchy. View it with `kiln trace view`.
 
 Config: path (&#34;.kiln/trace.jsonl&#34;), content (include prompts and
 results, default false). Secret values are redacted.</pre></details></div>
-<div class="builtin" id="module-trace_otlp"><div class="bhead"><code>trace_otlp</code><span class="bsum">wraps model calls · wraps tool calls · runs at run start · runs at run end · runs background work · requires ?secrets · permissions net</span></div><p>Exports traces over OTLP/HTTP (JSON) to an OpenTelemetry collector or any OTLP backend: one trace per run, with a span per model call and per tool call. Attributes follow the OpenTelemetry GenAI conventions where they exist (gen_ai.*) plus kiln.* fields: run id, thread, user, module, tool, call id. Secret values are redacted.</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModuleConfig(&#34;trace_otlp&#34;, map[string]any{
+<div class="builtin" id="module-trace_otlp"><div class="bhead"><code>trace_otlp</code><span class="bsum">wraps model calls · wraps tool calls · runs at run start · runs at run end · runs background work · requires ?secrets · permissions net</span></div><p>Exports traces over OTLP/HTTP (JSON) to an OpenTelemetry collector or any OTLP backend: one trace per run, with a span per model call and per tool call. Attributes follow the OpenTelemetry GenAI conventions where they exist (gen_ai.*) plus kiln.* fields: run id, thread, user, module, tool, call id. Secret values are redacted.</p><div class="code" data-title="example"><pre><code class="language-go">trace_otlp.New(map[string]any{
 	&#34;endpoint&#34;:     &#34;https://otlp.example.com&#34;,
 	&#34;headers&#34;:      map[string]any{&#34;x-api-key&#34;: &#34;secret://OTLP_KEY&#34;},
 	&#34;service_name&#34;: &#34;support-agent&#34;,
 })
-// Shortcut: kiln.WithTracing(&#34;http://localhost:4318&#34;)</code></pre></div><details><summary>Config and details</summary><pre>Exports traces over OTLP/HTTP (JSON) to an OpenTelemetry collector or
+// Shortcut: kiln.Tracing(&#34;http://localhost:4318&#34;)</code></pre></div><details><summary>Config and details</summary><pre>Exports traces over OTLP/HTTP (JSON) to an OpenTelemetry collector or
 any OTLP backend: one trace per run, with a span per model call and
 per tool call. Attributes follow the OpenTelemetry GenAI conventions
 where they exist (gen_ai.*) plus kiln.* fields: run id, thread, user,
@@ -3175,7 +3134,7 @@ max_queue (5000).</pre></details></div>
 <!-- /gen:builtins -->
   <h2>Write your own</h2>
   <p>To export audit records somewhere new (Kafka, S3, a database), provide an audit sink. <code>audit_file</code> hands every record to each <code>"audit/sink/&lt;name&gt;"</code> service, already redacted and hash-chained:</p>
-  <div class="code" data-title="go"><pre><code class="language-go">kafka := kiln.Module{Name: "audit_kafka", Requires: []string{"audit"}, Apply: func(p *sdk.Module) error {
+  <div class="code" data-title="go"><pre><code class="language-go">kafka := kiln.Module{Name: "audit_kafka", Requires: []string{"audit"}, Apply: func(p *sdk.Scope) error {
 	w := newKafkaWriter() // your client
 	p.OnUnload(func() { w.Close() })
 	return p.Provide("audit/sink/kafka", &amp;sdk.AuditSink{Send: func(line []byte) {
@@ -3193,7 +3152,7 @@ max_queue (5000).</pre></details></div>
 <section id="kind-secrets" class="page" data-nav="Secrets">
   <h1>Secrets</h1>
   <p>Config never holds a key. It holds a reference, <code>secret://NAME</code>, and a secrets provider resolves it when a module asks.</p>
-  <div class="code" data-title="go"><pre><code class="language-go">kiln.WithModuleConfig("secrets_vault", map[string]any{
+  <div class="code" data-title="go"><pre><code class="language-go">secrets_vault.New(map[string]any{
 	"address":     "https://vault.internal:8200", // token from $VAULT_TOKEN or token_file
 	"mount":       "secret",
 	"prefix":      "kiln",                    // secret://OPENAI_API_KEY -> secret/data/kiln/OPENAI_API_KEY
@@ -3203,7 +3162,7 @@ max_queue (5000).</pre></details></div>
 		"mailer":     []any{"MAIL_RELAY_TOKEN"},
 	},
 })
-kiln.WithModuleConfig("model_openai", map[string]any{"api_key": "secret://OPENAI_API_KEY"})</code></pre></div>
+model_openai.New(map[string]any{"api_key": "secret://OPENAI_API_KEY"})</code></pre></div>
   <div class="table"><table>
     <thead><tr><th>Provider</th><th>Reads from</th></tr></thead>
     <tbody>
@@ -3217,7 +3176,7 @@ kiln.WithModuleConfig("model_openai", map[string]any{"api_key": "secret://OPENAI
     <li><b>Identity from the core.</b> The core passes the real calling module to the provider. A module can't ask as someone else.</li>
     <li><b>Redacted everywhere.</b> Every value that is handed out is remembered, with its JSON-escaped, URL-encoded and base64 forms. Logs, traces and audit records show <code>[REDACTED]</code> wherever it would have appeared: tool arguments, results, model replies, errors. Values shorter than 4 bytes can't be redacted; their <code>secret.access</code> record says so. Only the core registers values, and only built-in modules can call <code>sdk.Redact</code>: any redaction function also answers "is this a secret?", so third-party modules don't get one.</li>
     <li><b>Every read is audited</b> as <code>secret.access</code>, with the module, the secret name and whether it was granted. The value is never recorded. Denials are always recorded; granted reads once per module and secret every 10 minutes, and again when the value changes.</li>
-    <li><b>Kept on the host.</b> With <code>WithRunIn</code>, secret providers stay on the host and the sandbox only gets placeholders, which the host swaps for values on requests to allowed hosts. See <a href="#runin-secrets">Secrets in a sandboxed agent</a>.</li>
+    <li><b>Kept on the host.</b> With <code>Config.RunIn</code>, secret providers stay on the host and the sandbox only gets placeholders, which the host swaps for values on requests to allowed hosts. See <a href="#runin-secrets">Secrets in a sandboxed agent</a>.</li>
   </ul>
   <div class="note warn"><b>What redaction covers</b><div><p>Redaction protects the sinks: logs, traces and audit records. It doesn't hide a secret from the model. If a tool puts a key in its result, the model sees it, so don't return secrets from tools.</p></div></div>
   <div class="code" data-title="terminal"><pre><code class="language-bash">go run ./examples/secrets   # Vault, grants, rotation and redaction, offline</code></pre></div>
@@ -3225,7 +3184,7 @@ kiln.WithModuleConfig("model_openai", map[string]any{"api_key": "secret://OPENAI
   <h2>Built-in modules</h2>
   <!-- gen:builtins secrets -->
 <div class="builtins">
-<div class="builtin" id="module-secrets_env"><div class="bhead"><code>secrets_env</code><span class="bsum">provides secrets · permissions env, env:secrets</span></div><p>Resolves secret://NAME from environment variables, provided as &#34;secrets&#34;. Only names matching allow (glob patterns) are readable, so other modules can&#39;t read arbitrary env through it.</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModuleConfig(&#34;secrets_env&#34;, map[string]any{
+<div class="builtin" id="module-secrets_env"><div class="bhead"><code>secrets_env</code><span class="bsum">provides secrets · permissions env, env:secrets</span></div><p>Resolves secret://NAME from environment variables, provided as &#34;secrets&#34;. Only names matching allow (glob patterns) are readable, so other modules can&#39;t read arbitrary env through it.</p><div class="code" data-title="example"><pre><code class="language-go">secrets_env.New(map[string]any{
 	&#34;allow&#34;:  []any{&#34;*_API_KEY&#34;, &#34;GITHUB_TOKEN&#34;},
 	&#34;grants&#34;: map[string]any{&#34;tool_mcp&#34;: []any{&#34;GITHUB_TOKEN&#34;}},
 })</code></pre></div><details><summary>Config and details</summary><pre>Resolves secret://NAME from environment variables, provided as
@@ -3237,7 +3196,7 @@ Config:
 	allow:  glob patterns (default [&#34;*_API_KEY&#34;, &#34;*_TOKEN&#34;])
 	grants: {module instance: [names]} — when set, a module may read only
 	        the names granted to it (the caller is set by the core).</pre></details></div>
-<div class="builtin" id="module-secrets_vault"><div class="bhead"><code>secrets_vault</code><span class="bsum">provides secrets · permissions net, env, env:secrets, fs:read</span></div><p>Resolves secret://NAME from HashiCorp Vault (KV v2), provided as &#34;secrets&#34;. Values are cached for ttl_seconds and re-read after that, so rotating a secret in Vault reaches running modules without a restart. If Vault can&#39;t be reached once the cache expires, lookups fail (closed).</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModuleConfig(&#34;secrets_vault&#34;, map[string]any{
+<div class="builtin" id="module-secrets_vault"><div class="bhead"><code>secrets_vault</code><span class="bsum">provides secrets · permissions net, env, env:secrets, fs:read</span></div><p>Resolves secret://NAME from HashiCorp Vault (KV v2), provided as &#34;secrets&#34;. Values are cached for ttl_seconds and re-read after that, so rotating a secret in Vault reaches running modules without a restart. If Vault can&#39;t be reached once the cache expires, lookups fail (closed).</p><div class="code" data-title="example"><pre><code class="language-go">secrets_vault.New(map[string]any{
 	&#34;address&#34;:     &#34;https://vault.internal:8200&#34;,
 	&#34;mount&#34;:       &#34;secret&#34;,
 	&#34;prefix&#34;:      &#34;kiln&#34;,
@@ -3270,7 +3229,7 @@ Config:
 <!-- /gen:builtins -->
   <h2>Write your own</h2>
   <p>A provider for AWS Secrets Manager, GCP Secret Manager, a KMS or your own store provides <code>"secrets"</code>. The core passes the calling module as <code>caller</code>, so you can enforce grants. Values you return are redacted and audited for you.</p>
-  <div class="code" data-title="go"><pre><code class="language-go">aws := kiln.Module{Name: "secrets_aws", Apply: func(p *sdk.Module) error {
+  <div class="code" data-title="go"><pre><code class="language-go">aws := kiln.Module{Name: "secrets_aws", Apply: func(p *sdk.Scope) error {
 	sm := newSecretsManagerClient() // your client
 	grants := map[string][]string{"model_openai": {"OPENAI_API_KEY"}}
 	return p.Provide("secrets", &amp;sdk.Secrets{Get: func(c context.Context, caller, name string) (string, error) {
@@ -3289,7 +3248,7 @@ Config:
 
 <section id="kind-policy" class="page" data-nav="Policy and the loop">
   <h1>Policy and the loop</h1>
-  <p>A policy file sets company-wide rules. Load it with <code>kiln.WithPolicyFile("policy.json")</code>.</p>
+  <p>A policy file sets company-wide rules. Read it with <code>engine.ReadJSON("policy.json", pol)</code> and set <code>Config.Policy</code>.</p>
   <div class="code" data-title="policy.json"><pre><code class="language-json">{
   "deny": ["sandbox_local"],
   "locked": ["policy", "audit_file", "secrets_env"],
@@ -3309,19 +3268,19 @@ Config:
     "roles": { "analyst": { "mode": "read-only" } }
   }
 }</code></pre></div>
-  <p>Modes: <code>read-only</code> allows only read-only tools. <code>workspace-write</code> is the default. <code>full-access</code> allows high-risk tools. Roles come from <code>kiln.WithUser(id, roles...)</code>.</p>
+  <p>Modes: <code>read-only</code> allows only read-only tools. <code>workspace-write</code> is the default. <code>full-access</code> allows high-risk tools. Roles come from <code>Config.User / Run.User</code>.</p>
   <h2>The loop</h2>
   <p>The agent loop (model call → tools → model call …) is a module too, <code>loop</code>, and loads itself. Replace it by loading another module that provides <code>"loop"</code>; <code>loop</code> is the reference implementation of streaming, parallel tool calls, interrupts and stop conditions.</p>
   <h2>Built-in modules</h2>
   <!-- gen:builtins policy -->
 <div class="builtins">
-<div class="builtin" id="module-loop"><div class="bhead"><code>loop</code><span class="bsum">provides loop · no permissions</span></div><p>The default agent loop, provided as the &#34;loop&#34; service. Swap it by loading another module that provides &#34;loop&#34;.</p><div class="code" data-title="example"><pre><code class="language-go">kiln.WithModuleConfig(&#34;loop&#34;, map[string]any{&#34;max_steps&#34;: 30, &#34;parallel_tools&#34;: true})</code></pre></div><details><summary>Config and details</summary><pre>The default agent loop, provided as the &#34;loop&#34; service. Swap it by
+<div class="builtin" id="module-loop"><div class="bhead"><code>loop</code><span class="bsum">provides loop · no permissions</span></div><p>The default agent loop, provided as the &#34;loop&#34; service. Swap it by loading another module that provides &#34;loop&#34;.</p><div class="code" data-title="example"><pre><code class="language-go">loop.New(map[string]any{&#34;max_steps&#34;: 30, &#34;parallel_tools&#34;: true})</code></pre></div><details><summary>Config and details</summary><pre>The default agent loop, provided as the &#34;loop&#34; service. Swap it by
 loading another module that provides &#34;loop&#34;.
 
 Config: max_steps (default 20), parallel_tools (default false).</pre></details></div>
 <div class="builtin" id="module-policy"><div class="bhead"><code>policy</code><span class="bsum">wraps model calls · wraps tool calls · runs at run end · provides policy · no permissions</span></div><p>Enforces the admin policy&#39;s rules on every model and tool call. Load it as a locked module (policy.json &#34;locked&#34;: [&#34;policy&#34;], &#34;require&#34;: [{&#34;use&#34;: &#34;policy&#34;}]) so it runs outermost and can&#39;t be removed; the engine passes policy.json &#34;rules&#34; in as config.rules.</p><div class="code" data-title="example"><pre><code class="language-go">// policy.json: {&#34;locked&#34;: [&#34;policy&#34;], &#34;require&#34;: [{&#34;use&#34;: &#34;policy&#34;}],
 //               &#34;rules&#34;: {&#34;mode&#34;: &#34;read-only&#34;, &#34;deny_tools&#34;: [&#34;bash&#34;]}}
-kiln.WithPolicyFile(&#34;policy.json&#34;)</code></pre></div><details><summary>Config and details</summary><pre>Enforces the admin policy&#39;s rules on every model and tool call. Load it
+Config.Policy: pol // engine.ReadJSON("policy.json", pol)</code></pre></div><details><summary>Config and details</summary><pre>Enforces the admin policy&#39;s rules on every model and tool call. Load it
 as a locked module (policy.json &#34;locked&#34;: [&#34;policy&#34;], &#34;require&#34;:
 [{&#34;use&#34;: &#34;policy&#34;}]) so it runs outermost and can&#39;t be removed; the
 engine passes policy.json &#34;rules&#34; in as config.rules.
@@ -3363,12 +3322,12 @@ rules:
     </tbody>
   </table></div>
   <p><b>Never available:</b> a module may not import <code>os</code>, <code>os/exec</code>, <code>net</code> (except pure helpers), <code>syscall</code>, <code>database/sql</code> (except the <code>db_sql</code> provider), <code>unsafe</code>, <code>io/ioutil</code> or <code>embed</code>. <code>kiln module check</code> refuses them, along with the usual ways to bypass the broker (<code>http.Get</code>, <code>net.Dialer</code>).</p>
-  <div class="note warn"><b>Compile-time inclusion is not a sandbox</b><div><p>A module linked into your binary still runs with the process's privileges. The analyzer and the broker enforce the contract at build time and at the API boundary; for genuinely untrusted code, run the whole agent in a sandbox (<code>WithRunIn</code>).</p></div></div>
+  <div class="note warn"><b>Compile-time inclusion is not a sandbox</b><div><p>A module linked into your binary still runs with the process's privileges. The analyzer and the broker enforce the contract at build time and at the API boundary; for genuinely untrusted code, run the whole agent in a sandbox (<code>Config.RunIn</code>).</p></div></div>
 </section>
 
 <section id="module-api" class="page" data-nav="Module API">
   <h1>Module API</h1>
-  <p>Methods on <code>*sdk.Module</code>, what every <code>Apply</code> receives.</p>
+  <p>Methods on <code>*sdk.Scope</code>, what every <code>Apply</code> receives.</p>
   <div class="table"><table>
     <thead><tr><th>Method</th><th>Use it to</th></tr></thead>
     <tbody>
@@ -3385,7 +3344,7 @@ rules:
       <tr><td><code>Grants()</code>, <code>SetPriority(n)</code>, <code>Logf(format, …)</code></td><td>inspect held capabilities; order your hooks; log through the agent's logger (redacted)</td></tr>
     </tbody>
   </table></div>
-  <p>The descriptor is <code>engine.Module{Name, Requires, Provides, Permissions, Secrets string; Apply func(*sdk.Module) error}</code>. To write, register and ship one, see <a href="#custom-modules">Custom modules</a>.</p>
+  <p>The descriptor is <code>engine.Module{Name, Requires, Provides, Permissions, Secrets string; Apply func(*sdk.Scope) error}</code>. To write, register and ship one, see <a href="#custom-modules">Custom modules</a>.</p>
   <p><b>Why structs of functions, not interfaces?</b> Services are structs whose fields are functions (<code>sdk.Provider{Generate: …}</code>, <code>sdk.Store{Put: …}</code>), so a module can provide one without a type declaration and the same shape works for every service.</p>
 </section>
 
@@ -3401,7 +3360,7 @@ rules:
     <li><b>People in control.</b> Approvals, reviewer models, limits and token budgets.</li>
     <li><b>Evidence.</b> A tamper-evident audit log, shipped off the machine with <code>audit_http</code>, plus OpenTelemetry traces.</li>
   </ul>
-  <div class="note warn"><b>Limit</b><div><p>Permission scoping inside a module is defense in depth, not a hard boundary. For untrusted module code, run the agent in a container or microVM with <code>WithRunIn</code>.</p></div></div>
+  <div class="note warn"><b>Limit</b><div><p>Permission scoping inside a module is defense in depth, not a hard boundary. For untrusted module code, run the agent in a container or microVM with <code>Config.RunIn</code>.</p></div></div>
 </section>
 
 
@@ -3416,13 +3375,13 @@ rules:
     <thead><tr><th>Area</th><th>Development default</th><th>Production choice</th><th>Read</th></tr></thead>
     <tbody>
       <tr><td><b>Secrets</b></td><td>Environment variables or a key in config</td><td><code>secrets_vault</code> or <code>secrets_env</code> with per-module <code>grants</code>; rotate with a TTL</td><td><a href="#kind-secrets">Secrets</a></td></tr>
-      <tr><td><b>Threads</b></td><td><code>threads_inmem</code></td><td><code>threads_sql</code> on Postgres, with <code>WithSaveEachStep</code> for long runs</td><td><a href="#kind-threads-memory">Threads</a></td></tr>
+      <tr><td><b>Threads</b></td><td><code>threads_inmem</code></td><td><code>threads_sql</code> on Postgres, with <code>Config.SaveEachStep</code> for long runs</td><td><a href="#kind-threads-memory">Threads</a></td></tr>
       <tr><td><b>Memory</b></td><td><code>memory_inmem</code></td><td><code>memory_sql</code> when several replicas serve the same users</td><td><a href="#kind-threads-memory">Memory</a></td></tr>
-      <tr><td><b>Policy</b></td><td>Secure preset</td><td><code>WithPolicyFile</code> with required, allowed and denied modules; lock <code>policy</code></td><td><a href="#kind-policy">Policy</a></td></tr>
+      <tr><td><b>Policy</b></td><td>Secure preset</td><td><code>Config.Policy</code> with required, allowed and denied modules; lock <code>policy</code></td><td><a href="#kind-policy">Policy</a></td></tr>
       <tr><td><b>Approvals</b></td><td>Inline approver</td><td><code>hook_approval</code> plus a durable queue; <code>hook_review</code> for a first pass</td><td><a href="#human-in-the-loop">Human in the loop</a></td></tr>
       <tr><td><b>Audit</b></td><td>Console logs</td><td><code>audit_file</code> with a key, shipped by <code>audit_http</code>; verify the chain</td><td><a href="#kind-telemetry">Telemetry and audit</a></td></tr>
       <tr><td><b>Traces</b></td><td><code>trace_file</code></td><td><code>trace_otlp</code> to your OpenTelemetry collector</td><td><a href="#kind-telemetry">Telemetry and audit</a></td></tr>
-      <tr><td><b>Sandboxing</b></td><td><code>workspace_local</code></td><td><code>sandbox_docker</code> or a microVM; <code>WithRunIn</code> to run the agent inside one</td><td><a href="#kind-sandboxes">Sandboxes</a></td></tr>
+      <tr><td><b>Sandboxing</b></td><td><code>workspace_local</code></td><td><code>sandbox_docker</code> or a microVM; <code>Config.RunIn</code> to run the agent inside one</td><td><a href="#kind-sandboxes">Sandboxes</a></td></tr>
       <tr><td><b>Limits</b></td><td>Defaults</td><td><code>hook_limits</code>, <code>MaxSteps</code>, tool-call and token caps per run and thread</td><td><a href="#kind-hooks">Hooks</a></td></tr>
       <tr><td><b>Reliability</b></td><td>No retry</td><td><code>hook_retry</code>, <code>hook_fallback</code>, timeouts, graceful <code>agent.Close()</code></td><td><a href="#kind-hooks">Hooks</a></td></tr>
       <tr><td><b>Scaling</b></td><td>One process</td><td>Stateless replicas sharing Postgres; handle <code>ErrThreadBusy</code></td><td><a href="#threads">Threads</a></td></tr>
@@ -3431,30 +3390,30 @@ rules:
   </table></div>
 
   <h2>A minimal production configuration</h2>
-  <div class="code" data-title="main.go"><pre><code class="language-go">agent, err := kiln.New(
-	kiln.WithModel("anthropic:claude-sonnet-5-5"),
-	kiln.WithInstructions("You are Acme support. Be concise and never invent policy."),
-	kiln.WithPolicyFile("policy.json"),
-
-	// Shared state: any replica can serve any thread or approval.
-	kiln.WithPersistence("postgres", "secret://DATABASE_URL"),
-	kiln.WithSaveEachStep(),
-
-	// Secrets are granted per module and read at use.
-	kiln.WithModuleConfig("secrets_vault", map[string]any{
-		"address": "https://vault.internal:8200",
-		"prefix":  "kiln",
-		"grants":  map[string]any{"model_anthropic": []any{"ANTHROPIC_API_KEY"}},
-	}),
-
+  <div class="code" data-title="main.go"><pre><code class="language-go">modules := kiln.Persistence("postgres", "secret://DATABASE_URL") // shared state
+modules = append(modules, secrets_vault.New(map[string]any{
+	"address": "https://vault.internal:8200",
+	"prefix":  "kiln",
+	"grants":  map[string]any{"model_anthropic": []any{"ANTHROPIC_API_KEY"}},
+}))
+modules = append(modules,
 	// Safety, limits and evidence.
-	kiln.WithModuleConfig("hook_approval", map[string]any{"interrupt_on": map[string]any{"issue_refund": true}}),
-	kiln.WithModuleConfig("hook_pii", map[string]any{"types": []any{"credit_card", "email"}, "strategy": "mask"}),
-	kiln.WithModuleConfig("hook_limits", map[string]any{"tool_calls_run": 12}),
-	kiln.WithModuleConfig("hook_retry", nil),
-	kiln.WithModuleConfig("audit_file", map[string]any{"path": "/var/log/kiln/audit.jsonl"}),
-	kiln.WithTracing("http://otel-collector:4318"),
+	hook_approval.New(map[string]any{"interrupt_on": map[string]any{"issue_refund": true}}),
+	hook_pii.New(map[string]any{"types": []any{"credit_card", "email"}, "strategy": "mask"}),
+	hook_limits.New(map[string]any{"tool_calls_run": 12}),
+	hook_retry.New(nil),
+	audit_file.New(map[string]any{"path": "/var/log/kiln/audit.jsonl"}),
 )
+modules = append(modules, kiln.Tracing("http://otel-collector:4318")...)
+
+pol := &kiln.Policy{} // engine.ReadJSON("policy.json", pol)
+agent, err := kiln.New(kiln.Config{
+	Model:        "anthropic:claude-sonnet-5-5",
+	Instructions: "You are Acme support. Be concise and never invent policy.",
+	Policy:       pol,
+	SaveEachStep: true,
+	Modules:      modules,
+})
 if err != nil {
 	return err
 }
@@ -3475,26 +3434,21 @@ defer agent.Close()</code></pre></div>
 
 
 <section id="reference-options" class="page">
-  <h1>Agent options</h1>
-  <p>Passed to <code>kiln.New</code>.</p>
+  <h1>Agent configuration</h1>
+  <p>Fields of <code>kiln.Config</code>, the only input to <code>kiln.New</code>.</p>
   <div class="table"><table>
     <thead><tr><th>Option</th><th>What it does</th></tr></thead>
     <tbody>
-      <tr><td><code>WithModel(m)</code></td><td>Default model, <code>provider:model</code></td></tr>
-      <tr><td><code>WithInstructions(s)</code></td><td>System prompt</td></tr>
-      <tr><td><code>WithMaxSteps(n)</code></td><td>Model calls per run (default 20)</td></tr>
-      <tr><td><code>WithTools(t...)</code></td><td>Tools defined in Go</td></tr>
-      <tr><td><code>WithModules(names...)</code></td><td>Load modules by name</td></tr>
-      <tr><td><code>WithModuleConfig(name, cfg)</code></td><td>Load one module with config</td></tr>
-      <tr><td><code>WithModuleSpec(spec)</code></td><td>Full row: <code>Use</code>, <code>As</code>, <code>Config</code>, <code>Priority</code></td></tr>
-      <tr><td><code>WithModule(p)</code></td><td>Register a compiled Go module (<a href="#custom-modules">Custom modules</a>)</td></tr>
-      <tr><td><code>WithProfile(path)</code></td><td>Layer a profile file</td></tr>
-      <tr><td><code>WithPolicyFile(path)</code>, <code>WithPolicy(p)</code></td><td>Admin policy</td></tr>
-      <tr><td><code>WithUser(id, roles...)</code></td><td>Default identity for runs</td></tr>
-      <tr><td><code>WithApprover(fn)</code></td><td>Decide approvals synchronously</td></tr>
-      <tr><td><code>WithRunIn(RunIn{...})</code></td><td>Run the agent inside a sandbox; secrets stay on the host (<a href="#runin-secrets">placeholders</a>)</td></tr>
-      <tr><td><code>WithLogger(fn)</code></td><td>Receive module log lines</td></tr>
-      <tr><td><code>WithoutDefaults()</code></td><td>Load only what you list</td></tr>
+      <tr><td><code>Model</code></td><td>Default model, <code>provider:model</code></td></tr>
+      <tr><td><code>Instructions</code></td><td>System prompt</td></tr>
+      <tr><td><code>MaxSteps</code></td><td>Model calls per run (default 20)</td></tr>
+      <tr><td><code>Tools</code></td><td>Tools defined in Go</td></tr>
+      <tr><td><code>Modules</code></td><td>The composition: <code>[]kiln.Module</code> (<a href="#modules">Modules</a>)</td></tr>
+      <tr><td><code>Policy</code></td><td>Admin policy (<code>engine.ReadJSON</code> for a file)</td></tr>
+      <tr><td><code>User</code>, <code>Roles</code></td><td>Default identity for runs</td></tr>
+      <tr><td><code>Logger</code></td><td>Receive module log lines</td></tr>
+      <tr><td><code>SaveEachStep</code></td><td>Save the thread before each model call</td></tr>
+      <tr><td><code>RunIn</code></td><td>Run the agent inside a sandbox; secrets stay on the host (<a href="#runin-secrets">placeholders</a>)</td></tr>
     </tbody>
   </table></div>
 </section>
@@ -3556,13 +3510,13 @@ defer agent.Close()</code></pre></div>
   <div class="code" data-title="terminal"><pre><code class="language-bash">go run ./cmd/kiln -model ollama:lfm3                       # chat; /modules /quit
 go run ./cmd/kiln run -model openai:gpt-4.1 "hello"        # one prompt, headless (-json, -thread)
 go run ./cmd/kiln eval -model openai:gpt-4.1 cases.json     # grade the agent on a dataset (see Evals)
-go run ./cmd/kiln config dump -profile kiln.json            # policy and modules, in start order
+go run ./cmd/kiln config dump -model mock:demo -use tool_time  # policy and modules, in start order
 go run ./cmd/kiln module list                              # every standard module
 go run ./cmd/kiln module check modules                     # build-time check (CI gate)
 go run ./cmd/kiln module manifest modules > manifest.json  # modules, services, capabilities
 go run ./cmd/kiln trace view .kiln/trace.jsonl > t.html
 go run ./cmd/kiln audit verify .kiln/audit.jsonl</code></pre></div>
-  <p>The CLI runs the standard modules. Application modules are compiled into your own program and passed with <code>kiln.WithModule</code>.</p>
+  <p>The CLI runs the standard modules. Application modules are compiled into your own program and put in <code>Config.Modules</code>.</p>
 </section>
 
   <nav class="pager" id="pager" aria-label="Previous and next page"></nav>

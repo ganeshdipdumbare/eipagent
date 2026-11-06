@@ -28,14 +28,14 @@ func main() {
 	if model == "" {
 		model = "openai:gpt-4.1-mini"
 	}
-	weather := kiln.Tool("weather", "Current weather for a city", func(ctx context.Context, in WeatherIn) (string, error) {
+	weather := kiln.NewTool("weather", "Current weather for a city", func(ctx context.Context, in WeatherIn) (string, error) {
 		return "18°C and light rain in " + in.City, nil
 	})
-	agent, err := kiln.New(
-		kiln.WithModel(model),
-		kiln.WithInstructions("You are a concise travel assistant."),
-		kiln.WithTools(weather),
-	)
+	agent, err := kiln.New(kiln.Config{
+		Model:        model,
+		Instructions: "You are a concise travel assistant.",
+		Tools:        []kiln.Tool{weather},
+	})
 	if err != nil {
 		log.Fatal(err)
 	}

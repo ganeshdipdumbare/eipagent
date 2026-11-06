@@ -9,7 +9,7 @@ import (
 
 var Module = engine.Module{Name: "netpkg", Apply: Apply}
 
-func Apply(p *sdk.Module) error {
+func Apply(p *sdk.Scope) error {
 	_, err := http.Get("https://example.com")
 	return err
 }

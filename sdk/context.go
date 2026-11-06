@@ -51,15 +51,14 @@ func newRegistry(parent *registry) *registry {
 	return r
 }
 
-// Module is what a module's Apply receives: everything it can do
+// Scope is what a module's Apply receives: everything it can do
 // (AddTool, WrapModel / WrapTool, Provide, Effect ...) goes through it,
-// and everything it registered is undone when it is unloaded, which is
-// how unload and hot reload stay clean.
+// and everything it registered is undone when the agent closes.
 //
-//	func Apply(p *sdk.Module) error { p.AddTool(...); return nil }
-type Module struct {
+//	func Apply(p *sdk.Scope) error { return p.AddTool(...) }
+type Scope struct {
 	Name   string
-	Config map[string]any // per-module config from the profile
+	Config map[string]any // per-module configuration
 
 	reg      *registry
 	contract *contract // what the engine let this module declare and hold; nil for the root
@@ -74,24 +73,25 @@ type Module struct {
 	restrictSecrets bool
 	builtin         bool
 	mu              sync.Mutex
-	children        []*Module
+	children        []*Scope
 	disposers       []func()
-	disposed        bool // set by Dispose: later registrations are undone at once
+	disposed        bool  // set by Dispose: later registrations are undone at once
+	err             error // first registration error (duplicate tool or skill)
 }
 
-func NewRoot() *Module { return &Module{Name: "root", reg: newRegistry(nil)} }
+func NewRoot() *Scope { return &Scope{Name: "root", reg: newRegistry(nil)} }
 
 // SetLogger replaces where Logf output goes (whole registry).
-func (c *Module) SetLogger(fn func(scope, msg string)) { c.reg.log = fn }
+func (c *Scope) SetLogger(fn func(scope, msg string)) { c.reg.log = fn }
 
 // Fork creates a child scope sharing the registry. Disposing the parent
 // disposes the child.
-func (c *Module) Fork(name string) *Module {
+func (c *Scope) Fork(name string) *Scope {
 	id := name
 	if c.id != "" {
 		id = c.id + "/" + name
 	}
-	child := &Module{Name: name, id: id, reg: c.reg, contract: c.contract, priority: c.priority, order: c.order, trusted: c.trusted}
+	child := &Scope{Name: name, id: id, reg: c.reg, contract: c.contract, priority: c.priority, order: c.order, trusted: c.trusted}
 	c.mu.Lock()
 	if c.disposed {
 		child.disposed = true
@@ -105,8 +105,8 @@ func (c *Module) Fork(name string) *Module {
 // Isolate creates a child kernel: it sees the parent's services and its
 // trusted hooks (policy, audit), but has its own tools, skills and hooks.
 // Used for subagents.
-func (c *Module) Isolate(name string) *Module {
-	child := &Module{Name: name, id: c.id + "/" + name, reg: newRegistry(c.reg), contract: c.contract, trusted: c.trusted}
+func (c *Scope) Isolate(name string) *Scope {
+	child := &Scope{Name: name, id: c.id + "/" + name, reg: newRegistry(c.reg), contract: c.contract, trusted: c.trusted}
 	c.onDispose(child.Dispose)
 	return child
 }
@@ -129,18 +129,18 @@ func ClaimTrustKey() *TrustKey {
 
 // Trust sets load order and trust on a scope. Without the engine's key
 // it does nothing.
-func (c *Module) Trust(key *TrustKey, order int, trusted bool) {
+func (c *Scope) Trust(key *TrustKey, order int, trusted bool) {
 	if key == nil || key != engineKey {
 		return
 	}
 	c.order, c.trusted = order, trusted
 }
 
-func (c *Module) Trusted() bool { return c.trusted }
+func (c *Scope) Trusted() bool { return c.trusted }
 
 // SetSecretPolicy is called by the engine before Apply. Without the
 // engine's key it does nothing, so a module can't widen its own grant.
-func (c *Module) SetSecretPolicy(key *TrustKey, grants []string, restrict bool) {
+func (c *Scope) SetSecretPolicy(key *TrustKey, grants []string, restrict bool) {
 	if key == nil || key != engineKey {
 		return
 	}
@@ -150,7 +150,7 @@ func (c *Module) SetSecretPolicy(key *TrustKey, grants []string, restrict bool) 
 
 // SetBuiltin is called by the engine. Only built-in modules may register
 // extra values for redaction.
-func (c *Module) SetBuiltin(key *TrustKey, builtin bool) {
+func (c *Scope) SetBuiltin(key *TrustKey, builtin bool) {
 	if key == nil || key != engineKey {
 		return
 	}
@@ -161,7 +161,7 @@ func (c *Module) SetBuiltin(key *TrustKey, builtin bool) {
 // service (for example a Vault token read from a file) into the
 // process-wide redaction set. It is a no-op for non-built-in modules, so
 // a third-party module can't blank out words in everyone's audit log.
-func (c *Module) RegisterSecret(v string) bool {
+func (c *Scope) RegisterSecret(v string) bool {
 	if !c.builtin || v == "" {
 		return false
 	}
@@ -169,10 +169,10 @@ func (c *Module) RegisterSecret(v string) bool {
 }
 
 // ID is the scope's immutable identity ("module" or "module/child").
-func (c *Module) ID() string { return c.id }
+func (c *Scope) ID() string { return c.id }
 
-// PluginName is the top-level module instance that owns this scope.
-func (c *Module) PluginName() string {
+// ModuleName is the top-level module instance that owns this scope.
+func (c *Scope) ModuleName() string {
 	if i := strings.Index(c.id, "/"); i >= 0 {
 		return c.id[:i]
 	}
@@ -182,7 +182,7 @@ func (c *Module) PluginName() string {
 // SetPriority sets the priority of hooks registered after this call.
 // Higher runs earlier / further out. Values >= PriorityReserved are
 // clamped unless the module is trusted.
-func (c *Module) SetPriority(p int) {
+func (c *Scope) SetPriority(p int) {
 	if p >= PriorityReserved && !c.trusted {
 		p = PriorityReserved - 1
 	}
@@ -190,12 +190,12 @@ func (c *Module) SetPriority(p int) {
 }
 
 // Priority is the priority hooks registered now will get.
-func (c *Module) Priority() int { return c.priority }
+func (c *Scope) Priority() int { return c.priority }
 
-func (c *Module) onDispose(f func()) {
+func (c *Scope) onDispose(f func()) {
 	c.mu.Lock()
 	if c.disposed {
-		// A goroutine registered something after the module was unloaded:
+		// A goroutine registered something after the scope was disposed:
 		// undo it now instead of leaking it into the registry.
 		c.mu.Unlock()
 		f()
@@ -206,7 +206,7 @@ func (c *Module) onDispose(f func()) {
 }
 
 // Dispose runs all disposers in reverse order (children first).
-func (c *Module) Dispose() {
+func (c *Scope) Dispose() {
 	c.mu.Lock()
 	kids, ds := c.children, c.disposers
 	c.children, c.disposers = nil, nil
@@ -220,28 +220,27 @@ func (c *Module) Dispose() {
 	}
 }
 
-func (c *Module) nextID() int { c.reg.seq++; return c.reg.seq }
+func (c *Scope) nextID() int { c.reg.seq++; return c.reg.seq }
 
 // Effect runs fn now; the cleanup it returns runs when the scope is
 // disposed. Use it for timers, goroutines, connections, processes.
-func (c *Module) Effect(fn func() func()) {
+func (c *Scope) Effect(fn func() func()) {
 	if cleanup := fn(); cleanup != nil {
 		c.onDispose(cleanup)
 	}
 }
 
-// OnUnload registers a cleanup that runs when the module is unloaded,
-// reloaded or the agent closes.
-func (c *Module) OnUnload(fn func()) { c.onDispose(fn) }
+// OnClose registers a cleanup that runs when the agent closes.
+func (c *Scope) OnClose(fn func()) { c.onDispose(fn) }
 
 // ---- Services ----
 
 // Provide registers a service. The name must be in the module's declared
 // Provides list (a pattern ending in "*" matches a prefix); duplicate names
 // are an error so two modules can't silently fight over one name.
-func (c *Module) Provide(name string, svc any) error {
+func (c *Scope) Provide(name string, svc any) error {
 	if !c.mayProvide(name) {
-		return fmt.Errorf("module %s may not provide %q: declare it in Provides", c.PluginName(), name)
+		return fmt.Errorf("module %s may not provide %q: declare it in Provides", c.ModuleName(), name)
 	}
 	r := c.reg
 	r.mu.Lock()
@@ -274,7 +273,7 @@ func (r *registry) service(name string) (any, bool) {
 	return nil, false
 }
 
-func (c *Module) Service(name string) any {
+func (c *Scope) Service(name string) any {
 	v, _ := c.reg.service(name)
 	if s, ok := v.(*Secrets); ok && name == "secrets" && s != nil {
 		return c.boundSecrets(s)
@@ -288,13 +287,13 @@ func (c *Module) Service(name string) any {
 	return v
 }
 
-func (c *Module) HasService(name string) bool {
+func (c *Scope) HasService(name string) bool {
 	_, ok := c.reg.service(name)
 	return ok
 }
 
 // Services lists service names with the given prefix ("" = all).
-func (c *Module) Services(prefix string) []string {
+func (c *Scope) Services(prefix string) []string {
 	seen := map[string]bool{}
 	var out []string
 	for r := c.reg; r != nil; r = r.parent {
@@ -313,21 +312,23 @@ func (c *Module) Services(prefix string) []string {
 
 // ---- Tools and skills ----
 
-// AddTool registers a tool. A name another module already registered
-// is refused (logged, first one wins), so a later module can't take over
-// a tool such as issue_refund; a module may re-register its own names.
-// Tool.Module is always set to the registering module.
-func (c *Module) AddTool(t Tool) {
-	t.Module = c.PluginName()
+// AddTool registers a tool. A name another module already registered is an
+// error, and the error also marks the scope so module startup fails even if
+// Apply ignores it: a tool the application declared never disappears. A
+// module may re-register its own names. Tool.Module is always set to the
+// registering module.
+func (c *Scope) AddTool(t Tool) error {
+	t.Module = c.ModuleName()
 	r := c.reg
 	r.mu.Lock()
 	if e, ok := r.tools[t.Name]; ok && e.v.Module != t.Module {
 		r.mu.Unlock()
-		c.Logf("tool %q is already registered by %s; not replacing it", t.Name, e.v.Module)
-		return
+		err := fmt.Errorf("tool %q is already registered by %s", t.Name, e.v.Module)
+		c.setErr(err)
+		return err
 	}
 	id := c.nextID()
-	r.tools[t.Name] = entry[Tool]{id, c.PluginName(), t}
+	r.tools[t.Name] = entry[Tool]{id, c.ModuleName(), t}
 	r.mu.Unlock()
 	c.onDispose(func() {
 		r.mu.Lock()
@@ -336,19 +337,21 @@ func (c *Module) AddTool(t Tool) {
 		}
 		r.mu.Unlock()
 	})
+	return nil
 }
 
-// AddSkill registers a skill; like tools, another module's name is refused.
-func (c *Module) AddSkill(s Skill) {
+// AddSkill registers a skill; like tools, another module's name is an error.
+func (c *Scope) AddSkill(s Skill) error {
 	r := c.reg
 	r.mu.Lock()
-	if e, ok := r.skills[s.Name]; ok && e.owner != c.PluginName() {
+	if e, ok := r.skills[s.Name]; ok && e.owner != c.ModuleName() {
 		r.mu.Unlock()
-		c.Logf("skill %q is already registered by %s; not replacing it", s.Name, e.owner)
-		return
+		err := fmt.Errorf("skill %q is already registered by %s", s.Name, e.owner)
+		c.setErr(err)
+		return err
 	}
 	id := c.nextID()
-	r.skills[s.Name] = entry[Skill]{id, c.PluginName(), s}
+	r.skills[s.Name] = entry[Skill]{id, c.ModuleName(), s}
 	r.mu.Unlock()
 	c.onDispose(func() {
 		r.mu.Lock()
@@ -357,11 +360,29 @@ func (c *Module) AddSkill(s Skill) {
 		}
 		r.mu.Unlock()
 	})
+	return nil
+}
+
+// setErr records the first registration error. The engine refuses to start
+// a module that dropped something it declared.
+func (c *Scope) setErr(err error) {
+	c.mu.Lock()
+	if c.err == nil {
+		c.err = err
+	}
+	c.mu.Unlock()
+}
+
+// Err returns the first registration error of this scope.
+func (c *Scope) Err() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.err
 }
 
 // ---- Hooks ----
 
-func (c *Module) hook(kind string, fn any) {
+func (c *Scope) hook(kind string, fn any) {
 	r := c.reg
 	r.mu.Lock()
 	id := c.nextID()
@@ -380,19 +401,19 @@ func (c *Module) hook(kind string, fn any) {
 	})
 }
 
-func (c *Module) Logf(format string, args ...any) {
+func (c *Scope) Logf(format string, args ...any) {
 	c.reg.log(c.Name, Redact(fmt.Sprintf(format, args...)))
 }
 
 // ConfigString / ConfigInt / ConfigBool read module config with defaults.
-func (c *Module) ConfigString(key, def string) string {
+func (c *Scope) ConfigString(key, def string) string {
 	if v, ok := c.Config[key].(string); ok && v != "" {
 		return v
 	}
 	return def
 }
 
-func (c *Module) ConfigInt(key string, def int) int {
+func (c *Scope) ConfigInt(key string, def int) int {
 	switch v := c.Config[key].(type) {
 	case float64:
 		return int(v)
@@ -404,7 +425,7 @@ func (c *Module) ConfigInt(key string, def int) int {
 	return def
 }
 
-func (c *Module) ConfigFloat(key string, def float64) float64 {
+func (c *Scope) ConfigFloat(key string, def float64) float64 {
 	switch v := c.Config[key].(type) {
 	case float64:
 		return v
@@ -414,14 +435,14 @@ func (c *Module) ConfigFloat(key string, def float64) float64 {
 	return def
 }
 
-func (c *Module) ConfigBool(key string, def bool) bool {
+func (c *Scope) ConfigBool(key string, def bool) bool {
 	if v, ok := c.Config[key].(bool); ok {
 		return v
 	}
 	return def
 }
 
-func (c *Module) ConfigStrings(key string) []string {
+func (c *Scope) ConfigStrings(key string) []string {
 	switch v := c.Config[key].(type) {
 	case []string:
 		return v
@@ -437,14 +458,14 @@ func (c *Module) ConfigStrings(key string) []string {
 	return nil
 }
 
-func (c *Module) ConfigMap(key string) map[string]any {
+func (c *Scope) ConfigMap(key string) map[string]any {
 	if v, ok := c.Config[key].(map[string]any); ok {
 		return v
 	}
 	return nil
 }
 
-func (c *Module) ConfigList(key string) []map[string]any {
+func (c *Scope) ConfigList(key string) []map[string]any {
 	raw, _ := c.Config[key].([]any)
 	var out []map[string]any
 	for _, x := range raw {

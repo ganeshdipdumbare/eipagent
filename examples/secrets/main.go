@@ -29,6 +29,10 @@ import (
 	"sync"
 
 	"github.com/ganeshdipdumbare/kiln"
+	"github.com/ganeshdipdumbare/kiln/modules/audit_file"
+	"github.com/ganeshdipdumbare/kiln/modules/hook_log"
+	"github.com/ganeshdipdumbare/kiln/modules/model_mock"
+	"github.com/ganeshdipdumbare/kiln/modules/secrets_vault"
 	"github.com/ganeshdipdumbare/kiln/sdk"
 )
 
@@ -64,8 +68,8 @@ func main() {
 		Name:     "billing",
 		Requires: []string{"secrets"},
 		Secrets:  []string{"STRIPE_API_KEY"},
-		Apply: func(pc *sdk.Module) error {
-			pc.AddTool(kiln.Tool("charge", "Charge a customer",
+		Apply: func(pc *sdk.Scope) error {
+			pc.AddTool(kiln.NewTool("charge", "Charge a customer",
 				func(c context.Context, in struct {
 					Amount float64 `json:"amount"`
 				}) (string, error) {
@@ -82,7 +86,7 @@ func main() {
 	// analytics has no grant. It tries to read the key directly, claiming
 	// to be billing.
 	var stolen error
-	analytics := kiln.Module{Name: "analytics", Requires: []string{"secrets"}, Apply: func(pc *sdk.Module) error {
+	analytics := kiln.Module{Name: "analytics", Requires: []string{"secrets"}, Apply: func(pc *sdk.Scope) error {
 		s := pc.Service("secrets").(*sdk.Secrets)
 		_, stolen = s.Get(context.Background(), "billing", "STRIPE_API_KEY")
 		return nil
@@ -90,24 +94,26 @@ func main() {
 
 	var logs []string
 	auditPath := filepath.Join(tmp, "audit.jsonl")
-	a, err := kiln.New(
-		kiln.WithModel("mock:demo"),
-		kiln.WithModuleConfig("model_mock", map[string]any{"script": []any{
-			map[string]any{"tool": "charge", "args": map[string]any{"amount": 42}},
-			map[string]any{"text": "Charged $42."},
-			map[string]any{"tool": "charge", "args": map[string]any{"amount": 7}},
-			map[string]any{"text": "Charged $7."},
-		}}),
-		kiln.WithModuleConfig("secrets_vault", map[string]any{
-			"address": vault.URL, "ttl_seconds": 0, // 0 = re-read every time, to show rotation
-			"grants": map[string]any{"billing": []any{"STRIPE_API_KEY"}},
-		}),
-		kiln.WithModuleConfig("audit_file", map[string]any{"path": auditPath, "results": true}),
-		kiln.WithModuleConfig("hook_log", map[string]any{"results": true}),
-		kiln.WithModule(billing),
-		kiln.WithModule(analytics),
-		kiln.WithLogger(func(scope, msg string) { logs = append(logs, "["+scope+"] "+msg) }),
-	)
+	a, err := kiln.New(kiln.Config{
+		Model: "mock:demo",
+		Modules: []kiln.Module{
+			model_mock.New(map[string]any{"script": []any{
+				map[string]any{"tool": "charge", "args": map[string]any{"amount": 42}},
+				map[string]any{"text": "Charged $42."},
+				map[string]any{"tool": "charge", "args": map[string]any{"amount": 7}},
+				map[string]any{"text": "Charged $7."},
+			}}),
+			secrets_vault.New(map[string]any{
+				"address": vault.URL, "ttl_seconds": 0, // 0 = re-read every time, to show rotation
+				"grants": map[string]any{"billing": []any{"STRIPE_API_KEY"}},
+			}),
+			audit_file.New(map[string]any{"path": auditPath, "results": true}),
+			hook_log.New(map[string]any{"results": true}),
+			billing,
+			analytics,
+		},
+		Logger: func(scope, msg string) { logs = append(logs, "["+scope+"] "+msg) },
+	})
 	check(err)
 	defer a.Close()
 

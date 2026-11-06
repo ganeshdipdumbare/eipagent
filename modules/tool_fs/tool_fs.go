@@ -23,10 +23,10 @@ var errStopWalk = errors.New("stop walk")
 //
 // Example:
 //
-//	kiln.WithModuleConfig("tool_fs", map[string]any{"readonly": true}) // only read_file, list_dir, find_files, grep
+//	tool_fs.New(map[string]any{"readonly": true}) // only read_file, list_dir, find_files, grep
 var Requires = []string{"workspace"}
 
-func Apply(p *sdk.Module) error {
+func Apply(p *sdk.Scope) error {
 	world := p.Service("workspace").(*sdk.ExecWorld)
 	maxRead := p.ConfigInt("max_read", 200000)
 	readonly := p.ConfigBool("readonly", false)
@@ -315,3 +315,13 @@ func Apply(p *sdk.Module) error {
 
 // Module is the compiled form of "tool_fs". modules/std registers it.
 var Module = engine.Module{Name: "tool_fs", Requires: Requires, Provides: nil, Permissions: nil, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}

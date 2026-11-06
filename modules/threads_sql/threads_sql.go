@@ -19,14 +19,14 @@ import (
 //
 // Example:
 //
-//	kiln.WithModuleConfig("db_sql", map[string]any{"dsn": "secret://DATABASE_URL"})
-//	kiln.WithModuleConfig("threads_sql", map[string]any{"table": "agent_threads"})
-//	// Shortcut with memory_sql too: kiln.WithPersistence("postgres", "secret://DATABASE_URL")
+//	db_sql.New(map[string]any{"dsn": "secret://DATABASE_URL"})
+//	threads_sql.New(map[string]any{"table": "agent_threads"})
+//	// Shortcut with memory_sql too: kiln.Persistence("postgres", "secret://DATABASE_URL")
 var Requires = []string{"db"}
 
 var Permissions = []string{"db"}
 
-func Apply(p *sdk.Module) error {
+func Apply(p *sdk.Scope) error {
 	db, err := p.DB()
 	if err != nil {
 		return err
@@ -142,3 +142,13 @@ func validIdent(s string) bool {
 
 // Module is the compiled form of "threads_sql". modules/std registers it.
 var Module = engine.Module{Name: "threads_sql", Requires: Requires, Provides: []string{"threads"}, Permissions: Permissions, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}

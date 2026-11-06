@@ -34,9 +34,9 @@ import (
 //
 // Example:
 //
-//	kiln.WithModel("anthropic:claude-sonnet-5-5") // loads model_anthropic by itself
+//	kiln.Config{Model: "anthropic:claude-sonnet-5-5"} // loads model_anthropic by itself
 //	// A proxy, another key or a bigger output limit:
-//	kiln.WithModuleConfig("model_anthropic", map[string]any{
+//	model_anthropic.New(map[string]any{
 //		"base_url":   "https://anthropic-proxy.internal",
 //		"api_key":    "secret://ANTHROPIC_KEY_TEAM_A",
 //		"max_tokens": 16000,
@@ -45,7 +45,7 @@ var Permissions = []string{"net"}
 
 var Requires = []string{"?secrets"} // secret:// keys/headers are optional
 
-func Apply(p *sdk.Module) error {
+func Apply(p *sdk.Scope) error {
 	name := p.ConfigString("name", "anthropic")
 	base := strings.TrimRight(p.ConfigString("base_url", "https://api.anthropic.com"), "/")
 	keyRef := p.ConfigString("api_key", "secret://ANTHROPIC_API_KEY")
@@ -428,3 +428,13 @@ func readStream(r io.Reader, emit func(sdk.Chunk)) (*sdk.ModelResponse, error) {
 
 // Module is the compiled form of "model_anthropic". modules/std registers it.
 var Module = engine.Module{Name: "model_anthropic", Requires: Requires, Provides: []string{"model/*"}, Permissions: Permissions, Secrets: []string{"ANTHROPIC_API_KEY"}, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}

@@ -42,7 +42,7 @@ func TestCredentialRedirectsAreRefused(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			atomic.StoreInt32(&targetHits, 0)
-			a, err := kiln.New(kiln.WithModel(c.model), kiln.WithModuleConfig(c.plugin, c.cfg))
+			a, err := startAgent(withModel(c.model), withModuleConfig(c.plugin, c.cfg))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -59,7 +59,7 @@ func TestCredentialRedirectsAreRefused(t *testing.T) {
 		a := mockAgent(t, []any{
 			map[string]any{"tool": "web_search", "args": map[string]any{"query": "x"}},
 			map[string]any{"text": "done"},
-		}, kiln.WithModuleConfig("tool_websearch", map[string]any{"backend": "searxng", "base_url": first.URL, "api_key": "search-secret"}))
+		}, withModuleConfig("tool_websearch", map[string]any{"backend": "searxng", "base_url": first.URL, "api_key": "search-secret"}))
 		if _, err := a.Generate(bg, "search"); err != nil {
 			t.Fatal(err)
 		}
@@ -72,7 +72,7 @@ func TestCredentialRedirectsAreRefused(t *testing.T) {
 		atomic.StoreInt32(&targetHits, 0)
 		t.Setenv("VAULT_TOKEN", "vault-token-secret")
 		var got string
-		probe := kiln.Module{Name: "vault_probe", Secrets: []string{"X"}, Apply: func(p *sdk.Module) error {
+		probe := kiln.Module{Name: "vault_probe", Secrets: []string{"X"}, Apply: func(p *sdk.Scope) error {
 			p.AddTool(sdk.Tool{Name: "vault_probe", Schema: sdk.Object(map[string]any{}),
 				Run: func(c context.Context, a map[string]any) (string, error) {
 					v, err := p.Secret("secret://X")
@@ -88,8 +88,8 @@ func TestCredentialRedirectsAreRefused(t *testing.T) {
 			map[string]any{"tool": "vault_probe"},
 			map[string]any{"text": "done"},
 		},
-			kiln.WithModuleConfig("secrets_vault", map[string]any{"address": first.URL, "allow": []any{"*"}}),
-			kiln.WithModule(probe))
+			withModuleConfig("secrets_vault", map[string]any{"address": first.URL, "allow": []any{"*"}}),
+			withModule(probe))
 		_, _ = a.Generate(bg, "read")
 		if got != "" {
 			t.Fatalf("vault returned a value through a redirect: %q", got)
@@ -119,7 +119,7 @@ func TestToolSkillsRefusesSymlinkEscape(t *testing.T) {
 	a := mockAgent(t, []any{
 		map[string]any{"tool": "read_skill_file", "args": map[string]any{"name": "pdf", "path": "leak.md"}},
 		map[string]any{"text": "done"},
-	}, kiln.WithModuleConfig("tool_skills", map[string]any{"dirs": []any{root}}))
+	}, withModuleConfig("tool_skills", map[string]any{"dirs": []any{root}}))
 	res, err := a.Generate(bg, "read")
 	if err != nil {
 		t.Fatal(err)
@@ -134,9 +134,9 @@ func TestSandboxLocalGrepCannotReadHost(t *testing.T) {
 		map[string]any{"tool": "grep", "args": map[string]any{"pattern": "root", "path": "/etc"}},
 		map[string]any{"tool": "find_files", "args": map[string]any{"pattern": "passwd", "path": "/etc"}},
 		map[string]any{"text": "done"},
-	}, kiln.WithModuleConfig("sandbox_local", map[string]any{"root": t.TempDir()}),
-		kiln.WithModuleConfig("workspace_sandbox", map[string]any{"provider": "local"}),
-		kiln.WithModules("tool_fs"))
+	}, withModuleConfig("sandbox_local", map[string]any{"root": t.TempDir()}),
+		withModuleConfig("workspace_sandbox", map[string]any{"provider": "local"}),
+		withModules("tool_fs"))
 	res, err := a.Generate(bg, "read")
 	if err != nil {
 		t.Fatal(err)
@@ -149,14 +149,14 @@ func TestSandboxLocalGrepCannotReadHost(t *testing.T) {
 }
 
 func TestRunInLocalRequiresExplicitOptIn(t *testing.T) {
-	_, err := kiln.New(kiln.WithModel("mock:m"), kiln.WithRunIn(kiln.RunIn{
+	_, err := startAgent(withModel("mock:m"), withRunIn(kiln.RunIn{
 		Provider: "local", Binary: "kiln",
 	}))
 	if err == nil || !strings.Contains(err.Error(), "not an isolation boundary") {
 		t.Fatalf("RunIn with the local provider must be refused by default: %v", err)
 	}
-	a, err := kiln.New(kiln.WithModel("mock:m"), kiln.WithModuleConfig("model_mock", map[string]any{"script": []any{map[string]any{"text": "ok"}}}),
-		kiln.WithRunIn(kiln.RunIn{Provider: "local", Binary: "kiln", AllowUnsafeLocal: true}))
+	a, err := startAgent(withModel("mock:m"), withModuleConfig("model_mock", map[string]any{"script": []any{map[string]any{"text": "ok"}}}),
+		withRunIn(kiln.RunIn{Provider: "local", Binary: "kiln", AllowUnsafeLocal: true}))
 	if err != nil {
 		// It may fail later for a missing binary; the opt-in check itself must pass.
 		t.Logf("opt-in got past the gate: %v", err)

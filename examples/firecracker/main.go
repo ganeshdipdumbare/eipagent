@@ -31,6 +31,8 @@ import (
 
 	"github.com/ganeshdipdumbare/kiln"
 	"github.com/ganeshdipdumbare/kiln/examples/firecracker/callapi"
+	"github.com/ganeshdipdumbare/kiln/modules/model_mock"
+	"github.com/ganeshdipdumbare/kiln/modules/tool_shell"
 	"github.com/ganeshdipdumbare/kiln/sdk"
 )
 
@@ -90,19 +92,21 @@ func main() {
 		fmt.Printf("Firecracker host: %s (VMM and microVM live there)\n", os.Getenv("FC_HOST"))
 	}
 	fmt.Println("Booting a self-hosted Firecracker microVM and starting the agent in it...")
-	a, err := kiln.New(
-		kiln.WithModel("mock:demo"),
-		kiln.WithModuleConfig("model_mock", map[string]any{"script": []any{
-			step("bash", map[string]any{"command": "echo \"machine: $(uname -m) $(uname -sr)\"; echo \"workspace: $(pwd)\"; echo 'environment:'; env | sort | sed 's/^/  /'"}),
-			step("call_api", map[string]any{"url": api.URL + "/orders"}),
-			step("call_api", map[string]any{"url": api.URL + "/orders", "method": "DELETE"}),
-			step("call_api", map[string]any{"url": other + "/steal"}),
-			map[string]any{"text": "done"},
-		}}),
-		kiln.WithModules("tool_shell"),
-		kiln.WithModule(firecracker()),
-		kiln.WithModule(callapi.CallAPI),
-		kiln.WithLogger(func(scope, msg string) {
+	a, err := kiln.New(kiln.Config{
+		Model: "mock:demo",
+		Modules: []kiln.Module{
+			model_mock.New(map[string]any{"script": []any{
+				step("bash", map[string]any{"command": "echo \"machine: $(uname -m) $(uname -sr)\"; echo \"workspace: $(pwd)\"; echo 'environment:'; env | sort | sed 's/^/  /'"}),
+				step("call_api", map[string]any{"url": api.URL + "/orders"}),
+				step("call_api", map[string]any{"url": api.URL + "/orders", "method": "DELETE"}),
+				step("call_api", map[string]any{"url": other + "/steal"}),
+				map[string]any{"text": "done"},
+			}}),
+			tool_shell.New(),
+			firecracker(),
+			callapi.CallAPI,
+		},
+		Logger: func(scope, msg string) {
 			switch {
 			case strings.HasPrefix(msg, "sandbox egress"):
 				mu.Lock()
@@ -113,15 +117,15 @@ func main() {
 				fmt.Println(msg)
 				mu.Unlock()
 			}
-		}),
-		kiln.WithRunIn(kiln.RunIn{
+		},
+		RunIn: &kiln.RunIn{
 			Provider: "firecracker",
 			Binary:   bin,
 			Spec:     sdk.SandboxSpec{CPUs: 1, MemoryMB: 512, Network: sdk.NetworkPolicy{Mode: "none"}},
 			// The placeholder becomes the real token only on GET /orders.
 			SecretHosts: map[string][]string{"ACME_API_TOKEN": {"GET 127.0.0.1/orders*"}},
-		}),
-	)
+		},
+	})
 	if err != nil {
 		log.Fatal(err)
 	}

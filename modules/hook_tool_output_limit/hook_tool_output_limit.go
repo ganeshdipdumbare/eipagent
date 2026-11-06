@@ -18,11 +18,11 @@ import (
 //
 // Example:
 //
-//	kiln.WithModuleConfig("hook_tool_output_limit", map[string]any{
+//	hook_tool_output_limit.New(map[string]any{
 //		"max_chars": 10000,
 //		"tools":     map[string]any{"read_file": 40000},
 //	})
-func Apply(p *sdk.Module) error {
+func Apply(p *sdk.Scope) error {
 	maxChars := p.ConfigInt("max_chars", 20000)
 	perTool := p.ConfigMap("tools")
 
@@ -55,3 +55,13 @@ func Apply(p *sdk.Module) error {
 
 // Module is the compiled form of "hook_tool_output_limit". modules/std registers it.
 var Module = engine.Module{Name: "hook_tool_output_limit", Requires: nil, Provides: nil, Permissions: nil, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}

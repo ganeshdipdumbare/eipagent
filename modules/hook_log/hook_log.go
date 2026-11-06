@@ -14,8 +14,8 @@ import (
 //
 // Example:
 //
-//	kiln.WithModuleConfig("hook_log", map[string]any{"results": true})
-func Apply(p *sdk.Module) error {
+//	hook_log.New(map[string]any{"results": true})
+func Apply(p *sdk.Scope) error {
 	logArgs := p.ConfigBool("args", true)
 	logResults := p.ConfigBool("results", false)
 	p.WrapModel(func(c context.Context, req *sdk.ModelRequest, next sdk.ModelHandler) (*sdk.ModelResponse, error) {
@@ -51,3 +51,13 @@ func Apply(p *sdk.Module) error {
 
 // Module is the compiled form of "hook_log". modules/std registers it.
 var Module = engine.Module{Name: "hook_log", Requires: nil, Provides: nil, Permissions: nil, Apply: Apply}
+
+// New returns the module. Keys in cfg are the module's configuration; see
+// the Config* reads in Apply.
+func New(cfg ...map[string]any) engine.Module {
+	m := Module
+	if len(cfg) > 0 {
+		m.Config = cfg[0]
+	}
+	return m
+}
